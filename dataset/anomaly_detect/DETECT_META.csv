@@ -1,0 +1,4 @@
+file_name,length,dataset_name,size,freq,if_univariate,trend,seasonal,stationary,transition,shifting,correlation
+swat.csv,449919,Multi,large,other,False,,,,,,
+MSL.csv,132046,Multi,large,other,False,,,,,,
+SMD.csv,1416825,,large,other,False,,,,,,

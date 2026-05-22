@@ -1,0 +1,38 @@
+﻿# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Notebooks / editor state
+.ipynb_checkpoints/
+.vscode/
+
+# Virtual environments
+.venv/
+venv/
+env/
+conda-env/
+
+# Large data and generated experiment artifacts
+dataset/anomaly_detect/data/
+result/
+*.tar.gz
+*.zip
+*.7z
+
+# Logs and checkpoints
+*.log
+*.out
+*.err
+*.pt
+*.pth
+*.ckpt
+*.pkl
+*.pickle
+
+# OS files
+.DS_Store
+Thumbs.db
