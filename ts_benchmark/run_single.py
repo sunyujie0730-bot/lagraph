@@ -8,7 +8,7 @@ LaGraph 单模型简化运行入口
   python ts_benchmark/run_single.py                 # 默认 10 epochs，全量数据集
   python ts_benchmark/run_single.py --fast          # 快速测试：3 epochs
   python ts_benchmark/run_single.py --epochs 30 --n-gpus 8   # 自定义训练轮次
-  python ts_benchmark/run_single.py --epochs 30 --num-workers 4 --prefetch-factor 4
+  python ts_benchmark/run_single.py --epochs 30 --num-workers 2 --prefetch-factor 2
 
 说明:
   - 始终运行 DETECT_META.csv 中所有可用数据集
@@ -96,14 +96,14 @@ def main():
     parser.add_argument(
         "--num-workers",
         type=int,
-        default=4,
-        help="DataLoader worker 数量 (default: 4; 设为 0 可禁用多进程加载)",
+        default=0,
+        help="DataLoader worker 数量 (default: 0，Windows 稳定优先; 可尝试 2 提速)",
     )
     parser.add_argument(
         "--prefetch-factor",
         type=int,
-        default=4,
-        help="每个 DataLoader worker 预取 batch 数 (default: 4; num_workers=0 时自动忽略)",
+        default=2,
+        help="每个 DataLoader worker 预取 batch 数 (default: 2; num_workers=0 时自动忽略)",
     )
     parser.add_argument(
         "--arch-profile",
