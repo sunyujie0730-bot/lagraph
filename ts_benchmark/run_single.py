@@ -123,6 +123,24 @@ def main():
         help="预测损失权重 (default: 0.1)",
     )
     parser.add_argument(
+        "--vq-cooldown-epochs",
+        type=int,
+        default=None,
+        help="VQ codebook-only cooldown epochs; default uses model config",
+    )
+    parser.add_argument(
+        "--lambda-vq",
+        type=float,
+        default=None,
+        help="VQ loss weight; default uses model config",
+    )
+    parser.add_argument(
+        "--vq-score-weight",
+        type=float,
+        default=None,
+        help="VQ anomaly score fusion weight; default uses model config",
+    )
+    parser.add_argument(
         "--ablation",
         type=str,
         nargs="*",
@@ -183,6 +201,9 @@ def main():
     n_gpus = 0 if args.n_gpus == 0 else 1
     dataloader_num_workers = max(0, args.num_workers)
     dataloader_prefetch_factor = max(1, args.prefetch_factor)
+    vq_cooldown_epochs = args.vq_cooldown_epochs
+    lambda_vq = args.lambda_vq
+    vq_score_weight = args.vq_score_weight
 
     # ---- v10 固定模型容量（无论 GPU 数多少都用相同容量） ----
     d_model_scale = 128
@@ -271,6 +292,13 @@ def main():
         },
     }
     arch_switches = arch_profiles[args.arch_profile]
+    vq_hyper_params = {}
+    if vq_cooldown_epochs is not None:
+        vq_hyper_params["vq_cooldown_epochs"] = max(0, vq_cooldown_epochs)
+    if lambda_vq is not None:
+        vq_hyper_params["lambda_vq"] = max(0.0, lambda_vq)
+    if vq_score_weight is not None:
+        vq_hyper_params["vq_score_weight"] = max(0.0, vq_score_weight)
 
     model_config = {
         "models": [
@@ -287,6 +315,7 @@ def main():
                     "dataloader_num_workers": dataloader_num_workers,
                     "dataloader_prefetch_factor": dataloader_prefetch_factor,
                     **arch_switches,
+                    **vq_hyper_params,
                     "d_model": d_model_scale,
                     "e_layers": e_layers_scale,
                     "n_heads": n_heads_scale,

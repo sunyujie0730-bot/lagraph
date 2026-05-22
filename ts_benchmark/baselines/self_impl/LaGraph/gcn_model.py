@@ -246,6 +246,7 @@ class SparseGCN(nn.Module):
                  use_channel_graph=True, use_temporal_graph=True,
                  use_vq_bypass=True,
                  use_multi_scale_scorer=True,
+                 vq_score_weight=0.5,
                  **kwargs):
         super(SparseGCN, self).__init__()
 
@@ -317,7 +318,7 @@ class SparseGCN(nn.Module):
         )
 
         # === VQ 增强权重 ===
-        self.vq_score_weight = nn.Parameter(torch.tensor(1.0))
+        self.vq_score_weight = nn.Parameter(torch.tensor(float(vq_score_weight)))
 
         # ★ 保持与原有 forward 返回格式兼容
         self.use_freq_loss = False

@@ -1052,6 +1052,7 @@ class LaGraph:
             use_temporal_graph=getattr(self.config, "use_temporal_graph", True),
             use_vq_bypass=getattr(self.config, "use_vq_bypass", True),
             use_multi_scale_scorer=getattr(self.config, "use_multi_scale_scorer", True),
+            vq_score_weight=getattr(self.config, "vq_score_weight", 0.5),
         )
         self.model.to(self.device)
 
@@ -1228,6 +1229,7 @@ class LaGraph:
             channel=self.config.input_c,
             topk=self.config.topk,
             sparse_topk=self.config.sparse_topk,
+            vq_score_weight=getattr(self.config, "vq_score_weight", 0.5),
         )
         self.model.to(self.device)
 
@@ -1360,6 +1362,7 @@ class LaGraph:
                 "warmup_epochs": self.config.warmup_epochs,
                 "lambda_vq": getattr(self.config, "lambda_vq", None),
                 "vq_cooldown_epochs": getattr(self.config, "vq_cooldown_epochs", None),
+                "vq_score_weight": getattr(self.config, "vq_score_weight", None),
                 "dataloader_num_workers": getattr(self.config, "dataloader_num_workers", None),
                 "dataloader_prefetch_factor": getattr(self.config, "dataloader_prefetch_factor", None),
                 "use_channel_graph": getattr(self.config, "use_channel_graph", None),
