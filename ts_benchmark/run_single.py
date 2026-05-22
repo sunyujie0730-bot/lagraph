@@ -107,9 +107,9 @@ def main():
     )
     parser.add_argument(
         "--arch-profile",
-        choices=["full", "core", "reconstruction"],
+        choices=["full", "core", "no-vq", "no-boundary", "reconstruction"],
         default="full",
-        help="架构配置: full 保持现有结果; core 关闭 VQ/Boundary; reconstruction 仅保留重建主干",
+        help="架构配置: full 保持现有结果; core 关闭 VQ/Boundary; no-vq 只关 VQ; no-boundary 只关 Boundary; reconstruction 仅保留重建主干",
     )
     parser.add_argument(
         "--pred-head",
@@ -249,6 +249,20 @@ def main():
             "use_channel_graph": True,
             "use_temporal_graph": True,
             "use_vq_bypass": False,
+            "use_boundary_detector": False,
+            "use_multi_scale_scorer": True,
+        },
+        "no-vq": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": False,
+            "use_boundary_detector": True,
+            "use_multi_scale_scorer": True,
+        },
+        "no-boundary": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
             "use_boundary_detector": False,
             "use_multi_scale_scorer": True,
         },
