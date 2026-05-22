@@ -27,6 +27,10 @@ import warnings
 import pandas as pd
 import torch
 
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from ts_benchmark.common.constant import CONFIG_PATH

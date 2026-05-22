@@ -882,6 +882,10 @@ class LaGraph:
                 "anomaly_ratio": self.config.anomaly_ratio,
                 "sparse_topk": getattr(self.config, 'sparse_topk', None),
                 "lambda_locality_l1": self.config.lambda_locality_l1,
+                "lambda_vq": getattr(self.config, "lambda_vq", None),
+                "vq_cooldown_epochs": getattr(self.config, "vq_cooldown_epochs", None),
+                "vq_score_weight": getattr(self.config, "vq_score_weight", None),
+                "use_vq_bypass": getattr(self.config, "use_vq_bypass", None),
             },
             "model_info": {
                 "total_params": total_params,

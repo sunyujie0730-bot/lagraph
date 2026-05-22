@@ -108,7 +108,7 @@ class AnomalyDetect(Strategy):
 
             # ★ 打印当前数据集名称
             print(f"\n{'='*60}")
-            print(f"  📊 Dataset: {series_name}")
+            print(f"  Dataset: {series_name}")
             print(f"{'='*60}")
             
             # ===== 步骤1: 切分数据 =====
