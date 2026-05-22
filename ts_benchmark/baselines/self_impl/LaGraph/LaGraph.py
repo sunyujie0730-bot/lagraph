@@ -16,7 +16,7 @@ P0 修改（2026-05-20）:
 
 v10-v11.3 历史:
   v10: SparseLaGraph 重构（移除 FreqTower1D/Prototype/Contrastive/PredictionHead）
-  v11: VQ Bottleneck + BoundaryDetector + Dynamic Scale Selection
+  v11: VQ Bottleneck + Dynamic Scale Selection
   v11.2: Ratio-Adaptive 门控 + 动态尺度选择
   v11.3: 术语修正（proximity/locality 统一）
   v11.4: P0 五项修复合并（术语、阈值、指标、多seed、可视化）
@@ -68,7 +68,6 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "use_channel_graph": True,
     "use_temporal_graph": True,
     "use_vq_bypass": True,
-    "use_boundary_detector": True,
     "use_multi_scale_scorer": True,
     "lambda_vq": 0.1,
     "vq_cooldown_epochs": 15,
@@ -1052,7 +1051,6 @@ class LaGraph:
             use_channel_graph=getattr(self.config, "use_channel_graph", True),
             use_temporal_graph=getattr(self.config, "use_temporal_graph", True),
             use_vq_bypass=getattr(self.config, "use_vq_bypass", True),
-            use_boundary_detector=getattr(self.config, "use_boundary_detector", True),
             use_multi_scale_scorer=getattr(self.config, "use_multi_scale_scorer", True),
         )
         self.model.to(self.device)
@@ -1367,7 +1365,6 @@ class LaGraph:
                 "use_channel_graph": getattr(self.config, "use_channel_graph", None),
                 "use_temporal_graph": getattr(self.config, "use_temporal_graph", None),
                 "use_vq_bypass": getattr(self.config, "use_vq_bypass", None),
-                "use_boundary_detector": getattr(self.config, "use_boundary_detector", None),
                 "use_multi_scale_scorer": getattr(self.config, "use_multi_scale_scorer", None),
                 # ★ P0-1: lambda_causal_l1 → lambda_locality_l1
                 "lambda_locality_l1": self.config.lambda_locality_l1,

@@ -3,14 +3,9 @@
 LaGraph v11.2 Encoder 堆叠模块：精简时序编码器
 =============================================
 
-根据 `docs/update.md` P0 级修改路线图（2026-05-19）:
+根据最终精简路线（2026-05-22）:
 
-★ P0 修改 1: Point-wise BoundaryDetector（根因 1 — 重建范式崩溃）
-  问题: MSE 导致异常被过度重建，正常/异常重建误差分布重叠
-  方案: 新增 BoundaryDetector 模块，计算重建误差的时间梯度来检测突变边界，
-        并将边界信号与原始误差融合，增强点级定位能力
-
-★ P0 修改 2: Dynamic Scale Selection（根因 4 — 动态尺度缺失）
+★ 保留: Dynamic Scale Selection（根因 4 — 动态尺度缺失）
   问题: MultiScaleTemporalConv 使用全局静态 softmax 权重融合 4 个 dilation，
         SWaT 突变需小 dilation，MSL 漂移需大 dilation，同一组权重无法同时满足
   方案: 替换为 SE-style 动态门控，根据输入特征自适应选择尺度权重
@@ -40,138 +35,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .attention import OrdAttention
-
-
-# ══════════════════════════════════════════════════════════════════
-#  ★ P0 [NEW] Point-wise BoundaryDetector
-# ══════════════════════════════════════════════════════════════════
-
-class BoundaryDetector(nn.Module):
-    """
-    Point-wise BoundaryDetector（P0 新增 — 根因1解决方案）
-    
-    ★ v11.3: 新增 Ratio-Adaptive 门控，解决低异常比例下 sigmoid 保守化偏差
-
-    原理:
-      异常点的核心特征是"突变边界"——异常开始和结束时刻的重建误差
-      发生急剧变化。BoundaryDetector 通过以下步骤捕捉这种边界信号:
-
-      1. 计算重建误差的时间梯度（一阶差分），突出突变位置
-      2. 使用可学习的一维卷积对梯度信号进行平滑和增强
-      3. 通过门控机制将边界信号与原始误差融合
-
-    ★ v11.3 Ratio-Adaptive 原理:
-      当前 `gate = σ(MLP(boundary_feat))` 在低比例下坍缩到 ~0.5，
-      因为异常占比 0.5-2% 时，MSE 梯度中边界信号权重极低。
-      
-      修复: 在门控中注入可学习比例嵌入作为偏置：
-        gate = σ(MLP(boundary_feat) * (1 + λ_ratio * ratio_embed))
-      
-      其中 ratio_embed 是可学习的标量：
-        - 正值 (>0) → gate 整体上升（低比例下主动放大边界）
-        - 负值 (<0) → gate 整体下降（高比例下抑制过度激活）
-        - λ_ratio 控制注入强度
-
-    输入:
-      recon_error: (B, L, C) — 逐通道重建误差（绝对值）
-    
-    输出:
-      boundary_score: (B, L) — 边界增强的点级异常分数
-
-    设计决策:
-      - 使用 Conv1d(k=3, groups=d_model) 深度可分离卷积，参数量小
-      - 门控融合：边界信号通过 sigmoid 门控与原始误差融合
-      - 梯度计算在 torch.no_grad 上下文中稳定
-    """
-
-    def __init__(self, d_model, kernel_size=3, dropout=0.1,
-                 use_ratio_adaptive=True, lambda_ratio=1.0):
-        """
-        Args:
-            d_model: 输入通道数 C
-            kernel_size: 边界卷积核大小 (default=3)
-            dropout: dropout 率
-            use_ratio_adaptive: 是否启用比例自适应门控 (default=True)
-            lambda_ratio: 比例嵌入的注入强度系数 (default=1.0)
-        """
-        super().__init__()
-        self.d_model = d_model
-        self.use_ratio_adaptive = use_ratio_adaptive
-
-        # 可学习边界增强卷积（深度可分离）
-        # 输入: 梯度特征 (B, d_model*2, L) = [error, gradient]
-        self.boundary_conv = nn.Conv1d(
-            d_model * 2, d_model,
-            kernel_size=kernel_size,
-            padding=kernel_size // 2,
-            groups=1,  # 全通道卷积以捕捉跨通道梯度模式
-        )
-
-        # ★ v11.3: 门控网络（MLP 输出 logits，在 forward 中加比例偏置后 sigmoid）
-        self.gate_mlp = nn.Sequential(
-            nn.Linear(d_model, d_model // 4),
-            nn.ReLU(),
-            nn.Linear(d_model // 4, 1),
-        )
-
-        # ★ v11.3: 可学习比例嵌入 (标量, 用于调制门控偏置)
-        #   在低比例 → 正值 → gate 整体上升 → 放大边界信号
-        #   在高比例 → 负值 → gate 整体下降 → 抑制过度激活
-        if use_ratio_adaptive:
-            self.ratio_embed = nn.Parameter(torch.tensor(1.0))  # 可学习标量
-            self.lambda_ratio = lambda_ratio  # 注入强度系数
-        else:
-            self.ratio_embed = None
-            self.lambda_ratio = 0.0
-
-        self.norm = nn.LayerNorm(d_model)
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, recon_error: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            recon_error: (B, L, C) — 逐通道绝对重建误差
-
-        Returns:
-            boundary_score: (B, L) — 边界增强的点级异常分数（已融合原始误差）
-        """
-        B, L, C = recon_error.shape
-
-        # 步骤1: 计算时间梯度（一阶差分）
-        # grad_t = |error_t - error_{t-1}| —— 捕捉突变边界
-        grad = torch.diff(recon_error, n=1, dim=1)  # (B, L-1, C)
-        grad = F.pad(grad, (0, 0, 1, 0), mode='replicate')  # (B, L, C) — 复制第一个值
-
-        # 步骤2: 构建梯度特征 [原始误差, 梯度]
-        grad_feat = torch.cat([recon_error, grad.abs()], dim=-1)  # (B, L, C*2)
-
-        # 步骤3: Conv1d 处理 (B, C*2, L) → (B, C, L)
-        grad_feat_t = grad_feat.permute(0, 2, 1)  # (B, C*2, L)
-        boundary_feat = self.boundary_conv(grad_feat_t)  # (B, C, L)
-        boundary_feat = boundary_feat.permute(0, 2, 1)  # (B, L, C)
-        boundary_feat = F.gelu(boundary_feat)
-
-        # ★ v11.3: 步骤4 — 比例自适应门控
-        #   gate_logits = MLP(boundary_feat)                  # (B, L, 1)
-        #   若启用比例自适应:
-        #     gate_logits *= (1 + lambda_ratio * ratio_embed)  # 比例调制
-        #   gate = sigmoid(gate_logits)                        # (B, L, 1)
-        gate_logits = self.gate_mlp(boundary_feat)  # (B, L, 1)
-        
-        if self.use_ratio_adaptive and self.ratio_embed is not None:
-            # 比例调制: 低比例下 ratio_embed → 正值 → 放大 gate logits
-            #   → sigmoid(logits) 趋向 1 → 边界信号权重增加
-            gate_logits = gate_logits * (1 + self.lambda_ratio * self.ratio_embed)
-        
-        gate = torch.sigmoid(gate_logits)  # (B, L, 1)
-        
-        # 融合: boundary_enhanced = gate * boundary_feat + (1-gate) * recon_error
-        enhanced = gate * boundary_feat + (1 - gate) * recon_error  # (B, L, C)
-        
-        # 通道聚合: max 聚合
-        boundary_score = enhanced.max(dim=-1)[0]  # (B, L)
-
-        return boundary_score
 
 
 # ══════════════════════════════════════════════════════════════════

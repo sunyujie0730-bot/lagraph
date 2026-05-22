@@ -33,7 +33,7 @@ from .decomp import MoEDecomposition
 from .graph_learner import (
     ChannelAdaptiveGraph, SimplifiedTemporalGraph
 )
-from .temporal_encoder import EncoderStack, BoundaryDetector
+from .temporal_encoder import EncoderStack
 from .vq_bottleneck import VQBottleneck
 
 
@@ -209,7 +209,7 @@ class MultiScaleAnomalyScorer(nn.Module):
 
 
 # ══════════════════════════════════════════════════════════════════
-#  ★ P0 [MODIFIED] SparseGCN — Dual-Path VQ + BoundaryDetector
+#  ★ P0 [MODIFIED] SparseGCN — Dual-Path VQ + MultiScaleAnomalyScorer
 # ══════════════════════════════════════════════════════════════════
 
 class SparseGCN(nn.Module):
@@ -218,7 +218,6 @@ class SparseGCN(nn.Module):
 
     ★ P0 架构变更:
       - Dual-Path VQ: VQ 移至旁路，主路径保持连续特征流
-      - BoundaryDetector: 检测阶段增强异常点级定位
 
     架构:
       Input (B, L, C)
@@ -237,15 +236,15 @@ class SparseGCN(nn.Module):
         ↓ Linear proj → c_out
       resid_out + trend_out = x_rec
 
-    异常评分（推理时使用 MultiScaleAnomalyScorer + BoundaryDetector）:
-      score = L1_recon_error + vq_enhanced_score + boundary_enhanced_score
+    异常评分（推理时使用 MultiScaleAnomalyScorer）:
+      score = L1_recon_error + vq_enhanced_score
     """
 
     def __init__(self, win_size, enc_in, c_out, dropout, n_heads=4,
                  d_model=128, e_layers=2, patch_size=16, channel=55,
                  d_ff=256, topk=5, sparse_topk=None,
                  use_channel_graph=True, use_temporal_graph=True,
-                 use_vq_bypass=True, use_boundary_detector=True,
+                 use_vq_bypass=True,
                  use_multi_scale_scorer=True,
                  **kwargs):
         super(SparseGCN, self).__init__()
@@ -257,7 +256,6 @@ class SparseGCN(nn.Module):
         self.use_channel_graph = use_channel_graph
         self.use_temporal_graph = use_temporal_graph
         self.use_vq_bypass = use_vq_bypass
-        self.use_boundary_detector = use_boundary_detector
         self.use_multi_scale_scorer = use_multi_scale_scorer
 
         # === 自适应通道图 ===
@@ -303,23 +301,6 @@ class SparseGCN(nn.Module):
             serial_mode=False,  # ★ Dual-Path: VQ 作为旁路
         )
 
-        # === ★ P0: Point-wise BoundaryDetector ===
-        self.boundary_detector = BoundaryDetector(
-            d_model=c_out,
-            kernel_size=3,
-            dropout=dropout,
-        )
-        self.boundary_weight = nn.Parameter(torch.tensor(0.3))   # BoundaryDetector 辅助锐化
-        self.recon_weight = nn.Parameter(torch.tensor(1.0))     # 重建误差主评分源
-        # ★ 两权重均为正数，但通过 tanh 缩放到 (0, 1) 避免 Hard Nuke
-        #   recon_weight=1.0: 重建误差提供连续的异常概率分布
-        #   boundary_weight=0.3: 边界锐化仅增强点级定位，不主导评分
-        #   ★ 对比 v11.2 (recon=0.1): Hard Nuke 摧毁了低异常率性能
-        #     因为 0.5%-1% 的异常在重建误差中有微弱信号但被 boundary 淹没
-        #   ★ 对比 v11.1 (boundary=0.5): 锐化效果不足，阈值不够锐利
-        #     0.3 提供适度锐化，提升高异常率下的边界清晰度
-        #   最终: score = recon * 1.0 + vq * vq_weight + boundary * 0.3
-
         # === 多尺度异常评分器（仅推理时使用）===
         # v11.1 FIX [Bug 4]: 确保至少有 3 个不同的尺度
         _s1 = max(8, win_size // 4)
@@ -358,7 +339,6 @@ class SparseGCN(nn.Module):
         self._set_trainable(self.channel_graph, self.use_channel_graph)
         self._set_trainable(self.temporal_graph, self.use_temporal_graph)
         self._set_trainable(self.vq_bottleneck, self.use_vq_bypass)
-        self._set_trainable(self.boundary_detector, self.use_boundary_detector)
         self._set_trainable(self.multi_scale_scorer, self.use_multi_scale_scorer)
 
     def get_sparse_loss(self):
@@ -448,7 +428,6 @@ class SparseGCN(nn.Module):
 
         ★ P0 变更:
           1. Dual-Path VQ: 仅 vq_dist 用于异常评分
-          2. BoundaryDetector: 在重建误差上叠加边界检测信号
 
         Args:
             x: (B, L, C) — L 必须 >= max(valid_sizes)
@@ -532,52 +511,7 @@ class SparseGCN(nn.Module):
         if score.shape[1] > L_eff:
             score = score[:, -L_eff:]
 
-        # ★ P0: 叠加 BoundaryDetector 信号
-        #   计算每个尺度上的重建误差，用 BoundaryDetector 增强点级定位
-        #   注意: 各窗口大小不同，需先对齐到 L_max 再平均
-        L_max_bd = max(valid_sizes)
-        recon_errors_padded = []
-        for ws in valid_sizes:
-            err = F.l1_loss(x_rec_dict[ws], x_input_dict[ws], reduction='none')  # (B, ws, C)
-            if ws < L_max_bd:
-                pad_len = L_max_bd - ws
-                err_pad = F.pad(err.transpose(1, 2), (pad_len // 2, pad_len - pad_len // 2), mode='constant', value=0).transpose(1, 2)
-                recon_errors_padded.append(err_pad)
-            else:
-                recon_errors_padded.append(err)
-
-        # 聚合多尺度重建误差（平均对齐到 L_max_bd）
-        avg_recon_error = sum(recon_errors_padded) / len(recon_errors_padded)  # (B, L_max_bd, C)
-
-        # 对齐到原始长度 L
-        if L_max_bd < L:
-            pad = torch.zeros(B, L - L_max_bd, C, device=x.device)
-            avg_recon_error = torch.cat([pad, avg_recon_error], dim=1)
-        elif L_max_bd > L:
-            avg_recon_error = avg_recon_error[:, -L:, :]
-
-        # BoundaryDetector 输入: (B, L, C)
-        boundary_score = self.boundary_detector(avg_recon_error.abs()) if self.use_boundary_detector else None
-
-        # 对齐 score 和 boundary_score 到同一长度再融合
-        #   score: (B, L_scorer) 来自 MultiScaleAnomalyScorer
-        #   boundary_score: (B, L) 来自 BoundaryDetector (已对齐到原始长度)
-        #   先截取 boundary_score 到 score 的长度, 融合后再填充回 L
-        # ★ P0 审慎纠正: BoundaryDetector 作为辅助锐化器，非主评分来源
-        #   score = recon * 1.0 + vq * vq_weight + boundary * 0.3
-        #   原理: BoundaryDetector 输出锐化的边界概率，适合提升高异常率下的
-        #         定位精度，但 0.5%-1% 的低异常率需要重建误差的连续分布。
-        #         硬把 boundary 提到主导地位会摧毁低异常率性能（Hard Nuke）。
-        #   clamp: boundary ∈ [0.1, 1.0], recon ∈ [0.5, 1.5]
-        #         确保重建误差始终占足够权重，boundary 不超载
         L_scorer = score.shape[1]
-        if boundary_score is not None:
-            self.boundary_weight.data = self.boundary_weight.data.clamp(min=0.1, max=1.0)
-            self.recon_weight.data = self.recon_weight.data.clamp(min=0.5, max=1.5)
-            boundary_score_aligned = boundary_score[:, -L_scorer:]
-            score = self.boundary_weight * boundary_score_aligned + self.recon_weight * score
-
-        # 对齐到原始长度 L
         if L_scorer < L:
             pad_s = torch.zeros(B, L - L_scorer, device=x.device)
             score = torch.cat([pad_s, score], dim=1)
