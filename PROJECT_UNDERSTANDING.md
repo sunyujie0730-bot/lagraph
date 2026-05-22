@@ -22,7 +22,7 @@ LaGraph/
 │   ├── run_single.py                      # ★ 单次运行入口 (v10 固定配置)
 │   ├── pipeline.py                        # 实验流水线调度
 │   ├── baselines/self_impl/LaGraph/       # ★ 核心模型 (SparseLaGraph v10)
-│   │   ├── LaGraph.py                     # 主类: 训练/推理/DDP/损失
+│   │   ├── LaGraph.py                     # 主类: 单卡训练/推理/损失
 │   │   ├── gcn_model.py                   # ★ SparseGCN + MultiScaleAnomalyScorer
 │   │   ├── graph_learner.py               # ★ ChannelAdaptiveGraph + SimplifiedTemporalGraph
 │   │   ├── temporal_encoder.py            # ★ EncoderStack (2层, d_model=128)
@@ -30,8 +30,6 @@ LaGraph/
 │   │   ├── decomp.py                      # MoE 序列分解
 │   │   ├── RevIN.py                       # 可逆实例归一化
 │   │   ├── channel_mask.py                # 通道掩码
-│   │   ├── distributed_worker_v10.py      # ★ DDP 训练 Worker (v10 活跃)
-│   │   ├── distributed_worker.py          # (v9 遗留, 已废弃)
 │   │   ├── graph_evolution.py             # (v6 遗留, 已废弃)
 │   │   └── vq_bottleneck.py               # (v7 遗留, 已废弃)
 │   ├── data/                              # 数据层
@@ -133,14 +131,14 @@ L_sparse = λ_l1 · ||A_channel||₁           # L1 稀疏正则
 
 ## 固定超参数 (v10 核心设计决策)
 
-**模型容量不随 GPU 数缩放**。DDP 仅用于加速 (8卡约6.5×加速)，非容量扩展。
+**模型容量不随 GPU 数缩放**。RTX 5070 迁移后，当前训练入口固定为单卡路径；`n_gpus>1` 只保留为兼容参数，会自动降级到单卡运行。
 
 | 参数 | v10 值 | 说明 |
 |:---|:---:|:---|
 | d_model | **128** | 固定 (不受 n_gpus 影响) |
 | e_layers | **2** | 固定 |
 | n_heads | **4** | 固定 |
-| per_gpu_batch | **2048** | 固定 (有效 batch = 2048 × n_gpus) |
+| batch_size | **256** | 单卡训练 batch size |
 | lr | **1e-4** | 固定 (无 sqrt 缩放) |
 | warmup_epochs | **5** | 固定 |
 | patience | **15** | EarlyStopping 耐心值 |
@@ -165,24 +163,14 @@ L_sparse = λ_l1 · ||A_channel||₁           # L1 稀疏正则
 8. EarlyStopping(patience=15) → best checkpoint
 ```
 
-### DDP 多卡训练 (`_ddp_train` → `distributed_worker_v10.py`)
+### RTX 5070 单卡训练
 
-```
-主进程 (LaGraph.py)               子进程 (torchrun)
-┌──────────────────────────┐      ┌──────────────────────┐
-│ 准备 config.json + data.pkl│────►│ rank 0-7 (8 GPU)    │
-│ 启动 subprocess           │      │ DDP(model) 包装     │
-│ 实时流式输出 (Popen)       │      │ DistributedSampler   │
-│ 等待完成 → 清理显存         │◄────│ rank 0 保存 best.pt │
-│ 加载 checkpoint (在 CPU)   │      │ rank 0 输出 result  │
-│ 延迟到检测时才搬上 GPU      │      └──────────────────────┘
-└──────────────────────────┘
-```
+当前主流程已移除 DDP worker 和 `torchrun` 子进程。训练始终在一个 CUDA 设备上运行，避免单卡实验与旧八卡路径出现技术分叉。
 
 **跨数据集 OOM 修复**:
 - `_destroy_model_and_clean_cuda()` — 每个数据集训练前彻底清理
-- checkpoint 留在 CPU，检测时才搬上 GPU
-- 3 次 `torch.cuda.empty_cache()` + `gc.collect()`
+- best checkpoint 通过 `EarlyStopping` 保存在 CPU state dict
+- 训练结束后再加载最佳权重用于检测和阈值校准
 
 ---
 
@@ -279,7 +267,7 @@ A: v9 消融实验证明 d_model=256→512 和 e_layers=3→6 带来 **0 提升*
 
 ### Q: DDP 还有必要吗？
 
-A: 保留。v10 模型 ~0.4M 参数，单卡 SWaT 仅需 ~10min。但多数据集全量实验时 8 卡可加速到 ~2min/数据集，对超参数搜索有价值。
+A: 当前 5070 迁移版不再保留 DDP。模型约 0.4M 参数，单卡已能完成主要数据集训练；移除 DDP 可以避免单卡路径和旧八卡路径在优化器、DataLoader、checkpoint 与评估流程上继续分叉。
 
 ### Q: 论文的 F1 怎么复现？
 
@@ -287,4 +275,4 @@ A: 使用 `affiliation_f` 指标。在 `evaluation/strategy/anomaly_detect.py` �
 
 ---
 
-*最后更新: 2026-05-13 — v10 SparseLaGraph (0.4M params, 双图协同)*
+*最后更新: 2026-05-22 — RTX 5070 single-GPU SparseLaGraph (0.4M params, 双图协同)*

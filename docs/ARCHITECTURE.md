@@ -383,15 +383,15 @@ threshold = np.percentile(train_scores, 100 * (1 - anomaly_ratio))
 | warmup_epochs | 10 | 10 | — |
 | lambda_causal_l1 | 0.001 | 0.001 | — |
 
-### DDP (8-GPU)
+### RTX 5070 Single-GPU Path
 
 ```
-distributed_worker_v10.py (subprocess via torchrun)
-  - Same model, same config, same loss
-  - per_gpu_batch=256 → effective batch = 2048
-  - DistributedSampler for data partition
-  - Only rank 0 saves checkpoint + runs evaluation
-  - Back to main process → clean CUDA → next dataset
+LaGraph.py
+  - Single CUDA device, no torchrun subprocess
+  - batch_size=256
+  - Same VQ cooldown, optimizer, warmup/cosine scheduler, and early stopping logic
+  - Best checkpoint is kept by EarlyStopping and reloaded before detection
+  - n_gpus > 1 is accepted for compatibility but falls back to single GPU
 ```
 
 ---
@@ -436,8 +436,6 @@ ts_benchmark/baselines/self_impl/LaGraph/
 ├── RevIN.py                    # Reversible instance normalization
 ├── channel_mask.py             # Channel masking
 ├── vq_bottleneck.py            # VQ Bottleneck (Dual-Path, serial_mode=False)
-├── distributed_worker_v10.py   # DDP training worker
-├── distributed_worker.py       # (v9 legacy, deprecated)
 ├── graph_evolution.py          # (v6 legacy, deprecated)
 └── vq_bottleneck.py            # (v7 legacy, deprecated)
 ```

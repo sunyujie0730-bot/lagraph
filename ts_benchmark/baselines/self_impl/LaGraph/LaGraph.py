@@ -25,11 +25,8 @@ v10-v11.3 历史:
 import copy
 import json
 import os
-import pickle
 import socket
 import subprocess
-import sys
-import tempfile
 import time
 import numpy as np
 import pandas as pd
@@ -39,7 +36,6 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import roc_auc_score, average_precision_score
 from scipy import stats as scipy_stats
 from torch import optim
-from torch.utils.data import DataLoader
 
 from ts_benchmark.baselines.self_impl.LaGraph.gcn_model import SparseGCN
 from ts_benchmark.baselines.utils import anomaly_detection_data_provider
@@ -74,7 +70,6 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     # --- RTX 5070 single-GPU training path ---
     "dataloader_num_workers": 2,
     "dataloader_prefetch_factor": 2,
-    "force_single_gpu": True,
     # --- v11.4 P0-2: POT 阈值参数 ---
     "pot_risk": 1e-4,            # POT EVT 风险水平
     "pot_num_quantiles": 1000,   # POT 分位数数量
@@ -708,17 +703,11 @@ class LaGraph:
         # GPU 检测
         self.config_n_gpu = getattr(self.config, 'n_gpus', None)
         hardware_ngpu = _get_n_gpus()
-        self.ddp_requested = (
-            bool(getattr(self.config, 'force_single_gpu', True))
-            and self.config_n_gpu is not None
-            and self.config_n_gpu > 1
-        )
-        if getattr(self.config, 'force_single_gpu', True):
-            self.ngpu = 1 if hardware_ngpu >= 1 else 0
-        elif self.config_n_gpu is not None:
-            self.ngpu = min(self.config_n_gpu, hardware_ngpu)
+        self.multi_gpu_requested = self.config_n_gpu is not None and self.config_n_gpu > 1
+        if self.config_n_gpu == 0:
+            self.ngpu = 0
         else:
-            self.ngpu = hardware_ngpu
+            self.ngpu = 1 if hardware_ngpu >= 1 else 0
 
         if self.ngpu >= 1:
             self.device = torch.device(_pick_best_gpu())
@@ -918,7 +907,7 @@ class LaGraph:
                 loss_list.append(loss.item())
         return np.average(loss_list) if loss_list else 0.0
 
-    # ======================== 训练（单卡 / DDP 多卡）=======================
+    # ======================== 训练（单卡）=======================
     def _destroy_model_and_clean_cuda(self):
         import gc
         if hasattr(self, 'model') and self.model is not None:
@@ -977,16 +966,13 @@ class LaGraph:
             index=valid_data.index,
         )
 
-        if self.ddp_requested:
+        if self.multi_gpu_requested:
             print(
                 f"\n  [INFO] n_gpus={self.config_n_gpu} was requested, "
-                "but force_single_gpu=True; using the single-GPU training path."
+                "but DDP has been removed; using the single-GPU training path."
             )
 
-        if self.ngpu > 1 and not getattr(self.config, 'force_single_gpu', True):
-            self._ddp_train(train_scaled, valid_scaled)
-        else:
-            self._single_gpu_train(train_scaled, valid_scaled)
+        self._single_gpu_train(train_scaled, valid_scaled)
 
         if self.early_stopping is not None and self.early_stopping.check_point is not None:
             self._get_raw_model().load_state_dict(self.early_stopping.check_point)
@@ -1027,168 +1013,6 @@ class LaGraph:
             self._vis_hook = VisualizationHook(self.model)
             self._vis_hook.register_hooks()
             print(f"\n  [VIS] Visualization hooks registered")
-
-    # ======================== DDP 多卡训练 ========================
-    def _ddp_train(self, train_df, val_df):
-        import pickle as pickle_module
-
-        print(f"\n{'='*60}")
-        print(f"  LaGraph v11.4 DDP Training  |  {self.ngpu} GPUs")
-        print(f"  Launching torchrun subprocess...")
-        print(f"{'='*60}\n")
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            data_path = os.path.join(tmpdir, "data.pkl")
-            train_np = train_df.values.astype(np.float32)
-            val_np = val_df.values.astype(np.float32)
-            with open(data_path, 'wb') as f:
-                pickle_module.dump({
-                    'train_np': train_np,
-                    'val_np': val_np,
-                }, f)
-
-            config_path = os.path.join(tmpdir, "config.json")
-            config_dict = {
-                "win_size": self.config.win_size,
-                "input_c": self.config.input_c,
-                "output_c": self.config.output_c,
-                "dropout": self.config.dropout,
-                "n_heads": self.config.n_heads,
-                "d_model": self.config.d_model,
-                "e_layers": self.config.e_layers,
-                "patch_size": self.config.patch_size,
-                "topk": self.config.topk,
-                "sparse_topk": self.config.sparse_topk,
-                "lr": self.config.lr,
-                "batch_size": self.config.batch_size,
-                "num_epochs": self.config.num_epochs,
-                "patience": self.config.patience,
-                # ★ P0-1: lambda_causal_l1 → lambda_locality_l1
-                "lambda_locality_l1": self.config.lambda_locality_l1,
-                "warmup_epochs": self.config.warmup_epochs,
-                "dataset_name": self.dataset_name,
-            }
-            with open(config_path, 'w') as f:
-                json.dump(config_dict, f)
-
-            checkpoint_path = os.path.join(tmpdir, "best_model.pt")
-            result_path = os.path.join(tmpdir, "result.json")
-            history_path = os.path.join(tmpdir, "history.json")
-
-            worker_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                "distributed_worker_v10.py",
-            )
-
-            cmd = [
-                "torchrun",
-                f"--nproc_per_node={self.ngpu}",
-                worker_path,
-                "--config", config_path,
-                "--data", data_path,
-                "--checkpoint_out", checkpoint_path,
-                "--result_out", result_path,
-                "--history_out", history_path,
-            ]
-
-            env = os.environ.copy()
-            if "CUDA_VISIBLE_DEVICES" in env:
-                del env["CUDA_VISIBLE_DEVICES"]
-            env["MASTER_ADDR"] = env.get("MASTER_ADDR", "127.0.0.1")
-            env["MASTER_PORT"] = env.get("MASTER_PORT", "29500")
-
-            process = subprocess.Popen(
-                cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, bufsize=1, universal_newlines=True,
-            )
-            stdout_lines = []
-            stderr_lines = []
-
-            def _stream_output(stream, prefix, lines_list):
-                for line in iter(stream.readline, ''):
-                    line_rstrip = line.rstrip('\n\r')
-                    if line_rstrip:
-                        lines_list.append(line_rstrip)
-                        print(f"  {prefix} {line_rstrip}", flush=True)
-
-            import threading
-            stdout_thread = threading.Thread(
-                target=_stream_output, args=(process.stdout, "[DDP]", stdout_lines), daemon=True,
-            )
-            stderr_thread = threading.Thread(
-                target=_stream_output, args=(process.stderr, "[DDP ERR]", stderr_lines), daemon=True,
-            )
-            stdout_thread.start()
-            stderr_thread.start()
-            stdout_thread.join()
-            stderr_thread.join()
-            return_code = process.wait()
-
-            if return_code != 0:
-                raise RuntimeError(f"DDP training failed with code {return_code}.")
-
-            import gc
-            for i in range(torch.cuda.device_count()):
-                try:
-                    torch.cuda.synchronize(f'cuda:{i}')
-                    with torch.cuda.device(i):
-                        torch.cuda.empty_cache()
-                except Exception:
-                    pass
-            gc.collect()
-            torch.cuda.synchronize()
-            for _ in range(3):
-                torch.cuda.empty_cache()
-
-            if os.path.exists(history_path):
-                from datetime import datetime
-                from ts_benchmark.common.constant import ROOT_PATH
-                timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                history_dir = os.path.join(ROOT_PATH, "result", "experiments", f"{self.dataset_name}_{timestamp}")
-                os.makedirs(history_dir, exist_ok=True)
-                dest_path = os.path.join(history_dir, "train_history.json")
-                import shutil
-                shutil.copy2(history_path, dest_path)
-                print(f"  [History] Training history -> {dest_path}")
-
-            if os.path.exists(checkpoint_path):
-                self.model = SparseGCN(
-                    win_size=self.config.win_size,
-                    enc_in=self.config.input_c,
-                    c_out=self.config.output_c,
-                    dropout=self.config.dropout,
-                    n_heads=self.config.n_heads,
-                    d_model=self.config.d_model,
-                    e_layers=self.config.e_layers,
-                    patch_size=self.config.patch_size,
-                    channel=self.config.input_c,
-                    topk=self.config.topk,
-                    sparse_topk=self.config.sparse_topk,
-                )
-                state_dict = torch.load(checkpoint_path, map_location="cpu")
-                self.model.load_state_dict(state_dict)
-
-        ddp_result = {}
-        if os.path.exists(result_path):
-            with open(result_path, 'r') as f:
-                ddp_result = json.load(f)
-        self.early_stopping = EarlyStopping(patience=self.config.patience)
-        self.early_stopping.best_score = -ddp_result.get('best_val_loss', float('inf'))
-        self.early_stopping.val_loss_min = ddp_result.get('best_val_loss', float('inf'))
-        self.early_stopping.best_epoch = ddp_result.get('best_epoch', 0)
-        self.early_stopping.check_point = state_dict
-
-        from ts_benchmark.baselines.utils import anomaly_detection_data_provider as adp
-        self.train_loader = adp(
-            train_df, batch_size=self.config.batch_size,
-            win_size=self.config.win_size, step=1, mode="train", num_workers=0,
-        )
-        self.valid_loader = adp(
-            val_df, batch_size=self.config.batch_size,
-            win_size=self.config.win_size, step=1, mode="val", num_workers=0,
-        )
-
-        print(f"\n  [OK] DDP checkpoints loaded ({self.ngpu} GPUs)")
 
     def _single_gpu_train(self, train_df, val_df):
         """单 GPU 训练（v11.4 版）"""
@@ -1526,7 +1350,6 @@ class LaGraph:
                 "vq_cooldown_epochs": getattr(self.config, "vq_cooldown_epochs", None),
                 "dataloader_num_workers": getattr(self.config, "dataloader_num_workers", None),
                 "dataloader_prefetch_factor": getattr(self.config, "dataloader_prefetch_factor", None),
-                "force_single_gpu": getattr(self.config, "force_single_gpu", None),
                 # ★ P0-1: lambda_causal_l1 → lambda_locality_l1
                 "lambda_locality_l1": self.config.lambda_locality_l1,
                 "dropout": self.config.dropout,

@@ -226,7 +226,6 @@ def main():
                     # v10 固定训练参数
                     "num_epochs": train_epochs,
                     "n_gpus": n_gpus,
-                    "force_single_gpu": True,
                     "batch_size": per_gpu_batch,
                     "lr": scaled_lr,
                     "warmup_epochs": warmup_epochs,
