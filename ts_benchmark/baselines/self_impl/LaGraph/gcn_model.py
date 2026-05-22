@@ -244,6 +244,9 @@ class SparseGCN(nn.Module):
     def __init__(self, win_size, enc_in, c_out, dropout, n_heads=4,
                  d_model=128, e_layers=2, patch_size=16, channel=55,
                  d_ff=256, topk=5, sparse_topk=None,
+                 use_channel_graph=True, use_temporal_graph=True,
+                 use_vq_bypass=True, use_boundary_detector=True,
+                 use_multi_scale_scorer=True,
                  **kwargs):
         super(SparseGCN, self).__init__()
 
@@ -251,6 +254,11 @@ class SparseGCN(nn.Module):
         self.win_size = win_size
         self.c_out = c_out
         self.topk = topk
+        self.use_channel_graph = use_channel_graph
+        self.use_temporal_graph = use_temporal_graph
+        self.use_vq_bypass = use_vq_bypass
+        self.use_boundary_detector = use_boundary_detector
+        self.use_multi_scale_scorer = use_multi_scale_scorer
 
         # === 自适应通道图 ===
         self.channel_graph = ChannelAdaptiveGraph(
@@ -339,12 +347,29 @@ class SparseGCN(nn.Module):
         self.use_prediction_head = False
         self.lambda_pred = 0.0
         self.contrastive_temp = 0.5
+        self._apply_architecture_switches()
+
+    @staticmethod
+    def _set_trainable(module: nn.Module, trainable: bool):
+        for param in module.parameters():
+            param.requires_grad = trainable
+
+    def _apply_architecture_switches(self):
+        self._set_trainable(self.channel_graph, self.use_channel_graph)
+        self._set_trainable(self.temporal_graph, self.use_temporal_graph)
+        self._set_trainable(self.vq_bottleneck, self.use_vq_bypass)
+        self._set_trainable(self.boundary_detector, self.use_boundary_detector)
+        self._set_trainable(self.multi_scale_scorer, self.use_multi_scale_scorer)
 
     def get_sparse_loss(self):
         """通道图 L1 稀疏正则化损失"""
+        if not self.use_channel_graph:
+            return next(self.parameters()).new_tensor(0.0)
         return self.channel_graph.get_l1_penalty()
 
     def set_warmup_progress(self, alpha: float):
+        if not self.use_channel_graph:
+            return
         self.channel_graph.set_warmup_progress(alpha)
 
     def forward(self, x):
@@ -368,17 +393,30 @@ class SparseGCN(nn.Module):
         resid, trend = self.decomp(x)
 
         # 步骤 2: 自适应通道依赖图
-        resid_adapted, A_adaptive = self.channel_graph(resid)
+        if self.use_channel_graph:
+            resid_adapted, A_adaptive = self.channel_graph(resid)
+        else:
+            resid_adapted = resid
+            A_adaptive = torch.eye(C, device=x.device).unsqueeze(0).expand(B, C, C)
 
         # 步骤 3: 简化时序图
-        resid_temp, A_temp = self.temporal_graph(resid_adapted, A_proximity=A_adaptive)
+        if self.use_temporal_graph:
+            resid_temp, A_temp = self.temporal_graph(resid_adapted, A_proximity=A_adaptive)
+        else:
+            resid_temp = resid_adapted
+            A_temp = None
 
         stage1_feat = resid_temp  # (B, L, C)
 
         # ★ P0: Dual-Path VQ — 旁路模式
         #   VQ 不参与重建路径，仅计算 vq_dist 和 vq_loss
         #   continuous_feat = stage1_feat (原始连续特征)
-        continuous_feat, vq_loss_val, vq_dist = self.vq_bottleneck(stage1_feat)
+        if self.use_vq_bypass:
+            continuous_feat, vq_loss_val, vq_dist = self.vq_bottleneck(stage1_feat)
+        else:
+            continuous_feat = stage1_feat
+            vq_loss_val = stage1_feat.new_tensor(0.0)
+            vq_dist = stage1_feat.new_zeros(B, L)
 
         # ========== 阶段二：重建 (使用连续特征) ==========
         resid_proj = self.proj_in(continuous_feat)  # (B, L, d_model)
@@ -469,13 +507,25 @@ class SparseGCN(nn.Module):
         vq_score_normalized = (raw_vq_score - vq_min) / vq_range  # (B, L) ∈ [0, 1]
 
         # 乘以可学习权重
-        vq_score = self.vq_score_weight * vq_score_normalized  # (B, L)
+        if self.use_vq_bypass:
+            vq_score = self.vq_score_weight * vq_score_normalized  # (B, L)
+        else:
+            vq_score = torch.zeros(B, L, device=x.device)
 
         # ★ P0: 融合评分 (MultiScaleAnomalyScorer 内部已包含 VQ)
         #   注意: MultiScaleAnomalyScorer 输出长度 = max(win_sizes)，需对齐
         L_scorer = max(self.multi_scale_scorer.win_sizes)
-        vq_score_scorer = vq_score[:, -L_scorer:] if vq_score.shape[1] >= L_scorer else vq_score
-        score = self.multi_scale_scorer(x_rec_dict, x_input_dict, vq_score=vq_score_scorer)
+        if self.use_multi_scale_scorer:
+            vq_score_scorer = vq_score[:, -L_scorer:] if vq_score.shape[1] >= L_scorer else vq_score
+            score = self.multi_scale_scorer(
+                x_rec_dict, x_input_dict,
+                vq_score=vq_score_scorer if self.use_vq_bypass else None,
+            )
+        else:
+            ws = max(valid_sizes)
+            err = F.l1_loss(x_rec_dict[ws], x_input_dict[ws], reduction='none')
+            k = min(self.multi_scale_scorer.topk_k, err.shape[-1])
+            score = err.topk(k=k, dim=-1, largest=True, sorted=False)[0].mean(dim=-1)
 
         # score 输出是 L_max（即 max(win_sizes)），按实际有效窗口截断
         L_eff = max(valid_sizes)
@@ -507,7 +557,7 @@ class SparseGCN(nn.Module):
             avg_recon_error = avg_recon_error[:, -L:, :]
 
         # BoundaryDetector 输入: (B, L, C)
-        boundary_score = self.boundary_detector(avg_recon_error.abs())  # (B, L)
+        boundary_score = self.boundary_detector(avg_recon_error.abs()) if self.use_boundary_detector else None
 
         # 对齐 score 和 boundary_score 到同一长度再融合
         #   score: (B, L_scorer) 来自 MultiScaleAnomalyScorer
@@ -520,11 +570,12 @@ class SparseGCN(nn.Module):
         #         硬把 boundary 提到主导地位会摧毁低异常率性能（Hard Nuke）。
         #   clamp: boundary ∈ [0.1, 1.0], recon ∈ [0.5, 1.5]
         #         确保重建误差始终占足够权重，boundary 不超载
-        self.boundary_weight.data = self.boundary_weight.data.clamp(min=0.1, max=1.0)
-        self.recon_weight.data = self.recon_weight.data.clamp(min=0.5, max=1.5)
         L_scorer = score.shape[1]
-        boundary_score_aligned = boundary_score[:, -L_scorer:]
-        score = self.boundary_weight * boundary_score_aligned + self.recon_weight * score
+        if boundary_score is not None:
+            self.boundary_weight.data = self.boundary_weight.data.clamp(min=0.1, max=1.0)
+            self.recon_weight.data = self.recon_weight.data.clamp(min=0.5, max=1.5)
+            boundary_score_aligned = boundary_score[:, -L_scorer:]
+            score = self.boundary_weight * boundary_score_aligned + self.recon_weight * score
 
         # 对齐到原始长度 L
         if L_scorer < L:

@@ -8,7 +8,7 @@ LaGraph 单模型简化运行入口
   python ts_benchmark/run_single.py                 # 默认 10 epochs，全量数据集
   python ts_benchmark/run_single.py --fast          # 快速测试：3 epochs
   python ts_benchmark/run_single.py --epochs 30 --n-gpus 8   # 自定义训练轮次
-  python ts_benchmark/run_single.py --epochs 100 --n-gpus 8
+  python ts_benchmark/run_single.py --epochs 30 --num-workers 4 --prefetch-factor 4
 
 说明:
   - 始终运行 DETECT_META.csv 中所有可用数据集
@@ -104,6 +104,12 @@ def main():
         type=int,
         default=4,
         help="每个 DataLoader worker 预取 batch 数 (default: 4; num_workers=0 时自动忽略)",
+    )
+    parser.add_argument(
+        "--arch-profile",
+        choices=["full", "core", "reconstruction"],
+        default="full",
+        help="架构配置: full 保持现有结果; core 关闭 VQ/Boundary; reconstruction 仅保留重建主干",
     )
     parser.add_argument(
         "--pred-head",
@@ -231,6 +237,31 @@ def main():
     if "pred" in ablation:
         use_pred_head = True
 
+    arch_profiles = {
+        "full": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_boundary_detector": True,
+            "use_multi_scale_scorer": True,
+        },
+        "core": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": False,
+            "use_boundary_detector": False,
+            "use_multi_scale_scorer": True,
+        },
+        "reconstruction": {
+            "use_channel_graph": False,
+            "use_temporal_graph": False,
+            "use_vq_bypass": False,
+            "use_boundary_detector": False,
+            "use_multi_scale_scorer": False,
+        },
+    }
+    arch_switches = arch_profiles[args.arch_profile]
+
     model_config = {
         "models": [
             {
@@ -245,6 +276,7 @@ def main():
                     "warmup_epochs": warmup_epochs,
                     "dataloader_num_workers": dataloader_num_workers,
                     "dataloader_prefetch_factor": dataloader_prefetch_factor,
+                    **arch_switches,
                     "d_model": d_model_scale,
                     "e_layers": e_layers_scale,
                     "n_heads": n_heads_scale,
@@ -263,6 +295,7 @@ def main():
     print(f"  [v10 配置] d_model={d_model_scale}, e_layers={e_layers_scale}, n_heads={n_heads_scale}, batch_per_gpu={per_gpu_batch}")
     print(f"  [v10 配置] LR={scaled_lr:.1e}, warmup={warmup_epochs} epochs")
     print(f"  [v10 数据] workers={dataloader_num_workers}, prefetch={dataloader_prefetch_factor}")
+    print(f"  [v10 架构] profile={args.arch_profile}, switches={arch_switches}")
     print(f"  [v10 模块] prediction={use_pred_head}, contrastive={use_contrastive}, freq={use_freq_loss}, prototype={use_prototype}")
     print(f"  [v10 提示] 如需启用辅助模块，使用 --ablation contrastive/freq/prototype/pred")
     print()

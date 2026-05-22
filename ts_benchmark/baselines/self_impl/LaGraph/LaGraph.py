@@ -64,6 +64,12 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "multi_scale_win_sizes": [],
     "multi_scale_weights": [],
     # --- v11 VQ Bottleneck 参数 ---
+    # --- architecture switches for controlled ablation ---
+    "use_channel_graph": True,
+    "use_temporal_graph": True,
+    "use_vq_bypass": True,
+    "use_boundary_detector": True,
+    "use_multi_scale_scorer": True,
     "lambda_vq": 0.1,
     "vq_cooldown_epochs": 15,
     "vq_score_weight": 0.5,
@@ -1043,6 +1049,11 @@ class LaGraph:
             channel=self.config.input_c,
             topk=self.config.topk,
             sparse_topk=self.config.sparse_topk,
+            use_channel_graph=getattr(self.config, "use_channel_graph", True),
+            use_temporal_graph=getattr(self.config, "use_temporal_graph", True),
+            use_vq_bypass=getattr(self.config, "use_vq_bypass", True),
+            use_boundary_detector=getattr(self.config, "use_boundary_detector", True),
+            use_multi_scale_scorer=getattr(self.config, "use_multi_scale_scorer", True),
         )
         self.model.to(self.device)
 
@@ -1107,6 +1118,7 @@ class LaGraph:
 
         vq_cooldown_epochs = getattr(self.config, 'vq_cooldown_epochs', 10)
         lambda_vq = getattr(self.config, 'lambda_vq', 0.01)
+        use_vq_bypass = getattr(self.config, 'use_vq_bypass', True)
 
         for epoch in range(self.config.num_epochs):
             epoch_start = time.time()
@@ -1115,10 +1127,12 @@ class LaGraph:
             warmup_alpha = min(1.0, epoch / max(1, self.config.num_epochs * 0.1))
             self.model.set_warmup_progress(warmup_alpha)
 
-            if epoch == 0:
+            if use_vq_bypass and epoch == 0:
                 _freeze_except_vq(self.model, freeze=True)
-            elif epoch == vq_cooldown_epochs:
+            elif use_vq_bypass and epoch == vq_cooldown_epochs:
                 _freeze_except_vq(self.model, freeze=False)
+                if hasattr(self.model, "_apply_architecture_switches"):
+                    self.model._apply_architecture_switches()
 
             self.model.train()
             self.optimizer.zero_grad()
@@ -1133,10 +1147,10 @@ class LaGraph:
                 if aux_losses and 'sparse_loss' in aux_losses:
                     loss = loss + self.config.lambda_locality_l1 * aux_losses['sparse_loss']
 
-                if aux_losses and 'vq_loss' in aux_losses and epoch < vq_cooldown_epochs:
+                if use_vq_bypass and aux_losses and 'vq_loss' in aux_losses and epoch < vq_cooldown_epochs:
                     loss = aux_losses['vq_loss']
                 else:
-                    if aux_losses and 'vq_loss' in aux_losses:
+                    if use_vq_bypass and aux_losses and 'vq_loss' in aux_losses:
                         loss = loss + lambda_vq * aux_losses['vq_loss']
 
                 loss.backward()
@@ -1350,6 +1364,11 @@ class LaGraph:
                 "vq_cooldown_epochs": getattr(self.config, "vq_cooldown_epochs", None),
                 "dataloader_num_workers": getattr(self.config, "dataloader_num_workers", None),
                 "dataloader_prefetch_factor": getattr(self.config, "dataloader_prefetch_factor", None),
+                "use_channel_graph": getattr(self.config, "use_channel_graph", None),
+                "use_temporal_graph": getattr(self.config, "use_temporal_graph", None),
+                "use_vq_bypass": getattr(self.config, "use_vq_bypass", None),
+                "use_boundary_detector": getattr(self.config, "use_boundary_detector", None),
+                "use_multi_scale_scorer": getattr(self.config, "use_multi_scale_scorer", None),
                 # ★ P0-1: lambda_causal_l1 → lambda_locality_l1
                 "lambda_locality_l1": self.config.lambda_locality_l1,
                 "dropout": self.config.dropout,
