@@ -154,6 +154,7 @@ def main():
     EXCLUDED_FILES = {
         "CMAPSS_FD001.csv", "CMAPSS_FD002.csv",
         "CMAPSS_FD003.csv", "CMAPSS_FD004.csv",
+        "SMD.csv",        # 数据量过大，默认实验先排除；可用 --datasets SMD.csv 单独运行
         "SKAB_all.csv",   # 标签格式不兼容
     }
     if args.datasets:
