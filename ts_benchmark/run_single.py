@@ -94,6 +94,18 @@ def main():
         help="GPU 数量开关 (default: 1=单卡, 0=CPU; >1 会被降级为单卡，DDP 已停用)",
     )
     parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=4,
+        help="DataLoader worker 数量 (default: 4; 设为 0 可禁用多进程加载)",
+    )
+    parser.add_argument(
+        "--prefetch-factor",
+        type=int,
+        default=4,
+        help="每个 DataLoader worker 预取 batch 数 (default: 4; num_workers=0 时自动忽略)",
+    )
+    parser.add_argument(
         "--pred-head",
         action="store_true",
         help="启用预测分支（Phase 2：解重建悖论）",
@@ -162,6 +174,8 @@ def main():
     if args.n_gpus > 1:
         print(f"  [INFO] --n-gpus {args.n_gpus} requested; DDP is disabled for RTX 5070 migration, using 1 GPU.")
     n_gpus = 0 if args.n_gpus == 0 else 1
+    dataloader_num_workers = max(0, args.num_workers)
+    dataloader_prefetch_factor = max(1, args.prefetch_factor)
 
     # ---- v10 固定模型容量（无论 GPU 数多少都用相同容量） ----
     d_model_scale = 128
@@ -229,6 +243,8 @@ def main():
                     "batch_size": per_gpu_batch,
                     "lr": scaled_lr,
                     "warmup_epochs": warmup_epochs,
+                    "dataloader_num_workers": dataloader_num_workers,
+                    "dataloader_prefetch_factor": dataloader_prefetch_factor,
                     "d_model": d_model_scale,
                     "e_layers": e_layers_scale,
                     "n_heads": n_heads_scale,
@@ -246,6 +262,7 @@ def main():
     # 打印 v10 配置摘要
     print(f"  [v10 配置] d_model={d_model_scale}, e_layers={e_layers_scale}, n_heads={n_heads_scale}, batch_per_gpu={per_gpu_batch}")
     print(f"  [v10 配置] LR={scaled_lr:.1e}, warmup={warmup_epochs} epochs")
+    print(f"  [v10 数据] workers={dataloader_num_workers}, prefetch={dataloader_prefetch_factor}")
     print(f"  [v10 模块] prediction={use_pred_head}, contrastive={use_contrastive}, freq={use_freq_loss}, prototype={use_prototype}")
     print(f"  [v10 提示] 如需启用辅助模块，使用 --ablation contrastive/freq/prototype/pred")
     print()

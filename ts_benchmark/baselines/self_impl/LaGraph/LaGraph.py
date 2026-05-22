@@ -68,8 +68,8 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "vq_cooldown_epochs": 15,
     "vq_score_weight": 0.5,
     # --- RTX 5070 single-GPU training path ---
-    "dataloader_num_workers": 2,
-    "dataloader_prefetch_factor": 2,
+    "dataloader_num_workers": 4,
+    "dataloader_prefetch_factor": 4,
     # --- v11.4 P0-2: POT 阈值参数 ---
     "pot_risk": 1e-4,            # POT EVT 风险水平
     "pot_num_quantiles": 1000,   # POT 分位数数量
@@ -1021,14 +1021,14 @@ class LaGraph:
         self.train_loader = adp(
             train_df, batch_size=self.config.batch_size,
             win_size=self.config.win_size, step=1, mode="train",
-            num_workers=getattr(self.config, 'dataloader_num_workers', 2),
-            prefetch_factor=getattr(self.config, 'dataloader_prefetch_factor', 2),
+            num_workers=getattr(self.config, 'dataloader_num_workers', 4),
+            prefetch_factor=getattr(self.config, 'dataloader_prefetch_factor', 4),
         )
         self.valid_loader = adp(
             val_df, batch_size=self.config.batch_size,
             win_size=self.config.win_size, step=1, mode="val",
-            num_workers=getattr(self.config, 'dataloader_num_workers', 2),
-            prefetch_factor=getattr(self.config, 'dataloader_prefetch_factor', 2),
+            num_workers=getattr(self.config, 'dataloader_num_workers', 4),
+            prefetch_factor=getattr(self.config, 'dataloader_prefetch_factor', 4),
         )
 
         self.model = SparseGCN(
