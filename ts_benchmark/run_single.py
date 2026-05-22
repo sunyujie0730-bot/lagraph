@@ -91,7 +91,7 @@ def main():
         "--n-gpus",
         type=int,
         default=1,
-        help="DDP 多卡数量 (default: 1=单卡, 0=CPU, >1=torchrun 多卡)",
+        help="GPU 数量开关 (default: 1=单卡, 0=CPU; >1 会被降级为单卡，DDP 已停用)",
     )
     parser.add_argument(
         "--pred-head",
@@ -159,7 +159,9 @@ def main():
     #   - 仅保留 MSE重建 + L1稀疏正则
     #   - 差分学习率 + Warmup + CosineAnnealing + EarlyStopping
     # ============================================================
-    n_gpus = args.n_gpus if args.n_gpus > 0 else 1
+    if args.n_gpus > 1:
+        print(f"  [INFO] --n-gpus {args.n_gpus} requested; DDP is disabled for RTX 5070 migration, using 1 GPU.")
+    n_gpus = 0 if args.n_gpus == 0 else 1
 
     # ---- v10 固定模型容量（无论 GPU 数多少都用相同容量） ----
     d_model_scale = 128
@@ -224,6 +226,7 @@ def main():
                     # v10 固定训练参数
                     "num_epochs": train_epochs,
                     "n_gpus": n_gpus,
+                    "force_single_gpu": True,
                     "batch_size": per_gpu_batch,
                     "lr": scaled_lr,
                     "warmup_epochs": warmup_epochs,

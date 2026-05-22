@@ -1,0 +1,28 @@
+name: lagraph5070
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - numpy=1.26.4
+  - scipy=1.14.1
+  - scikit-learn=1.5.2
+  - pandas=2.2.3
+  - statsmodels=0.14.4
+  - matplotlib=3.9.3
+  - tqdm=4.67.1
+  - requests=2.32.3
+  - sympy=1.13.3
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cu128
+      - torch==2.7.0+cu128
+      - torchvision==0.22.0+cu128
+      - torchaudio==2.7.0+cu128
+      - pytorch-lightning==2.4.0
+      - einops==0.8.1
+      - yacs==0.1.8
+      - ray==2.10.0
+      - dash==2.18.2
+      - dash-bootstrap-components==1.6.0
+      - Flask==3.0.3
+      - reformer-pytorch==1.4.4

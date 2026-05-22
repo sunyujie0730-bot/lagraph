@@ -71,6 +71,10 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "lambda_vq": 0.1,
     "vq_cooldown_epochs": 15,
     "vq_score_weight": 0.5,
+    # --- RTX 5070 single-GPU training path ---
+    "dataloader_num_workers": 2,
+    "dataloader_prefetch_factor": 2,
+    "force_single_gpu": True,
     # --- v11.4 P0-2: POT 阈值参数 ---
     "pot_risk": 1e-4,            # POT EVT 风险水平
     "pot_num_quantiles": 1000,   # POT 分位数数量
@@ -704,7 +708,14 @@ class LaGraph:
         # GPU 检测
         self.config_n_gpu = getattr(self.config, 'n_gpus', None)
         hardware_ngpu = _get_n_gpus()
-        if self.config_n_gpu is not None:
+        self.ddp_requested = (
+            bool(getattr(self.config, 'force_single_gpu', True))
+            and self.config_n_gpu is not None
+            and self.config_n_gpu > 1
+        )
+        if getattr(self.config, 'force_single_gpu', True):
+            self.ngpu = 1 if hardware_ngpu >= 1 else 0
+        elif self.config_n_gpu is not None:
             self.ngpu = min(self.config_n_gpu, hardware_ngpu)
         else:
             self.ngpu = hardware_ngpu
@@ -896,17 +907,15 @@ class LaGraph:
     def vali(self, vali_loader):
         self.model.eval()
         loss_list = []
-        with torch.no_grad():
-            for i, (input_data, _) in enumerate(vali_loader):
-                input_data = input_data.float().to(self.device)
+        with torch.inference_mode():
+            for input_data, _ in vali_loader:
+                input_data = input_data.float().to(self.device, non_blocking=True)
                 rec, _, _, _, _, aux_losses, _ = self.model(input_data)
                 loss = F.mse_loss(rec, input_data)
                 # ★ P0-1: lambda_causal_l1 → lambda_locality_l1
                 if aux_losses and 'sparse_loss' in aux_losses:
                     loss = loss + self.config.lambda_locality_l1 * aux_losses['sparse_loss']
                 loss_list.append(loss.item())
-                if (i + 1) % 5 == 0:
-                    torch.cuda.empty_cache()
         return np.average(loss_list) if loss_list else 0.0
 
     # ======================== 训练（单卡 / DDP 多卡）=======================
@@ -968,7 +977,13 @@ class LaGraph:
             index=valid_data.index,
         )
 
-        if self.ngpu > 1:
+        if self.ddp_requested:
+            print(
+                f"\n  [INFO] n_gpus={self.config_n_gpu} was requested, "
+                "but force_single_gpu=True; using the single-GPU training path."
+            )
+
+        if self.ngpu > 1 and not getattr(self.config, 'force_single_gpu', True):
             self._ddp_train(train_scaled, valid_scaled)
         else:
             self._single_gpu_train(train_scaled, valid_scaled)
@@ -1173,7 +1188,7 @@ class LaGraph:
             win_size=self.config.win_size, step=1, mode="val", num_workers=0,
         )
 
-        print(f"\n  ✓ DDP checkpoints loaded ({self.ngpu} GPUs)")
+        print(f"\n  [OK] DDP checkpoints loaded ({self.ngpu} GPUs)")
 
     def _single_gpu_train(self, train_df, val_df):
         """单 GPU 训练（v11.4 版）"""
@@ -1182,10 +1197,14 @@ class LaGraph:
         self.train_loader = adp(
             train_df, batch_size=self.config.batch_size,
             win_size=self.config.win_size, step=1, mode="train",
+            num_workers=getattr(self.config, 'dataloader_num_workers', 2),
+            prefetch_factor=getattr(self.config, 'dataloader_prefetch_factor', 2),
         )
         self.valid_loader = adp(
             val_df, batch_size=self.config.batch_size,
             win_size=self.config.win_size, step=1, mode="val",
+            num_workers=getattr(self.config, 'dataloader_num_workers', 2),
+            prefetch_factor=getattr(self.config, 'dataloader_prefetch_factor', 2),
         )
 
         self.model = SparseGCN(
@@ -1215,7 +1234,7 @@ class LaGraph:
         )
 
         if not torch.cuda.is_available():
-            print("  ⚠ WARNING: CUDA NOT available — running on CPU")
+            print("  WARNING: CUDA NOT available - running on CPU")
             print()
 
         self.early_stopping = EarlyStopping(
@@ -1281,7 +1300,7 @@ class LaGraph:
             self.optimizer.zero_grad()
 
             for i, (input_data, _) in enumerate(self.train_loader):
-                input_data = input_data.float().to(self.device)
+                input_data = input_data.float().to(self.device, non_blocking=True)
                 rec, _, _, _, _, aux_losses, _ = self.model(input_data)
 
                 loss = F.mse_loss(rec, input_data)
@@ -1335,7 +1354,7 @@ class LaGraph:
         self._save_train_history(total_params=total_params, total_time=total_time)
 
         print("─" * 70)
-        print(f"  ✓  Training Complete!")
+        print(f"  [OK] Training Complete!")
         print(f"     Best Val Loss: {self.early_stopping.val_loss_min:.6f}  @  Epoch {self.early_stopping.best_epoch}")
         print(f"     Total Time:    {_format_duration(total_time)}")
         print(f"     Device:        {_get_gpu_info(self.device)}")
@@ -1475,7 +1494,7 @@ class LaGraph:
         self._save_train_history(total_params=total_params, total_time=total_time)
 
         print("─" * 70)
-        print(f"  ✓  Reweight Training Complete!")
+        print(f"  [OK] Reweight Training Complete!")
         print(f"     Best Val Loss: {self.early_stopping.val_loss_min:.6f}")
         print("─" * 70)
         print()
@@ -1503,6 +1522,11 @@ class LaGraph:
                 "num_epochs": self.config.num_epochs,
                 "patience": self.config.patience,
                 "warmup_epochs": self.config.warmup_epochs,
+                "lambda_vq": getattr(self.config, "lambda_vq", None),
+                "vq_cooldown_epochs": getattr(self.config, "vq_cooldown_epochs", None),
+                "dataloader_num_workers": getattr(self.config, "dataloader_num_workers", None),
+                "dataloader_prefetch_factor": getattr(self.config, "dataloader_prefetch_factor", None),
+                "force_single_gpu": getattr(self.config, "force_single_gpu", None),
                 # ★ P0-1: lambda_causal_l1 → lambda_locality_l1
                 "lambda_locality_l1": self.config.lambda_locality_l1,
                 "dropout": self.config.dropout,
