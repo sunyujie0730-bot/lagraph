@@ -67,6 +67,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     # --- architecture switches for controlled ablation ---
     "use_channel_graph": True,
     "use_temporal_graph": True,
+    "use_dynamic_temporal_graph": False,
     "use_vq_bypass": True,
     "use_multi_scale_scorer": False,
     "lambda_vq": 0.1,
@@ -1054,6 +1055,7 @@ class LaGraph:
             sparse_topk=self.config.sparse_topk,
             use_channel_graph=getattr(self.config, "use_channel_graph", True),
             use_temporal_graph=getattr(self.config, "use_temporal_graph", True),
+            use_dynamic_temporal_graph=getattr(self.config, "use_dynamic_temporal_graph", False),
             use_vq_bypass=getattr(self.config, "use_vq_bypass", True),
             use_multi_scale_scorer=getattr(self.config, "use_multi_scale_scorer", False),
             vq_score_weight=getattr(self.config, "vq_score_weight", 0.3),
@@ -1233,6 +1235,11 @@ class LaGraph:
             channel=self.config.input_c,
             topk=self.config.topk,
             sparse_topk=self.config.sparse_topk,
+            use_channel_graph=getattr(self.config, "use_channel_graph", True),
+            use_temporal_graph=getattr(self.config, "use_temporal_graph", True),
+            use_dynamic_temporal_graph=getattr(self.config, "use_dynamic_temporal_graph", False),
+            use_vq_bypass=getattr(self.config, "use_vq_bypass", True),
+            use_multi_scale_scorer=getattr(self.config, "use_multi_scale_scorer", False),
             vq_score_weight=getattr(self.config, "vq_score_weight", 0.3),
         )
         self.model.to(self.device)
@@ -1371,6 +1378,7 @@ class LaGraph:
                 "dataloader_prefetch_factor": getattr(self.config, "dataloader_prefetch_factor", None),
                 "use_channel_graph": getattr(self.config, "use_channel_graph", None),
                 "use_temporal_graph": getattr(self.config, "use_temporal_graph", None),
+                "use_dynamic_temporal_graph": getattr(self.config, "use_dynamic_temporal_graph", None),
                 "use_vq_bypass": getattr(self.config, "use_vq_bypass", None),
                 "use_multi_scale_scorer": getattr(self.config, "use_multi_scale_scorer", None),
                 # ★ P0-1: lambda_causal_l1 → lambda_locality_l1
