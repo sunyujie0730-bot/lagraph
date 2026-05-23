@@ -70,6 +70,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "use_dynamic_temporal_graph": False,
     "dynamic_temporal_residual_init": 0.1,
     "dynamic_temporal_topk": None,
+    "dynamic_temporal_gate_mode": "global",
     "channel_graph_lr_scale": 0.1,
     "temporal_graph_lr_scale": 0.1,
     "use_vq_bypass": True,
@@ -77,9 +78,16 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "lambda_vq": 0.1,
     "vq_cooldown_epochs": 10,
     "vq_score_weight": 0.3,
+    "score_topk_k": None,
     # --- RTX 5070 single-GPU training path ---
     "dataloader_num_workers": 2,
     "dataloader_prefetch_factor": 2,
+    # --- Affiliation-oriented inference shaping ---
+    "score_smoothing_window": 1,
+    "score_smoothing_method": "mean",
+    "prediction_fill_gap": 0,
+    "prediction_min_len": 1,
+    "prediction_dilate": 0,
     # --- v11.4 P0-2: POT 阈值参数 ---
     "pot_risk": 1e-4,            # POT EVT 风险水平
     "pot_num_quantiles": 1000,   # POT 分位数数量
@@ -890,11 +898,18 @@ class LaGraph:
                 "lambda_vq": getattr(self.config, "lambda_vq", None),
                 "vq_cooldown_epochs": getattr(self.config, "vq_cooldown_epochs", None),
                 "vq_score_weight": getattr(self.config, "vq_score_weight", None),
+                "score_topk_k": getattr(self.config, "score_topk_k", None),
                 "use_vq_bypass": getattr(self.config, "use_vq_bypass", None),
                 "dynamic_temporal_residual_init": getattr(self.config, "dynamic_temporal_residual_init", None),
                 "dynamic_temporal_topk": getattr(self.config, "dynamic_temporal_topk", None),
+                "dynamic_temporal_gate_mode": getattr(self.config, "dynamic_temporal_gate_mode", None),
                 "channel_graph_lr_scale": getattr(self.config, "channel_graph_lr_scale", None),
                 "temporal_graph_lr_scale": getattr(self.config, "temporal_graph_lr_scale", None),
+                "score_smoothing_window": getattr(self.config, "score_smoothing_window", None),
+                "score_smoothing_method": getattr(self.config, "score_smoothing_method", None),
+                "prediction_fill_gap": getattr(self.config, "prediction_fill_gap", None),
+                "prediction_min_len": getattr(self.config, "prediction_min_len", None),
+                "prediction_dilate": getattr(self.config, "prediction_dilate", None),
             },
             "model_info": {
                 "total_params": total_params,
@@ -1066,9 +1081,11 @@ class LaGraph:
             use_dynamic_temporal_graph=getattr(self.config, "use_dynamic_temporal_graph", False),
             dynamic_temporal_residual_init=getattr(self.config, "dynamic_temporal_residual_init", 0.1),
             dynamic_temporal_topk=getattr(self.config, "dynamic_temporal_topk", None),
+            dynamic_temporal_gate_mode=getattr(self.config, "dynamic_temporal_gate_mode", "global"),
             use_vq_bypass=getattr(self.config, "use_vq_bypass", True),
             use_multi_scale_scorer=getattr(self.config, "use_multi_scale_scorer", False),
             vq_score_weight=getattr(self.config, "vq_score_weight", 0.3),
+            score_topk_k=getattr(self.config, "score_topk_k", None),
         )
         self.model.to(self.device)
 
@@ -1269,9 +1286,11 @@ class LaGraph:
             use_dynamic_temporal_graph=getattr(self.config, "use_dynamic_temporal_graph", False),
             dynamic_temporal_residual_init=getattr(self.config, "dynamic_temporal_residual_init", 0.1),
             dynamic_temporal_topk=getattr(self.config, "dynamic_temporal_topk", None),
+            dynamic_temporal_gate_mode=getattr(self.config, "dynamic_temporal_gate_mode", "global"),
             use_vq_bypass=getattr(self.config, "use_vq_bypass", True),
             use_multi_scale_scorer=getattr(self.config, "use_multi_scale_scorer", False),
             vq_score_weight=getattr(self.config, "vq_score_weight", 0.3),
+            score_topk_k=getattr(self.config, "score_topk_k", None),
         )
         self.model.to(self.device)
 
@@ -1421,6 +1440,7 @@ class LaGraph:
                 "lambda_vq": getattr(self.config, "lambda_vq", None),
                 "vq_cooldown_epochs": getattr(self.config, "vq_cooldown_epochs", None),
                 "vq_score_weight": getattr(self.config, "vq_score_weight", None),
+                "score_topk_k": getattr(self.config, "score_topk_k", None),
                 "dataloader_num_workers": getattr(self.config, "dataloader_num_workers", None),
                 "dataloader_prefetch_factor": getattr(self.config, "dataloader_prefetch_factor", None),
                 "use_channel_graph": getattr(self.config, "use_channel_graph", None),
@@ -1428,10 +1448,16 @@ class LaGraph:
                 "use_dynamic_temporal_graph": getattr(self.config, "use_dynamic_temporal_graph", None),
                 "dynamic_temporal_residual_init": getattr(self.config, "dynamic_temporal_residual_init", None),
                 "dynamic_temporal_topk": getattr(self.config, "dynamic_temporal_topk", None),
+                "dynamic_temporal_gate_mode": getattr(self.config, "dynamic_temporal_gate_mode", None),
                 "channel_graph_lr_scale": getattr(self.config, "channel_graph_lr_scale", None),
                 "temporal_graph_lr_scale": getattr(self.config, "temporal_graph_lr_scale", None),
                 "use_vq_bypass": getattr(self.config, "use_vq_bypass", None),
                 "use_multi_scale_scorer": getattr(self.config, "use_multi_scale_scorer", None),
+                "score_smoothing_window": getattr(self.config, "score_smoothing_window", None),
+                "score_smoothing_method": getattr(self.config, "score_smoothing_method", None),
+                "prediction_fill_gap": getattr(self.config, "prediction_fill_gap", None),
+                "prediction_min_len": getattr(self.config, "prediction_min_len", None),
+                "prediction_dilate": getattr(self.config, "prediction_dilate", None),
                 # ★ P0-1: lambda_causal_l1 → lambda_locality_l1
                 "lambda_locality_l1": self.config.lambda_locality_l1,
                 "dropout": self.config.dropout,
@@ -1474,6 +1500,60 @@ class LaGraph:
             where=point_counts > 0,
         )
         return point_scores.astype(np.float32)
+
+    def _smooth_scores_for_detection(self, scores: np.ndarray) -> np.ndarray:
+        window = int(getattr(self.config, "score_smoothing_window", 1) or 1)
+        if window <= 1:
+            return scores.astype(np.float32, copy=False)
+        if window % 2 == 0:
+            window += 1
+        pad = window // 2
+        padded = np.pad(scores.astype(np.float64), (pad, pad), mode="edge")
+        method = getattr(self.config, "score_smoothing_method", "mean")
+        if method == "max":
+            smoothed = np.empty_like(scores, dtype=np.float64)
+            for i in range(len(scores)):
+                smoothed[i] = padded[i:i + window].max()
+        else:
+            kernel = np.ones(window, dtype=np.float64) / float(window)
+            smoothed = np.convolve(padded, kernel, mode="valid")
+        return smoothed.astype(np.float32)
+
+    @staticmethod
+    def _binary_segments(pred: np.ndarray, value: int):
+        n = len(pred)
+        start = None
+        for i in range(n + 1):
+            cur = pred[i] if i < n else 1 - value
+            if cur == value and start is None:
+                start = i
+            elif cur != value and start is not None:
+                yield start, i
+                start = None
+
+    def _shape_prediction_segments(self, pred: np.ndarray) -> np.ndarray:
+        pred = pred.astype(np.int32, copy=True)
+        min_len = int(getattr(self.config, "prediction_min_len", 1) or 1)
+        fill_gap = int(getattr(self.config, "prediction_fill_gap", 0) or 0)
+        dilate = int(getattr(self.config, "prediction_dilate", 0) or 0)
+
+        if min_len > 1:
+            for start, end in list(self._binary_segments(pred, 1)):
+                if end - start < min_len:
+                    pred[start:end] = 0
+
+        if fill_gap > 0:
+            for start, end in list(self._binary_segments(pred, 0)):
+                if start > 0 and end < len(pred) and end - start <= fill_gap:
+                    pred[start:end] = 1
+
+        if dilate > 0 and pred.any():
+            shaped = pred.copy()
+            for start, end in self._binary_segments(pred, 1):
+                shaped[max(0, start - dilate):min(len(pred), end + dilate)] = 1
+            pred = shaped
+
+        return pred
 
     @torch.no_grad()
     def _detect_forward(self, input_data):
@@ -1532,6 +1612,7 @@ class LaGraph:
         point_scores = self._point_wise_aggregate(
             window_scores, self.config.win_size, total_length,
         )
+        point_scores = self._smooth_scores_for_detection(point_scores)
 
         return point_scores, point_scores
 
@@ -1589,6 +1670,7 @@ class LaGraph:
         test_energy = self._point_wise_aggregate(
             test_windows, self.config.win_size, total_length,
         )
+        test_energy = self._smooth_scores_for_detection(test_energy)
 
         # === 步骤 2：阈值选取（★ P0-2: 优先使用 POT 阈值）===
         pot_threshold = self._pot_estimator.get_threshold()
@@ -1621,14 +1703,17 @@ class LaGraph:
             #   新版: per-ratio 直接使用百分位数阈值，POT 阈值仅用于 ratio=None 的默认输出
             threshold = np.percentile(threshold_source, 100 - ratio)
 
-            preds[ratio] = (test_energy > threshold).astype(int)
+            pred = (test_energy > threshold).astype(int)
+            preds[ratio] = self._shape_prediction_segments(pred)
             anom_frac = preds[ratio].mean() * 100
             print(f"  [DIAGNOSTIC]   ratio={ratio:>5.1f}%: threshold={threshold:.6f}, "
                   f"anomaly_frac={anom_frac:.2f}%")
 
         # ★ BUGFIX: POT 阈值仅用于默认检测（ratio=None），不覆盖 per-ratio 结果
         if pot_threshold > 0:
-            pred_pot = (test_energy > pot_threshold).astype(int)
+            pred_pot = self._shape_prediction_segments(
+                (test_energy > pot_threshold).astype(int)
+            )
             preds[None] = pred_pot
             print(f"  [DIAGNOSTIC]   POT default: threshold={pot_threshold:.6f}, "
                   f"anomaly_frac={pred_pot.mean() * 100:.2f}%")

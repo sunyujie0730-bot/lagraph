@@ -247,9 +247,11 @@ class SparseGCN(nn.Module):
                  use_dynamic_temporal_graph=False,
                  dynamic_temporal_residual_init=0.1,
                  dynamic_temporal_topk=None,
+                 dynamic_temporal_gate_mode="global",
                  use_vq_bypass=True,
                  use_multi_scale_scorer=True,
                  vq_score_weight=0.3,
+                 score_topk_k=None,
                  **kwargs):
         super(SparseGCN, self).__init__()
 
@@ -262,8 +264,10 @@ class SparseGCN(nn.Module):
         self.use_dynamic_temporal_graph = use_dynamic_temporal_graph
         self.dynamic_temporal_residual_init = dynamic_temporal_residual_init
         self.dynamic_temporal_topk = dynamic_temporal_topk
+        self.dynamic_temporal_gate_mode = dynamic_temporal_gate_mode
         self.use_vq_bypass = use_vq_bypass
         self.use_multi_scale_scorer = use_multi_scale_scorer
+        self.score_topk_k = score_topk_k
 
         # === 自适应通道图 ===
         self.channel_graph = ChannelAdaptiveGraph(
@@ -279,6 +283,7 @@ class SparseGCN(nn.Module):
                 dropout=dropout,
                 temporal_topk=dynamic_temporal_topk,
                 residual_init=dynamic_temporal_residual_init,
+                gate_mode=dynamic_temporal_gate_mode,
             )
         else:
             self.temporal_graph = SimplifiedTemporalGraph(
@@ -521,7 +526,8 @@ class SparseGCN(nn.Module):
         else:
             ws = max(valid_sizes)
             err = F.l1_loss(x_rec_dict[ws], x_input_dict[ws], reduction='none')
-            k = min(self.multi_scale_scorer.topk_k, err.shape[-1])
+            k = self.score_topk_k or self.multi_scale_scorer.topk_k
+            k = min(max(1, int(k)), err.shape[-1])
             score = err.topk(k=k, dim=-1, largest=True, sorted=False)[0].mean(dim=-1)
 
         # score 输出是 L_max（即 max(win_sizes)），按实际有效窗口截断

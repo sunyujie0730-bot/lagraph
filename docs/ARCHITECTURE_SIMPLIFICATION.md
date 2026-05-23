@@ -42,6 +42,10 @@ should not be treated as valid modules or ablations.
 | `full` | on | on | on | removed | off | Main compact architecture |
 | `dynamic-temporal` | on | dynamic | on | removed | off | Candidate architecture with content-adaptive temporal graph |
 | `dynamic-temporal-gated` | on | dynamic + residual gate | on | removed | off | Current main candidate for dual-graph narrative |
+| `dynamic-temporal-aff` | on | dynamic + time/channel gate | on | removed | off | Rejected affiliation-oriented post-processing profile |
+| `dynamic-temporal-aff-lite` | on | dynamic + time/channel gate | on | removed | off | Rejected conservative affiliation post-processing profile |
+| `dynamic-temporal-aff-peak` | on | dynamic + residual gate | on | removed | off | Rejected local max-score expansion profile |
+| `dynamic-temporal-aff-wide` | on | dynamic + residual gate | on | removed | off | Rejected wider channel-score aggregation profile |
 | `with-scorer` | on | on | on | removed | on | Old multi-scale/VQ scoring path for ablation |
 | `no-boundary` | on | on | on | removed | on | Compatibility alias for older commands |
 | `no-vq` | on | on | off | removed | on | VQ ablation |
@@ -154,6 +158,26 @@ cross-variable structure, while a gated dynamic temporal graph provides adaptive
 temporal refinement that improves point-wise and affiliation quality without
 destroying MSL adjusted performance. Before promotion to the final main method,
 `dynamic-temporal-gated` needs the same multi-seed check as `full`.
+
+## Affiliation-Oriented Scoring Check
+
+Several affiliation-oriented inference variants were tested on MSL with
+seed-2021. These were intended to improve event coverage without changing the
+main training objective.
+
+| Profile | Main change | Raw F1 | Adjusted F1 | Affiliation F1 | Decision |
+| --- | --- | ---: | ---: | ---: | --- |
+| `dynamic-temporal-gated` | Baseline gated dynamic temporal graph | 0.1221 | 0.8584 | 0.7014 | Keep |
+| `dynamic-temporal-aff` | Time/channel gate + mean smoothing + segment shaping | 0.1156 | 0.6677 | 0.6819 | Reject |
+| `dynamic-temporal-aff-lite` | Time/channel gate + light smoothing/gap filling | 0.1099 | 0.7827 | 0.6873 | Reject |
+| `dynamic-temporal-aff-peak` | Local max-score expansion | 0.1153 | 0.6973 | 0.6851 | Reject |
+| `dynamic-temporal-aff-wide` | Top-8 channel scoring instead of top-5 | 0.1115 | 0.8540 | 0.6974 | Reject |
+
+Interpretation: MSL affiliation quality is hurt by simple segment-level
+post-processing and naive score expansion. The current best path remains
+`dynamic-temporal-gated`. Future affiliation improvements should target the
+learned representation or threshold calibration, not generic smoothing,
+dilation, or wider top-k scoring.
 
 ## Commands
 

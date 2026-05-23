@@ -349,13 +349,15 @@ class DynamicTemporalGraph(nn.Module):
     """
 
     def __init__(self, win_size, d_model, dropout=0.1, attn_dim=None,
-                 temporal_topk=None, local_radius=None, residual_init=0.1):
+                 temporal_topk=None, local_radius=None, residual_init=0.1,
+                 gate_mode="global"):
         super(DynamicTemporalGraph, self).__init__()
         self.win_size = win_size
         self.d_model = d_model
         self.attn_dim = attn_dim or min(64, max(16, d_model))
         self.temporal_topk = temporal_topk or max(8, win_size // 4)
         self.local_radius = float(local_radius or max(4, win_size // 10))
+        self.gate_mode = gate_mode
 
         self.q_proj = nn.Linear(d_model, self.attn_dim, bias=False)
         self.k_proj = nn.Linear(d_model, self.attn_dim, bias=False)
@@ -396,6 +398,13 @@ class DynamicTemporalGraph(nn.Module):
             nn.AdaptiveAvgPool1d(1),
             nn.Flatten(),
             nn.Linear(d_model, 1),
+            nn.Sigmoid(),
+        )
+        self.temporal_gate = nn.Sequential(
+            nn.Linear(d_model * 3, d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, d_model),
             nn.Sigmoid(),
         )
         self.norm = nn.LayerNorm(d_model)
@@ -445,7 +454,10 @@ class DynamicTemporalGraph(nn.Module):
         conv_feat = torch.cat([feat.transpose(1, 2) for feat in conv_feats], dim=-1)
         x_conv = self.conv_fusion(conv_feat)
 
-        gate = self.fusion_gate(x_t).unsqueeze(-1)
+        if self.gate_mode == "time_channel":
+            gate = self.temporal_gate(torch.cat([x, x_dyn, x_conv], dim=-1))
+        else:
+            gate = self.fusion_gate(x_t).unsqueeze(-1)
         x_fused = gate * x_dyn + (1.0 - gate) * x_conv
         x_fused = self.norm(x_fused)
         residual_scale = torch.sigmoid(self.residual_logit)
