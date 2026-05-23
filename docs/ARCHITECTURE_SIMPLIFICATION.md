@@ -26,15 +26,14 @@ The removed modules are:
 
 - BoundaryDetector
 - multi-scale/VQ anomaly scorer from the main path
-- contrastive auxiliary branch by default
-- frequency auxiliary loss by default
-- prototype branch by default
+- dead auxiliary switches from the single-run entry point:
+  `use_prediction_head`, `lambda_pred`, `use_contrastive`, `use_freq_loss`,
+  and `use_prototype`
 
-Auxiliary branches remain available only for explicit ablation or diagnostic
-runs. The previous prediction-head switches were removed from the single-run
-entry point because `use_prediction_head` and `lambda_pred` were not consumed by
-the LaGraph implementation; a 15-epoch MSL/SWaT check produced bit-identical
-metrics to the main run, confirming that the switches were dead parameters.
+The auxiliary switches above were removed because the current LaGraph
+implementation does not consume them. A 15-epoch MSL/SWaT prediction-head check
+produced bit-identical metrics to the main run, confirming that these switches
+should not be treated as valid modules or ablations.
 
 ## Runtime Profiles
 

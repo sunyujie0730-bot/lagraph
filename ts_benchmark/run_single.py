@@ -139,13 +139,6 @@ def main():
         default=None,
         help="VQ anomaly score fusion weight; default uses model config",
     )
-    parser.add_argument(
-        "--ablation",
-        type=str,
-        nargs="*",
-        default=None,
-        help="v10 消融模式: 默认全部关闭, 要启用则写 --ablation contrastive/freq/prototype",
-    )
     args = parser.parse_args()
 
     # 确定训练轮次
@@ -246,13 +239,6 @@ def main():
     #     warmup 期间 LR 从 1e-6 线性升到 1e-4，codebook 有 10 轮稳定训练。
     warmup_epochs = 10
 
-    # ---- v10: 所有辅助模块默认关闭（必须用户显式 --ablation 才会启用） ----
-    ablation = args.ablation or []
-    # v10 默认所有辅助模块关闭（若要开启必须显式 --ablation 指定）
-    use_contrastive = "contrastive" in ablation   # 默认 False，需 --ablation contrastive
-    use_prototype = "prototype" in ablation       # 默认 False，需 --ablation prototype
-    use_freq_loss = "freq" in ablation            # 默认 False，需 --ablation freq
-
     arch_profiles = {
         "full": {
             "use_channel_graph": True,
@@ -331,10 +317,6 @@ def main():
                     "d_model": d_model_scale,
                     "e_layers": e_layers_scale,
                     "n_heads": n_heads_scale,
-                    # v10 默认关闭所有辅助模块
-                    "use_contrastive": use_contrastive,
-                    "use_prototype": use_prototype,
-                    "use_freq_loss": use_freq_loss,
                 },
             }
         ]
@@ -345,8 +327,6 @@ def main():
     print(f"  [v10 配置] LR={scaled_lr:.1e}, warmup={warmup_epochs} epochs")
     print(f"  [v10 数据] workers={dataloader_num_workers}, prefetch={dataloader_prefetch_factor}")
     print(f"  [v10 架构] profile={args.arch_profile}, switches={arch_switches}")
-    print(f"  [v10 模块] contrastive={use_contrastive}, freq={use_freq_loss}, prototype={use_prototype}")
-    print(f"  [v10 提示] 如需启用辅助模块，使用 --ablation contrastive/freq/prototype")
     print()
 
     with open(os.path.join(CONFIG_PATH, EVAL_CONFIG), "r") as f:
