@@ -29,9 +29,12 @@ The removed modules are:
 - contrastive auxiliary branch by default
 - frequency auxiliary loss by default
 - prototype branch by default
-- prediction head by default
 
-Auxiliary branches remain available only for explicit ablation or diagnostic runs.
+Auxiliary branches remain available only for explicit ablation or diagnostic
+runs. The previous prediction-head switches were removed from the single-run
+entry point because `use_prediction_head` and `lambda_pred` were not consumed by
+the LaGraph implementation; a 15-epoch MSL/SWaT check produced bit-identical
+metrics to the main run, confirming that the switches were dead parameters.
 
 ## Runtime Profiles
 

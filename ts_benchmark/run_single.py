@@ -122,17 +122,6 @@ def main():
         help="架构配置: full=双图+VQ训练+重建分数; with-scorer=旧多尺度/VQ分数路径; graph-only=双图+重建分数; no-vq/core 关闭 VQ; reconstruction 仅保留重建主干",
     )
     parser.add_argument(
-        "--pred-head",
-        action="store_true",
-        help="启用预测分支（Phase 2：解重建悖论）",
-    )
-    parser.add_argument(
-        "--lambda-pred",
-        type=float,
-        default=0.1,
-        help="预测损失权重 (default: 0.1)",
-    )
-    parser.add_argument(
         "--vq-cooldown-epochs",
         type=int,
         default=None,
@@ -155,7 +144,7 @@ def main():
         type=str,
         nargs="*",
         default=None,
-        help="v10 消融模式: 默认全部关闭, 要启用则写 --ablation contrastive/freq/prototype/pred",
+        help="v10 消融模式: 默认全部关闭, 要启用则写 --ablation contrastive/freq/prototype",
     )
     args = parser.parse_args()
 
@@ -258,16 +247,11 @@ def main():
     warmup_epochs = 10
 
     # ---- v10: 所有辅助模块默认关闭（必须用户显式 --ablation 才会启用） ----
-    use_pred_head = args.pred_head
-    lambda_pred = args.lambda_pred
-
     ablation = args.ablation or []
     # v10 默认所有辅助模块关闭（若要开启必须显式 --ablation 指定）
     use_contrastive = "contrastive" in ablation   # 默认 False，需 --ablation contrastive
     use_prototype = "prototype" in ablation       # 默认 False，需 --ablation prototype
     use_freq_loss = "freq" in ablation            # 默认 False，需 --ablation freq
-    if "pred" in ablation:
-        use_pred_head = True
 
     arch_profiles = {
         "full": {
@@ -348,8 +332,6 @@ def main():
                     "e_layers": e_layers_scale,
                     "n_heads": n_heads_scale,
                     # v10 默认关闭所有辅助模块
-                    "use_prediction_head": use_pred_head,
-                    "lambda_pred": lambda_pred,
                     "use_contrastive": use_contrastive,
                     "use_prototype": use_prototype,
                     "use_freq_loss": use_freq_loss,
@@ -363,8 +345,8 @@ def main():
     print(f"  [v10 配置] LR={scaled_lr:.1e}, warmup={warmup_epochs} epochs")
     print(f"  [v10 数据] workers={dataloader_num_workers}, prefetch={dataloader_prefetch_factor}")
     print(f"  [v10 架构] profile={args.arch_profile}, switches={arch_switches}")
-    print(f"  [v10 模块] prediction={use_pred_head}, contrastive={use_contrastive}, freq={use_freq_loss}, prototype={use_prototype}")
-    print(f"  [v10 提示] 如需启用辅助模块，使用 --ablation contrastive/freq/prototype/pred")
+    print(f"  [v10 模块] contrastive={use_contrastive}, freq={use_freq_loss}, prototype={use_prototype}")
+    print(f"  [v10 提示] 如需启用辅助模块，使用 --ablation contrastive/freq/prototype")
     print()
 
     with open(os.path.join(CONFIG_PATH, EVAL_CONFIG), "r") as f:
