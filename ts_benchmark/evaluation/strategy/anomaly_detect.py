@@ -66,6 +66,8 @@ class AnomalyDetect(Strategy):
     这是模板方法模式：子类只需实现 split_data() 和 detect() 即可
     """
 
+    REQUIRED_CONFIGS = ["seed"]
+
     def __init__(self, strategy_config: dict, evaluator: Evaluator):
         """
         初始化策略
@@ -100,7 +102,7 @@ class AnomalyDetect(Strategy):
         7. 序列化保存预测结果（备用）
         8. 异常处理：如果某步骤失败，返回默认结果（全NaN+错误日志）
         """
-        fix_random_seed()  # 固定随机种子，确保实验可复现
+        fix_random_seed(self._get_scalar_config_value("seed", series_name))
 
         model = model_factory()
         try:

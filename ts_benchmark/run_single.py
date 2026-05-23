@@ -85,6 +85,12 @@ def main():
         help=f"结果保存子目录 (default: {DEFAULT_SAVE_DIR})",
     )
     parser.add_argument(
+        "--seed",
+        type=int,
+        default=2021,
+        help="Random seed for evaluation strategy and model initialization (default: 2021)",
+    )
+    parser.add_argument(
         "--datasets",
         type=str,
         nargs="*",
@@ -363,6 +369,7 @@ def main():
 
     with open(os.path.join(CONFIG_PATH, EVAL_CONFIG), "r") as f:
         evaluation_config = json.load(f)["evaluation_config"]
+    evaluation_config["strategy_args"]["seed"] = args.seed
 
     # ---- 运行前摘要 ----
     t_start = time.time()
