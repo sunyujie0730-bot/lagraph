@@ -31,7 +31,7 @@ lambda_vq = 0.1
 vq_score_weight = 0.5
 ```
 
-Current candidate unified setting:
+Adopted unified default setting:
 
 ```text
 vq_cooldown_epochs = 10
@@ -74,7 +74,7 @@ SWaT conclusion:
 
 ## Decision
 
-Use the following unified VQ configuration for the next multi-dataset validation:
+Use the following unified VQ configuration as the default going forward:
 
 ```text
 vq_cooldown_epochs = 10

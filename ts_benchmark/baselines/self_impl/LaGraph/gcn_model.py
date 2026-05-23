@@ -246,7 +246,7 @@ class SparseGCN(nn.Module):
                  use_channel_graph=True, use_temporal_graph=True,
                  use_vq_bypass=True,
                  use_multi_scale_scorer=True,
-                 vq_score_weight=0.5,
+                 vq_score_weight=0.3,
                  **kwargs):
         super(SparseGCN, self).__init__()
 

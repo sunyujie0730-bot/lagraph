@@ -70,8 +70,8 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "use_vq_bypass": True,
     "use_multi_scale_scorer": True,
     "lambda_vq": 0.1,
-    "vq_cooldown_epochs": 15,
-    "vq_score_weight": 0.5,
+    "vq_cooldown_epochs": 10,
+    "vq_score_weight": 0.3,
     # --- RTX 5070 single-GPU training path ---
     "dataloader_num_workers": 0,
     "dataloader_prefetch_factor": 2,
@@ -1056,7 +1056,7 @@ class LaGraph:
             use_temporal_graph=getattr(self.config, "use_temporal_graph", True),
             use_vq_bypass=getattr(self.config, "use_vq_bypass", True),
             use_multi_scale_scorer=getattr(self.config, "use_multi_scale_scorer", True),
-            vq_score_weight=getattr(self.config, "vq_score_weight", 0.5),
+            vq_score_weight=getattr(self.config, "vq_score_weight", 0.3),
         )
         self.model.to(self.device)
 
@@ -1120,7 +1120,7 @@ class LaGraph:
                     p.requires_grad = True
 
         vq_cooldown_epochs = getattr(self.config, 'vq_cooldown_epochs', 10)
-        lambda_vq = getattr(self.config, 'lambda_vq', 0.01)
+        lambda_vq = getattr(self.config, 'lambda_vq', 0.1)
         use_vq_bypass = getattr(self.config, 'use_vq_bypass', True)
 
         for epoch in range(self.config.num_epochs):
@@ -1233,7 +1233,7 @@ class LaGraph:
             channel=self.config.input_c,
             topk=self.config.topk,
             sparse_topk=self.config.sparse_topk,
-            vq_score_weight=getattr(self.config, "vq_score_weight", 0.5),
+            vq_score_weight=getattr(self.config, "vq_score_weight", 0.3),
         )
         self.model.to(self.device)
 
