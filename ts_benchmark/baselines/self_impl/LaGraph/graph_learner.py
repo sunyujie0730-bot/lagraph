@@ -349,7 +349,7 @@ class DynamicTemporalGraph(nn.Module):
     """
 
     def __init__(self, win_size, d_model, dropout=0.1, attn_dim=None,
-                 temporal_topk=None, local_radius=None):
+                 temporal_topk=None, local_radius=None, residual_init=0.1):
         super(DynamicTemporalGraph, self).__init__()
         self.win_size = win_size
         self.d_model = d_model
@@ -368,6 +368,10 @@ class DynamicTemporalGraph(nn.Module):
         self.content_scale = nn.Parameter(torch.tensor(1.0))
         self.pos_scale = nn.Parameter(torch.tensor(0.2))
         self.local_scale = nn.Parameter(torch.tensor(0.5))
+        residual_init = min(max(float(residual_init), 1e-3), 1.0 - 1e-3)
+        self.residual_logit = nn.Parameter(
+            torch.tensor(math.log(residual_init / (1.0 - residual_init)))
+        )
 
         self.proximity_temp_encoder = nn.Sequential(
             nn.AdaptiveAvgPool2d((1, 1)),
@@ -444,6 +448,7 @@ class DynamicTemporalGraph(nn.Module):
         gate = self.fusion_gate(x_t).unsqueeze(-1)
         x_fused = gate * x_dyn + (1.0 - gate) * x_conv
         x_fused = self.norm(x_fused)
-        x_out = x + self.dropout(x_fused)
+        residual_scale = torch.sigmoid(self.residual_logit)
+        x_out = x + residual_scale * self.dropout(x_fused)
 
         return x_out, A_temp

@@ -68,6 +68,10 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "use_channel_graph": True,
     "use_temporal_graph": True,
     "use_dynamic_temporal_graph": False,
+    "dynamic_temporal_residual_init": 0.1,
+    "dynamic_temporal_topk": None,
+    "channel_graph_lr_scale": 0.1,
+    "temporal_graph_lr_scale": 0.1,
     "use_vq_bypass": True,
     "use_multi_scale_scorer": False,
     "lambda_vq": 0.1,
@@ -887,6 +891,10 @@ class LaGraph:
                 "vq_cooldown_epochs": getattr(self.config, "vq_cooldown_epochs", None),
                 "vq_score_weight": getattr(self.config, "vq_score_weight", None),
                 "use_vq_bypass": getattr(self.config, "use_vq_bypass", None),
+                "dynamic_temporal_residual_init": getattr(self.config, "dynamic_temporal_residual_init", None),
+                "dynamic_temporal_topk": getattr(self.config, "dynamic_temporal_topk", None),
+                "channel_graph_lr_scale": getattr(self.config, "channel_graph_lr_scale", None),
+                "temporal_graph_lr_scale": getattr(self.config, "temporal_graph_lr_scale", None),
             },
             "model_info": {
                 "total_params": total_params,
@@ -1056,6 +1064,8 @@ class LaGraph:
             use_channel_graph=getattr(self.config, "use_channel_graph", True),
             use_temporal_graph=getattr(self.config, "use_temporal_graph", True),
             use_dynamic_temporal_graph=getattr(self.config, "use_dynamic_temporal_graph", False),
+            dynamic_temporal_residual_init=getattr(self.config, "dynamic_temporal_residual_init", 0.1),
+            dynamic_temporal_topk=getattr(self.config, "dynamic_temporal_topk", None),
             use_vq_bypass=getattr(self.config, "use_vq_bypass", True),
             use_multi_scale_scorer=getattr(self.config, "use_multi_scale_scorer", False),
             vq_score_weight=getattr(self.config, "vq_score_weight", 0.3),
@@ -1081,20 +1091,39 @@ class LaGraph:
             patience=self.config.patience, verbose=True, relative_delta=0.001,
         )
 
-        graph_params = []
+        channel_graph_params = []
+        temporal_graph_params = []
         other_params = []
         for name, param in self.model.named_parameters():
-            if 'channel_graph' in name or 'temporal_graph' in name:
-                graph_params.append(param)
+            if 'channel_graph' in name:
+                channel_graph_params.append(param)
+            elif 'temporal_graph' in name:
+                temporal_graph_params.append(param)
             else:
                 other_params.append(param)
 
         weight_decay_v10 = getattr(self.config, 'weight_decay', 1e-4)
+        channel_lr_scale = getattr(self.config, 'channel_graph_lr_scale', 0.1)
+        temporal_lr_scale = getattr(self.config, 'temporal_graph_lr_scale', 0.1)
 
-        self.optimizer = optim.Adam([
+        param_groups = [
             {'params': other_params, 'lr': self.config.lr, 'param_names': ['other']},
-            {'params': graph_params, 'lr': self.config.lr * 0.1, 'param_names': ['channel_graph', 'temporal_graph']},
-        ], lr=self.config.lr, weight_decay=weight_decay_v10)
+        ]
+        if channel_graph_params:
+            param_groups.append({
+                'params': channel_graph_params,
+                'lr': self.config.lr * channel_lr_scale,
+                'param_names': ['channel_graph'],
+            })
+        if temporal_graph_params:
+            param_groups.append({
+                'params': temporal_graph_params,
+                'lr': self.config.lr * temporal_lr_scale,
+                'param_names': ['temporal_graph'],
+            })
+        self.optimizer = optim.Adam(
+            param_groups, lr=self.config.lr, weight_decay=weight_decay_v10,
+        )
 
         warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
             self.optimizer, start_factor=0.01, end_factor=1.0,
@@ -1238,6 +1267,8 @@ class LaGraph:
             use_channel_graph=getattr(self.config, "use_channel_graph", True),
             use_temporal_graph=getattr(self.config, "use_temporal_graph", True),
             use_dynamic_temporal_graph=getattr(self.config, "use_dynamic_temporal_graph", False),
+            dynamic_temporal_residual_init=getattr(self.config, "dynamic_temporal_residual_init", 0.1),
+            dynamic_temporal_topk=getattr(self.config, "dynamic_temporal_topk", None),
             use_vq_bypass=getattr(self.config, "use_vq_bypass", True),
             use_multi_scale_scorer=getattr(self.config, "use_multi_scale_scorer", False),
             vq_score_weight=getattr(self.config, "vq_score_weight", 0.3),
@@ -1259,18 +1290,34 @@ class LaGraph:
             patience=self.config.patience, verbose=True, relative_delta=0.001,
         )
 
-        graph_params = []
+        channel_graph_params = []
+        temporal_graph_params = []
         other_params = []
         for name, param in self.model.named_parameters():
-            if 'channel_graph' in name or 'temporal_graph' in name:
-                graph_params.append(param)
+            if 'channel_graph' in name:
+                channel_graph_params.append(param)
+            elif 'temporal_graph' in name:
+                temporal_graph_params.append(param)
             else:
                 other_params.append(param)
 
-        self.optimizer = optim.Adam([
-            {'params': other_params, 'lr': self.config.lr},
-            {'params': graph_params, 'lr': self.config.lr * 0.1},
-        ], lr=self.config.lr, weight_decay=1e-4)
+        channel_lr_scale = getattr(self.config, 'channel_graph_lr_scale', 0.1)
+        temporal_lr_scale = getattr(self.config, 'temporal_graph_lr_scale', 0.1)
+        param_groups = [{'params': other_params, 'lr': self.config.lr}]
+        if channel_graph_params:
+            param_groups.append({
+                'params': channel_graph_params,
+                'lr': self.config.lr * channel_lr_scale,
+            })
+        if temporal_graph_params:
+            param_groups.append({
+                'params': temporal_graph_params,
+                'lr': self.config.lr * temporal_lr_scale,
+            })
+
+        self.optimizer = optim.Adam(
+            param_groups, lr=self.config.lr, weight_decay=1e-4,
+        )
 
         warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
             self.optimizer, start_factor=0.01, end_factor=1.0,
@@ -1379,6 +1426,10 @@ class LaGraph:
                 "use_channel_graph": getattr(self.config, "use_channel_graph", None),
                 "use_temporal_graph": getattr(self.config, "use_temporal_graph", None),
                 "use_dynamic_temporal_graph": getattr(self.config, "use_dynamic_temporal_graph", None),
+                "dynamic_temporal_residual_init": getattr(self.config, "dynamic_temporal_residual_init", None),
+                "dynamic_temporal_topk": getattr(self.config, "dynamic_temporal_topk", None),
+                "channel_graph_lr_scale": getattr(self.config, "channel_graph_lr_scale", None),
+                "temporal_graph_lr_scale": getattr(self.config, "temporal_graph_lr_scale", None),
                 "use_vq_bypass": getattr(self.config, "use_vq_bypass", None),
                 "use_multi_scale_scorer": getattr(self.config, "use_multi_scale_scorer", None),
                 # ★ P0-1: lambda_causal_l1 → lambda_locality_l1

@@ -245,6 +245,8 @@ class SparseGCN(nn.Module):
                  d_ff=256, topk=5, sparse_topk=None,
                  use_channel_graph=True, use_temporal_graph=True,
                  use_dynamic_temporal_graph=False,
+                 dynamic_temporal_residual_init=0.1,
+                 dynamic_temporal_topk=None,
                  use_vq_bypass=True,
                  use_multi_scale_scorer=True,
                  vq_score_weight=0.3,
@@ -258,6 +260,8 @@ class SparseGCN(nn.Module):
         self.use_channel_graph = use_channel_graph
         self.use_temporal_graph = use_temporal_graph
         self.use_dynamic_temporal_graph = use_dynamic_temporal_graph
+        self.dynamic_temporal_residual_init = dynamic_temporal_residual_init
+        self.dynamic_temporal_topk = dynamic_temporal_topk
         self.use_vq_bypass = use_vq_bypass
         self.use_multi_scale_scorer = use_multi_scale_scorer
 
@@ -268,8 +272,20 @@ class SparseGCN(nn.Module):
         )
 
         # === 简化时序图 ===
-        temporal_graph_cls = DynamicTemporalGraph if use_dynamic_temporal_graph else SimplifiedTemporalGraph
-        self.temporal_graph = temporal_graph_cls(win_size=win_size, d_model=enc_in, dropout=dropout)
+        if use_dynamic_temporal_graph:
+            self.temporal_graph = DynamicTemporalGraph(
+                win_size=win_size,
+                d_model=enc_in,
+                dropout=dropout,
+                temporal_topk=dynamic_temporal_topk,
+                residual_init=dynamic_temporal_residual_init,
+            )
+        else:
+            self.temporal_graph = SimplifiedTemporalGraph(
+                win_size=win_size,
+                d_model=enc_in,
+                dropout=dropout,
+            )
 
         # === EncoderStack（精简版）===
         self.encoder = EncoderStack(
