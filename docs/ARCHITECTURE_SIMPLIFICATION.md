@@ -72,33 +72,62 @@ Do not present dataset-specific VQ settings as the main method. If a dataset
 benefits from a different VQ score weight, report it only in parameter
 sensitivity analysis.
 
+## Three-Seed Stability Check
+
+After promoting direct reconstruction scoring to the main `full` profile, a
+three-seed check was run on MSL and SWaT with 15 epochs and the unified VQ
+defaults. Reported values are the best values over the standard anomaly-ratio
+grid for each metric.
+
+| Dataset | Metric | Seed values | Mean | Std | Best ratio |
+| --- | --- | ---: | ---: | ---: | ---: |
+| MSL | raw F1 | 0.1109 / 0.1095 / 0.1029 | 0.1078 | 0.0043 | 15% |
+| MSL | adjusted F1 | 0.8576 / 0.8529 / 0.8579 | 0.8561 | 0.0028 | 1% |
+| MSL | affiliation F1 | 0.7006 / 0.6933 / 0.7001 | 0.6980 | 0.0041 | 2% |
+| SWaT | raw F1 | 0.3169 / 0.3162 / 0.3082 | 0.3138 | 0.0048 | 5% |
+| SWaT | adjusted F1 | 0.9361 / 0.9261 / 0.9266 | 0.9296 | 0.0056 | 2% |
+| SWaT | affiliation F1 | 0.8458 / 0.8474 / 0.8391 | 0.8441 | 0.0044 | 5% |
+
+Conclusion: the final compact `full` profile is stable across seeds. The main
+remaining risk is not seed variance; it is whether the raw point-wise F1 is
+competitive enough against baselines. The paper should emphasize event-adjusted
+and affiliation metrics, while still reporting raw F1 transparently.
+
 ## Commands
 
 Main unified configuration, using defaults:
 
 ```powershell
-python ts_benchmark/run_single.py --epochs 15 --arch-profile full --save-dir label/LaGraph_main_15ep
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile full --save-dir label/LaGraph_main_15ep
 ```
 
 Equivalent explicit command:
 
 ```powershell
-python ts_benchmark/run_single.py --epochs 15 --arch-profile full --vq-cooldown-epochs 10 --lambda-vq 0.1 --vq-score-weight 0.3 --save-dir label/LaGraph_main_15ep
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile full --vq-cooldown-epochs 10 --lambda-vq 0.1 --vq-score-weight 0.3 --save-dir label/LaGraph_main_15ep
+```
+
+Three-seed final configuration:
+
+```powershell
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets MSL.csv swat.csv --arch-profile full --seed 2021 --save-dir label/LaGraph_main_15ep
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets MSL.csv swat.csv --arch-profile full --seed 2022 --save-dir label/LaGraph_main_15ep_seed2022
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets MSL.csv swat.csv --arch-profile full --seed 2023 --save-dir label/LaGraph_main_15ep_seed2023
 ```
 
 Key ablations:
 
 ```powershell
-python ts_benchmark/run_single.py --epochs 15 --arch-profile with-scorer --save-dir label/LaGraph_ablation_with_scorer
-python ts_benchmark/run_single.py --epochs 15 --arch-profile no-vq --save-dir label/LaGraph_ablation_no_vq
-python ts_benchmark/run_single.py --epochs 15 --arch-profile reconstruction --save-dir label/LaGraph_ablation_reconstruction
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile with-scorer --save-dir label/LaGraph_ablation_with_scorer
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile no-vq --save-dir label/LaGraph_ablation_no_vq
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile reconstruction --save-dir label/LaGraph_ablation_reconstruction
 ```
 
 Single-dataset sanity checks:
 
 ```powershell
-python ts_benchmark/run_single.py --epochs 15 --datasets MSL.csv --arch-profile full --save-dir label/LaGraph_msl_15ep
-python ts_benchmark/run_single.py --epochs 15 --datasets swat.csv --arch-profile full --save-dir label/LaGraph_swat_15ep
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets MSL.csv --arch-profile full --save-dir label/LaGraph_msl_15ep
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets swat.csv --arch-profile full --save-dir label/LaGraph_swat_15ep
 ```
 
 ## Reporting Guidance
@@ -110,7 +139,7 @@ For a CCF-A style paper, report:
 - reconstruction-only lower bound;
 - parameter sensitivity for `vq_score_weight` and `vq_cooldown_epochs`;
 - training time and parameter count;
-- multiple seeds for the final configuration once the main setting is stable.
+- multiple seeds for the final configuration.
 
 The central claim should be that LaGraph benefits from graph-structured temporal
 representation and VQ-regularized representation learning, not from stacking many
