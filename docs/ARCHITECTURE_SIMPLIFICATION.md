@@ -41,6 +41,7 @@ should not be treated as valid modules or ablations.
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | `full` | on | on | on | removed | off | Main compact architecture |
 | `dynamic-temporal` | on | dynamic | on | removed | off | Candidate architecture with content-adaptive temporal graph |
+| `dynamic-temporal-gated` | on | dynamic + residual gate | on | removed | off | Current main candidate for dual-graph narrative |
 | `with-scorer` | on | on | on | removed | on | Old multi-scale/VQ scoring path for ablation |
 | `no-boundary` | on | on | on | removed | on | Compatibility alias for older commands |
 | `no-vq` | on | on | off | removed | on | VQ ablation |
@@ -65,12 +66,14 @@ results are recorded in `docs/VQ_TUNING_LOG.md`.
 
 ## Experimental Recommendation
 
-Use `full` as the main method in future experiments.
+Use `full` as the stable baseline in future experiments.
 
-Use `dynamic-temporal` as the next candidate profile if the paper keeps a
+Use `dynamic-temporal-gated` as the current main candidate if the paper keeps a
 dual-graph narrative. It replaces the fixed-position temporal graph with a
-content-adaptive temporal adjacency. Use `with-scorer` to report the old
-multi-scale/VQ scoring path as an ablation,
+content-adaptive temporal adjacency, adds a learnable residual gate to avoid
+overwriting the stronger channel graph signal, and trains the dynamic temporal
+graph at the base learning rate. Use `dynamic-temporal` only as the ungated
+candidate ablation. Use `with-scorer` to report the old multi-scale/VQ scoring path as an ablation,
 because the scorer was not consistently better than direct reconstruction
 scoring. Use `no-vq` as the primary VQ ablation, `channel-only` and
 `temporal-only` to justify the dual-graph design, and `reconstruction` as the
@@ -124,6 +127,34 @@ a stronger compact candidate when raw F1 and affiliation F1 are prioritized.
 Before promoting `channel-only`, it needs the same multi-seed stability check as
 `full`.
 
+## Dynamic Temporal Graph Check
+
+A seed-2021 dynamic temporal graph check was run on MSL and SWaT after the
+single-graph result showed that the original temporal graph did not justify a
+strong dual-graph claim.
+
+| Profile | Dataset | Raw F1 | Adjusted F1 | Affiliation F1 | Note |
+| --- | --- | ---: | ---: | ---: | --- |
+| `full` | MSL | 0.1109 | 0.8576 | 0.7006 | Fixed-position temporal graph |
+| `dynamic-temporal` | MSL | 0.1117 | 0.8574 | 0.6983 | Ungated dynamic temporal graph |
+| `dynamic-temporal-gated` | MSL | 0.1221 | 0.8584 | 0.7014 | Best MSL balance in this check |
+| `channel-only` | MSL | 0.1162 | 0.8584 | 0.6936 | Strong raw F1, weaker affiliation |
+| `full` | SWaT | 0.3169 | 0.9361 | 0.8458 | Fixed-position temporal graph |
+| `dynamic-temporal` | SWaT | 0.3259 | 0.9267 | 0.8492 | Improves raw/affiliation, lower adjusted |
+| `dynamic-temporal-gated` | SWaT | 0.3386 | 0.9211 | 0.8554 | Better than `full` on raw/affiliation |
+| `channel-only` | SWaT | 0.3510 | 0.9216 | 0.8594 | Still strongest on raw/affiliation |
+
+Interpretation: the ungated dynamic temporal graph is not enough. The gated
+variant is the first dual-graph candidate that improves `full` on MSL raw F1,
+MSL affiliation F1, SWaT raw F1, and SWaT affiliation F1 in the same seed.
+However, SWaT adjusted F1 drops relative to `full`, and `channel-only` remains
+stronger on SWaT raw/affiliation. The defensible paper claim is therefore not
+"both graphs improve every metric"; it is that a channel graph provides the main
+cross-variable structure, while a gated dynamic temporal graph provides adaptive
+temporal refinement that improves point-wise and affiliation quality without
+destroying MSL adjusted performance. Before promotion to the final main method,
+`dynamic-temporal-gated` needs the same multi-seed check as `full`.
+
 ## Commands
 
 Main unified configuration, using defaults:
@@ -151,6 +182,7 @@ Key ablations:
 ```powershell
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile with-scorer --save-dir label/LaGraph_ablation_with_scorer
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile dynamic-temporal --save-dir label/LaGraph_candidate_dynamic_temporal
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile dynamic-temporal-gated --save-dir label/LaGraph_candidate_dynamic_temporal_gated
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile no-vq --save-dir label/LaGraph_ablation_no_vq
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile channel-only --save-dir label/LaGraph_ablation_channel_only
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile temporal-only --save-dir label/LaGraph_ablation_temporal_only
@@ -162,6 +194,8 @@ Single-dataset sanity checks:
 ```powershell
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets MSL.csv --arch-profile full --save-dir label/LaGraph_msl_15ep
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets swat.csv --arch-profile full --save-dir label/LaGraph_swat_15ep
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets MSL.csv --arch-profile dynamic-temporal-gated --seed 2021 --save-dir label/LaGraph_candidate_dynamic_temporal_gated_msl
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets swat.csv --arch-profile dynamic-temporal-gated --seed 2021 --num-workers 0 --prefetch-factor 2 --save-dir label/LaGraph_candidate_dynamic_temporal_gated_swat
 ```
 
 ## Reporting Guidance
@@ -171,6 +205,7 @@ For a CCF-A style paper, report:
 - main results with one unified hyperparameter setting;
 - VQ ablation and multi-scale scorer ablation;
 - channel-only and temporal-only graph ablations;
+- gated dynamic temporal graph ablation;
 - reconstruction-only lower bound;
 - parameter sensitivity for `vq_score_weight` and `vq_cooldown_epochs`;
 - training time and parameter count;
