@@ -11,7 +11,7 @@ After removing `BoundaryDetector`, the current final LaGraph path keeps:
 - temporal graph
 - dual-path VQ bottleneck
 - dynamic scale selection
-- multi-scale anomaly scorer
+- direct reconstruction anomaly scoring
 
 The goal of this tuning round was to find a unified VQ configuration that improves point-wise and event-level behavior without using dataset-specific hyperparameters.
 
@@ -74,7 +74,9 @@ SWaT conclusion:
 
 ## Decision
 
-Use the following unified VQ configuration as the default going forward:
+Use the following unified VQ configuration as the default going forward. VQ is
+kept as a representation-learning constraint, while the old multi-scale/VQ
+scoring path is kept only as `with-scorer` ablation.
 
 ```text
 vq_cooldown_epochs = 10
@@ -103,5 +105,5 @@ If the unified setting performs poorly on the broader benchmark, revisit this lo
 Run all default included datasets, excluding SMD by the existing script default:
 
 ```powershell
-D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark\run_single.py --epochs 15 --arch-profile full --vq-cooldown-epochs 10 --lambda-vq 0.1 --vq-score-weight 0.3 --save-dir label/LaGraph_unified_vq
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark\run_single.py --epochs 15 --arch-profile full --vq-cooldown-epochs 10 --lambda-vq 0.1 --vq-score-weight 0.3 --save-dir label/LaGraph_main_15ep
 ```

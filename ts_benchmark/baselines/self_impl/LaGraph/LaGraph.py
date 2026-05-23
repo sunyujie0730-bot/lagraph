@@ -68,7 +68,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "use_channel_graph": True,
     "use_temporal_graph": True,
     "use_vq_bypass": True,
-    "use_multi_scale_scorer": True,
+    "use_multi_scale_scorer": False,
     "lambda_vq": 0.1,
     "vq_cooldown_epochs": 10,
     "vq_score_weight": 0.3,
@@ -1055,7 +1055,7 @@ class LaGraph:
             use_channel_graph=getattr(self.config, "use_channel_graph", True),
             use_temporal_graph=getattr(self.config, "use_temporal_graph", True),
             use_vq_bypass=getattr(self.config, "use_vq_bypass", True),
-            use_multi_scale_scorer=getattr(self.config, "use_multi_scale_scorer", True),
+            use_multi_scale_scorer=getattr(self.config, "use_multi_scale_scorer", False),
             vq_score_weight=getattr(self.config, "vq_score_weight", 0.3),
         )
         self.model.to(self.device)
