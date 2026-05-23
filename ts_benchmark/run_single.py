@@ -100,8 +100,8 @@ def main():
     parser.add_argument(
         "--num-workers",
         type=int,
-        default=0,
-        help="DataLoader worker 数量 (default: 0，Windows 稳定优先; 可尝试 2 提速)",
+        default=2,
+        help="DataLoader worker count (default: 2; use 0 if Windows shared-memory errors occur)",
     )
     parser.add_argument(
         "--prefetch-factor",

@@ -73,7 +73,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "vq_cooldown_epochs": 10,
     "vq_score_weight": 0.3,
     # --- RTX 5070 single-GPU training path ---
-    "dataloader_num_workers": 0,
+    "dataloader_num_workers": 2,
     "dataloader_prefetch_factor": 2,
     # --- v11.4 P0-2: POT 阈值参数 ---
     "pot_risk": 1e-4,            # POT EVT 风险水平
