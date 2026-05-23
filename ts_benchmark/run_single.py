@@ -111,9 +111,9 @@ def main():
     )
     parser.add_argument(
         "--arch-profile",
-        choices=["full", "core", "no-vq", "no-boundary", "reconstruction"],
+        choices=["full", "core", "no-vq", "graph-only", "no-scorer", "no-boundary", "reconstruction"],
         default="full",
-        help="架构配置: full=最终精简架构(已移除 Boundary); no-boundary 为兼容别名; no-vq/core 关闭 VQ; reconstruction 仅保留重建主干",
+        help="架构配置: full=最终精简架构; graph-only=双图+重建分数; no-scorer=双图+VQ训练但不用多尺度/VQ分数; no-vq/core 关闭 VQ; reconstruction 仅保留重建主干",
     )
     parser.add_argument(
         "--pred-head",
@@ -281,6 +281,18 @@ def main():
             "use_temporal_graph": True,
             "use_vq_bypass": False,
             "use_multi_scale_scorer": True,
+        },
+        "graph-only": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": False,
+            "use_multi_scale_scorer": False,
+        },
+        "no-scorer": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
         },
         "no-boundary": {
             "use_channel_graph": True,
