@@ -98,6 +98,28 @@ remaining risk is not seed variance; it is whether the raw point-wise F1 is
 competitive enough against baselines. The paper should emphasize event-adjusted
 and affiliation metrics, while still reporting raw F1 transparently.
 
+## Single-Graph Ablation Check
+
+A seed-2021 single-graph ablation was run on MSL and SWaT to test whether the
+dual-graph design is necessary. Reported values are the best values over the
+standard anomaly-ratio grid for each metric.
+
+| Profile | Dataset | Raw F1 | Adjusted F1 | Affiliation F1 | Note |
+| --- | --- | ---: | ---: | ---: | --- |
+| `full` | MSL | 0.1109 | 0.8576 | 0.7006 | Dual graph + VQ |
+| `channel-only` | MSL | 0.1162 | 0.8584 | 0.6936 | Better raw/adjusted, lower affiliation |
+| `temporal-only` | MSL | 0.1106 | 0.8580 | 0.6996 | Nearly identical to `full` |
+| `full` | SWaT | 0.3169 | 0.9361 | 0.8458 | Dual graph + VQ |
+| `channel-only` | SWaT | 0.3510 | 0.9216 | 0.8594 | Better raw/affiliation, lower adjusted |
+| `temporal-only` | SWaT | 0.3144 | 0.9360 | 0.8439 | Nearly identical to `full` |
+
+Interpretation: the current evidence does not justify a strong claim that the
+dual-graph combination is consistently superior. The temporal graph appears to
+recover almost all of the `full` behavior, while the channel-only profile may be
+a stronger compact candidate when raw F1 and affiliation F1 are prioritized.
+Before promoting `channel-only`, it needs the same multi-seed stability check as
+`full`.
+
 ## Commands
 
 Main unified configuration, using defaults:
