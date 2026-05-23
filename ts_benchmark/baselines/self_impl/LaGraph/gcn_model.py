@@ -31,7 +31,7 @@ import torch.nn.functional as F
 
 from .decomp import MoEDecomposition
 from .graph_learner import (
-    ChannelAdaptiveGraph, SimplifiedTemporalGraph
+    ChannelAdaptiveGraph, DynamicTemporalGraph, SimplifiedTemporalGraph
 )
 from .temporal_encoder import EncoderStack
 from .vq_bottleneck import VQBottleneck
@@ -244,6 +244,7 @@ class SparseGCN(nn.Module):
                  d_model=128, e_layers=2, patch_size=16, channel=55,
                  d_ff=256, topk=5, sparse_topk=None,
                  use_channel_graph=True, use_temporal_graph=True,
+                 use_dynamic_temporal_graph=False,
                  use_vq_bypass=True,
                  use_multi_scale_scorer=True,
                  vq_score_weight=0.3,
@@ -256,6 +257,7 @@ class SparseGCN(nn.Module):
         self.topk = topk
         self.use_channel_graph = use_channel_graph
         self.use_temporal_graph = use_temporal_graph
+        self.use_dynamic_temporal_graph = use_dynamic_temporal_graph
         self.use_vq_bypass = use_vq_bypass
         self.use_multi_scale_scorer = use_multi_scale_scorer
 
@@ -266,9 +268,8 @@ class SparseGCN(nn.Module):
         )
 
         # === 简化时序图 ===
-        self.temporal_graph = SimplifiedTemporalGraph(
-            win_size=win_size, d_model=enc_in, dropout=dropout,
-        )
+        temporal_graph_cls = DynamicTemporalGraph if use_dynamic_temporal_graph else SimplifiedTemporalGraph
+        self.temporal_graph = temporal_graph_cls(win_size=win_size, d_model=enc_in, dropout=dropout)
 
         # === EncoderStack（精简版）===
         self.encoder = EncoderStack(

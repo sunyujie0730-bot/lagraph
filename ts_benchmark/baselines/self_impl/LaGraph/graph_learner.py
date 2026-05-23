@@ -336,3 +336,114 @@ class SimplifiedTemporalGraph(nn.Module):
         x_out = x + self.dropout(x_fused)  # 残差
 
         return x_out, A_temp
+
+
+class DynamicTemporalGraph(nn.Module):
+    """
+    Content-adaptive temporal graph.
+
+    Unlike SimplifiedTemporalGraph, the temporal adjacency is generated from the
+    current window by QK attention, then sparsified by row-wise top-k. A small
+    positional prior and local-distance bias keep the graph stable early in
+    training, while the content term carries the dynamic event-specific signal.
+    """
+
+    def __init__(self, win_size, d_model, dropout=0.1, attn_dim=None,
+                 temporal_topk=None, local_radius=None):
+        super(DynamicTemporalGraph, self).__init__()
+        self.win_size = win_size
+        self.d_model = d_model
+        self.attn_dim = attn_dim or min(64, max(16, d_model))
+        self.temporal_topk = temporal_topk or max(8, win_size // 4)
+        self.local_radius = float(local_radius or max(4, win_size // 10))
+
+        self.q_proj = nn.Linear(d_model, self.attn_dim, bias=False)
+        self.k_proj = nn.Linear(d_model, self.attn_dim, bias=False)
+        self.v_proj = nn.Linear(d_model, d_model, bias=True)
+        self.out_proj = nn.Linear(d_model, d_model, bias=True)
+
+        self.pos_embed = nn.Parameter(
+            torch.randn(win_size, max(16, win_size // 4)) * 0.02
+        )
+        self.content_scale = nn.Parameter(torch.tensor(1.0))
+        self.pos_scale = nn.Parameter(torch.tensor(0.2))
+        self.local_scale = nn.Parameter(torch.tensor(0.5))
+
+        self.proximity_temp_encoder = nn.Sequential(
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(),
+            nn.Linear(1, 8),
+            nn.ReLU(),
+            nn.Linear(8, 1),
+            nn.Sigmoid(),
+        )
+
+        self.convs = nn.ModuleList([
+            nn.Conv1d(d_model, d_model, kernel_size=k, padding=k // 2, groups=d_model)
+            for k in [3, 5, 7]
+        ])
+        self.conv_fusion = nn.Sequential(
+            nn.Linear(d_model * 3, d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+        )
+
+        self.fusion_gate = nn.Sequential(
+            nn.AdaptiveAvgPool1d(1),
+            nn.Flatten(),
+            nn.Linear(d_model, 1),
+            nn.Sigmoid(),
+        )
+        self.norm = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+
+        idx = torch.arange(win_size)
+        dist = (idx[:, None] - idx[None, :]).abs().float()
+        self.register_buffer("time_distance", dist, persistent=False)
+
+    def forward(self, x, A_proximity=None):
+        B, L, C = x.shape
+
+        q = self.q_proj(x)
+        k = self.k_proj(x)
+        v = self.v_proj(x)
+        content_logits = torch.bmm(q, k.transpose(1, 2)) / math.sqrt(self.attn_dim)
+
+        pos = self.pos_embed[:L]
+        pos_logits = pos @ pos.T
+        local_bias = -self.time_distance[:L, :L].to(x.device) / self.local_radius
+
+        logits = (
+            self.content_scale.clamp(min=0.1, max=5.0) * content_logits
+            + self.pos_scale.clamp(min=0.0, max=2.0) * pos_logits.unsqueeze(0)
+            + self.local_scale.clamp(min=0.0, max=5.0) * local_bias.unsqueeze(0)
+        )
+
+        if A_proximity is not None:
+            proximity_strength = self.proximity_temp_encoder(A_proximity.unsqueeze(1))
+            temp = 0.6 + 1.4 * (1.0 - proximity_strength.squeeze(-1))
+        else:
+            temp = x.new_ones(B)
+        logits = logits / temp.view(B, 1, 1).clamp(min=0.2)
+
+        k_keep = min(self.temporal_topk, L)
+        if k_keep < L:
+            topk_idx = torch.topk(logits, k=k_keep, dim=-1).indices
+            sparse_logits = logits.new_full(logits.shape, -1e4)
+            logits = sparse_logits.scatter(-1, topk_idx, logits.gather(-1, topk_idx))
+
+        A_temp = F.softmax(logits, dim=-1)
+        A_temp = torch.nan_to_num(A_temp, nan=0.0, posinf=0.0, neginf=0.0)
+        x_dyn = self.out_proj(torch.bmm(A_temp, v))
+
+        x_t = x.transpose(1, 2)
+        conv_feats = [conv(x_t) for conv in self.convs]
+        conv_feat = torch.cat([feat.transpose(1, 2) for feat in conv_feats], dim=-1)
+        x_conv = self.conv_fusion(conv_feat)
+
+        gate = self.fusion_gate(x_t).unsqueeze(-1)
+        x_fused = gate * x_dyn + (1.0 - gate) * x_conv
+        x_fused = self.norm(x_fused)
+        x_out = x + self.dropout(x_fused)
+
+        return x_out, A_temp

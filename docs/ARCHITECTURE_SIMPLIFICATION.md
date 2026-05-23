@@ -40,6 +40,7 @@ should not be treated as valid modules or ablations.
 | Profile | Channel graph | Temporal graph | VQ bypass | Boundary detector | Multi-scale scorer | Intended use |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | `full` | on | on | on | removed | off | Main compact architecture |
+| `dynamic-temporal` | on | dynamic | on | removed | off | Candidate architecture with content-adaptive temporal graph |
 | `with-scorer` | on | on | on | removed | on | Old multi-scale/VQ scoring path for ablation |
 | `no-boundary` | on | on | on | removed | on | Compatibility alias for older commands |
 | `no-vq` | on | on | off | removed | on | VQ ablation |
@@ -66,7 +67,10 @@ results are recorded in `docs/VQ_TUNING_LOG.md`.
 
 Use `full` as the main method in future experiments.
 
-Use `with-scorer` to report the old multi-scale/VQ scoring path as an ablation,
+Use `dynamic-temporal` as the next candidate profile if the paper keeps a
+dual-graph narrative. It replaces the fixed-position temporal graph with a
+content-adaptive temporal adjacency. Use `with-scorer` to report the old
+multi-scale/VQ scoring path as an ablation,
 because the scorer was not consistently better than direct reconstruction
 scoring. Use `no-vq` as the primary VQ ablation, `channel-only` and
 `temporal-only` to justify the dual-graph design, and `reconstruction` as the
@@ -146,6 +150,7 @@ Key ablations:
 
 ```powershell
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile with-scorer --save-dir label/LaGraph_ablation_with_scorer
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile dynamic-temporal --save-dir label/LaGraph_candidate_dynamic_temporal
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile no-vq --save-dir label/LaGraph_ablation_no_vq
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile channel-only --save-dir label/LaGraph_ablation_channel_only
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile temporal-only --save-dir label/LaGraph_ablation_temporal_only
