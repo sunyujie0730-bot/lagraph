@@ -44,6 +44,8 @@ should not be treated as valid modules or ablations.
 | `no-boundary` | on | on | on | removed | on | Compatibility alias for older commands |
 | `no-vq` | on | on | off | removed | on | VQ ablation |
 | `core` | on | on | off | removed | on | Legacy simplified profile, equivalent to no-vq for current path |
+| `channel-only` | on | off | on | removed | off | Channel graph contribution ablation |
+| `temporal-only` | off | on | on | removed | off | Temporal graph contribution ablation |
 | `reconstruction` | off | off | off | removed | off | Lower-bound reconstruction baseline |
 
 ## Default VQ Setting
@@ -66,7 +68,8 @@ Use `full` as the main method in future experiments.
 
 Use `with-scorer` to report the old multi-scale/VQ scoring path as an ablation,
 because the scorer was not consistently better than direct reconstruction
-scoring. Use `no-vq` as the primary VQ ablation and `reconstruction` as the
+scoring. Use `no-vq` as the primary VQ ablation, `channel-only` and
+`temporal-only` to justify the dual-graph design, and `reconstruction` as the
 lower-bound baseline. Keep `core` only for backward compatibility with earlier
 commands.
 
@@ -122,6 +125,8 @@ Key ablations:
 ```powershell
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile with-scorer --save-dir label/LaGraph_ablation_with_scorer
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile no-vq --save-dir label/LaGraph_ablation_no_vq
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile channel-only --save-dir label/LaGraph_ablation_channel_only
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile temporal-only --save-dir label/LaGraph_ablation_temporal_only
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile reconstruction --save-dir label/LaGraph_ablation_reconstruction
 ```
 
@@ -138,6 +143,7 @@ For a CCF-A style paper, report:
 
 - main results with one unified hyperparameter setting;
 - VQ ablation and multi-scale scorer ablation;
+- channel-only and temporal-only graph ablations;
 - reconstruction-only lower bound;
 - parameter sensitivity for `vq_score_weight` and `vq_cooldown_epochs`;
 - training time and parameter count;

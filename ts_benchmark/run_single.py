@@ -117,9 +117,20 @@ def main():
     )
     parser.add_argument(
         "--arch-profile",
-        choices=["full", "with-scorer", "core", "no-vq", "graph-only", "no-scorer", "no-boundary", "reconstruction"],
+        choices=[
+            "full",
+            "with-scorer",
+            "core",
+            "no-vq",
+            "graph-only",
+            "channel-only",
+            "temporal-only",
+            "no-scorer",
+            "no-boundary",
+            "reconstruction",
+        ],
         default="full",
-        help="架构配置: full=双图+VQ训练+重建分数; with-scorer=旧多尺度/VQ分数路径; graph-only=双图+重建分数; no-vq/core 关闭 VQ; reconstruction 仅保留重建主干",
+        help="架构配置: full=双图+VQ训练+重建分数; channel-only/temporal-only=单图消融; with-scorer=旧多尺度/VQ分数路径; graph-only=双图+重建分数; no-vq/core 关闭 VQ; reconstruction 仅保留重建主干",
     )
     parser.add_argument(
         "--vq-cooldown-epochs",
@@ -268,6 +279,18 @@ def main():
             "use_channel_graph": True,
             "use_temporal_graph": True,
             "use_vq_bypass": False,
+            "use_multi_scale_scorer": False,
+        },
+        "channel-only": {
+            "use_channel_graph": True,
+            "use_temporal_graph": False,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+        },
+        "temporal-only": {
+            "use_channel_graph": False,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
             "use_multi_scale_scorer": False,
         },
         "no-scorer": {
