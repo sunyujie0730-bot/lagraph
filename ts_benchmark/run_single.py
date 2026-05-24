@@ -136,6 +136,8 @@ def main():
             "causal-lag",
             "causal-lag-score",
             "causal-lag-score-strong",
+            "causal-cf-gain",
+            "causal-cf-hurt",
             "dynamic-temporal",
             "dynamic-temporal-gated",
             "dynamic-temporal-gated-vqscore",
@@ -196,6 +198,24 @@ def main():
         type=float,
         default=None,
         help="Override the temporal graph learning-rate scale",
+    )
+    parser.add_argument(
+        "--causal-score-weight",
+        type=float,
+        default=None,
+        help="Override causal score fusion weight for causal profiles",
+    )
+    parser.add_argument(
+        "--lambda-causal-mechanism",
+        type=float,
+        default=None,
+        help="Override lagged causal mechanism loss weight",
+    )
+    parser.add_argument(
+        "--causal-topk",
+        type=int,
+        default=None,
+        help="Override lagged causal parent top-k",
     )
     args = parser.parse_args()
 
@@ -449,6 +469,36 @@ def main():
             "use_causal_score": True,
             "causal_score_weight": 0.15,
         },
+        "causal-cf-gain": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "use_lagged_causal_graph": True,
+            "causal_lags": [1, 2, 4],
+            "causal_topk": 5,
+            "lambda_causal_mechanism": 0.05,
+            "lambda_causal_sparse": 0.001,
+            "use_causal_score": True,
+            "causal_score_mode": "cf_parent_gain",
+            "causal_score_tail": "lower",
+            "causal_score_weight": 0.05,
+        },
+        "causal-cf-hurt": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "use_lagged_causal_graph": True,
+            "causal_lags": [1, 2, 4],
+            "causal_topk": 5,
+            "lambda_causal_mechanism": 0.05,
+            "lambda_causal_sparse": 0.001,
+            "use_causal_score": True,
+            "causal_score_mode": "cf_parent_hurt",
+            "causal_score_tail": "upper",
+            "causal_score_weight": 0.10,
+        },
         "dynamic-temporal": {
             "use_channel_graph": True,
             "use_temporal_graph": True,
@@ -626,6 +676,17 @@ def main():
         score_hyper_params["dynamic_temporal_topk"] = max(1, args.dynamic_temporal_topk)
     if args.temporal_graph_lr_scale is not None:
         score_hyper_params["temporal_graph_lr_scale"] = max(0.0, args.temporal_graph_lr_scale)
+    if args.causal_score_weight is not None:
+        score_hyper_params["causal_score_weight"] = max(0.0, args.causal_score_weight)
+    if args.lambda_causal_mechanism is not None:
+        score_hyper_params["lambda_causal_mechanism"] = max(0.0, args.lambda_causal_mechanism)
+    if args.causal_topk is not None:
+        score_hyper_params["causal_topk"] = max(1, args.causal_topk)
+    effective_switches = {
+        **arch_switches,
+        **vq_hyper_params,
+        **score_hyper_params,
+    }
 
     model_config = {
         "models": [
@@ -656,7 +717,7 @@ def main():
     print(f"  [v10 配置] d_model={d_model_scale}, e_layers={e_layers_scale}, n_heads={n_heads_scale}, batch_per_gpu={per_gpu_batch}")
     print(f"  [v10 配置] LR={scaled_lr:.1e}, warmup={warmup_epochs} epochs")
     print(f"  [v10 数据] workers={dataloader_num_workers}, prefetch={dataloader_prefetch_factor}")
-    print(f"  [v10 架构] profile={args.arch_profile}, switches={arch_switches}")
+    print(f"  [v10 架构] profile={args.arch_profile}, switches={effective_switches}")
     print()
 
     with open(os.path.join(CONFIG_PATH, EVAL_CONFIG), "r") as f:

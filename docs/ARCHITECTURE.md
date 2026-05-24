@@ -54,9 +54,11 @@ can drop.
 Additional 2026-05-24 architecture candidates were tested but not promoted:
 `parallel-dual`, `parallel-dual-time`, `residual-dual`,
 `residual-dual-time`, `graph-shift`, `graph-shift-lite`, and
-`graph-shift-strong`. A first lag-constrained causal branch was also added as
-`causal-lag`, `causal-lag-score`, and `causal-lag-score-strong`. These remain
-reproducibility profiles rather than main paper architecture.
+`graph-shift-strong`. Lag-constrained causal branches were added as
+`causal-lag`, `causal-lag-score`, `causal-lag-score-strong`,
+`causal-cf-gain`, and `causal-cf-hurt`. These remain reproducibility profiles
+rather than main paper architecture until the gains are confirmed across more
+datasets and seeds.
 
 ## System Flow
 
@@ -295,6 +297,7 @@ MSL seed-2021, 15 epochs, current aligned code path:
 | `graph-shift` | add normal-graph deviation to anomaly score | 0.1097 | 0.8572 | 0.7001 | reject; interpretable but not better |
 | `graph-shift-lite` | lower graph-shift weight | 0.1105 | 0.8576 | 0.6959 | reject |
 | `causal-lag-score` | lagged parent mechanism, detached backbone, score weight 0.05 | 0.1102 | 0.8574 | 0.6983 | reject as main; keep as causal prototype |
+| `causal-cf-hurt` | counterfactual parent-hurt score, weight 0.10, top-k 5 | 0.1109 | 0.7987 | 0.7024 | candidate; small affiliation gain only |
 
 Interpretation: the issue with the dual graph is not just serial ordering. The
 unsupervised reconstruction objective gives no direct supervision for a fusion
@@ -304,7 +307,10 @@ affiliation on MSL. Graph-shift scoring is more interpretable, but the learned
 same-time channel graph is too stable on MSL to add useful anomaly evidence.
 The first lagged causal branch confirms that temporal-precedence constraints are
 implementable, but a simple lagged reconstruction residual is not yet
-discriminative enough to improve affiliation F1.
+discriminative enough to improve affiliation F1. The counterfactual
+parent-hurt score gives the first positive MSL affiliation signal, but the
+margin is small and adjusted F1 drops, so it should be treated as a candidate
+rather than the main reported architecture.
 
 ## Causal Inference Status
 

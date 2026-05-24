@@ -221,7 +221,14 @@ class LaggedCausalMechanism(nn.Module):
     temporal-precedence constraint that can be tested by ablation.
     """
 
-    def __init__(self, channel, lags=(1, 2, 4), topk=5, dropout=0.1):
+    def __init__(
+        self,
+        channel,
+        lags=(1, 2, 4),
+        topk=5,
+        dropout=0.1,
+        score_mode="residual",
+    ):
         super().__init__()
         self.channel = channel
         self.lags = tuple(int(lag) for lag in lags if int(lag) > 0)
@@ -229,6 +236,7 @@ class LaggedCausalMechanism(nn.Module):
             self.lags = (1,)
         self.max_lag = max(self.lags)
         self.topk = min(max(1, int(topk)), channel)
+        self.score_mode = score_mode
 
         self.edge_logits = nn.Parameter(
             torch.randn(len(self.lags), channel, channel) * 0.01,
@@ -259,6 +267,8 @@ class LaggedCausalMechanism(nn.Module):
         current = x[:, self.max_lag:, :]
         lag_weights = F.softmax(self.lag_logits, dim=0)
         pred = current.new_zeros(current.shape)
+        self_pred = current.new_zeros(current.shape)
+        eye = torch.eye(self.channel, device=x.device, dtype=x.dtype)
 
         for lag_idx, lag in enumerate(self.lags):
             start = self.max_lag - lag
@@ -266,10 +276,19 @@ class LaggedCausalMechanism(nn.Module):
             pred = pred + lag_weights[lag_idx] * torch.einsum(
                 "blc,co->blo", past, parent_weights[lag_idx],
             )
+            self_pred = self_pred + lag_weights[lag_idx] * torch.einsum(
+                "blc,co->blo", past, eye,
+            )
         pred = self.dropout(pred)
 
-        err = F.smooth_l1_loss(pred, current, reduction="none")
-        score_valid = err.mean(dim=-1)
+        full_err = F.smooth_l1_loss(pred, current, reduction="none").mean(dim=-1)
+        self_err = F.smooth_l1_loss(self_pred, current, reduction="none").mean(dim=-1)
+        if self.score_mode == "cf_parent_gain":
+            score_valid = self_err - full_err
+        elif self.score_mode == "cf_parent_hurt":
+            score_valid = (full_err - self_err).clamp_min(0.0)
+        else:
+            score_valid = full_err
         score = F.pad(score_valid, (self.max_lag, 0), mode="constant", value=0.0)
 
         pred_full = x.new_zeros(B, L, C)
@@ -336,6 +355,8 @@ class SparseGCN(nn.Module):
                  use_causal_score=False,
                  causal_score_weight=0.1,
                  causal_score_eps=1e-6,
+                 causal_score_mode="residual",
+                 causal_score_tail="upper",
                  use_temporal_graph_regularization=False,
                  use_score_channel_normalization=False,
                  score_channel_norm_mode="robust_z",
@@ -372,6 +393,8 @@ class SparseGCN(nn.Module):
         self.use_causal_score = use_causal_score
         self.causal_score_weight = float(causal_score_weight)
         self.causal_score_eps = float(causal_score_eps)
+        self.causal_score_mode = causal_score_mode
+        self.causal_score_tail = causal_score_tail
         self.use_temporal_graph_regularization = use_temporal_graph_regularization
         self.use_score_channel_normalization = use_score_channel_normalization
         self.score_channel_norm_mode = score_channel_norm_mode
@@ -518,6 +541,7 @@ class SparseGCN(nn.Module):
                 lags=self.causal_lags,
                 topk=self.causal_topk,
                 dropout=dropout,
+                score_mode=self.causal_score_mode,
             )
         else:
             self.lagged_causal_graph = None
@@ -620,6 +644,8 @@ class SparseGCN(nn.Module):
     def _normalize_causal_score(self, causal_score):
         center = self.causal_score_center.to(device=causal_score.device, dtype=causal_score.dtype)
         scale = self.causal_score_scale.to(device=causal_score.device, dtype=causal_score.dtype)
+        if self.causal_score_tail == "lower":
+            return (center - causal_score).clamp_min(0.0) / scale.clamp_min(self.causal_score_eps)
         return (causal_score - center).clamp_min(0.0) / scale.clamp_min(self.causal_score_eps)
 
     def _normalize_score_error(self, err):

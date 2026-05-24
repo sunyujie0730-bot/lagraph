@@ -53,6 +53,8 @@ should not be treated as valid modules or ablations.
 | `causal-lag` | on | on | on | removed | off | Lagged mechanism branch, score disabled |
 | `causal-lag-score` | on | on | on | removed | off | Rejected lagged mechanism score profile |
 | `causal-lag-score-strong` | on | on | on | removed | off | Stronger lagged mechanism score profile |
+| `causal-cf-gain` | on | on | on | removed | off | Counterfactual parent-gain score profile |
+| `causal-cf-hurt` | on | on | on | removed | off | Best current counterfactual causal candidate |
 | `dynamic-temporal-regularized` | on | dynamic + residual gate + temporal graph regularization | on | removed | off | Rejected graph smoothness/locality regularization profile |
 | `dynamic-temporal-robust` | on | dynamic + residual gate | on | removed | off | Rejected 5% trimmed reconstruction loss profile |
 | `dynamic-temporal-robust-lite` | on | dynamic + residual gate | on | removed | off | Rejected 2% trimmed reconstruction loss profile |
@@ -240,6 +242,32 @@ paper direction, but the first mechanism-residual score is not discriminative
 enough to improve affiliation F1. The next causal attempt should use
 counterfactual parent masking or intervention-style edge validation instead of
 simply adding lagged prediction error to the anomaly score.
+
+## Counterfactual Causal Scoring Check
+
+The next causal attempt tested whether lagged parents are useful under an
+intervention-style comparison. `causal-cf-gain` scores a drop in learned parent
+benefit, while `causal-cf-hurt` scores windows where learned parents make the
+lagged mechanism worse than a self-history baseline.
+
+MSL, 15 epochs, seed 2021, best affiliation row:
+
+| Profile | Setting | Raw F1 | Adjusted F1 | Affiliation F1 | Decision |
+| --- | --- | ---: | ---: | ---: | --- |
+| `full` | baseline | 0.1074 | 0.8023 | 0.7006 | main baseline |
+| `causal-cf-gain` | weight 0.05, top-k 5 | 0.1067 | 0.8023 | 0.7008 | too small |
+| `causal-cf-hurt` | weight 0.02, top-k 5 | 0.1076 | 0.8024 | 0.7013 | small gain |
+| `causal-cf-hurt` | weight 0.05, top-k 5 | 0.1098 | 0.7978 | 0.7009 | small gain |
+| `causal-cf-hurt` | weight 0.10, top-k 5 | 0.1109 | 0.7987 | 0.7024 | best candidate |
+| `causal-cf-hurt` | weight 0.20, top-k 5 | 0.1114 | 0.7966 | 0.7014 | over-weighted |
+| `causal-cf-hurt` | weight 0.10, top-k 3 | 0.1105 | 0.7985 | 0.7020 | below top-k 5 |
+| `causal-cf-hurt` | weight 0.10, top-k 10 | 0.1105 | 0.7985 | 0.7018 | noisier parents |
+
+Interpretation: the counterfactual parent-hurt score is the first causal
+variant with a positive affiliation signal, but the improvement is still small
+and adjusted F1 is lower than `full`. It should be kept as a candidate and
+validated on additional datasets before being promoted to the paper's main
+architecture.
 
 ## Affiliation-Oriented Scoring Check
 
