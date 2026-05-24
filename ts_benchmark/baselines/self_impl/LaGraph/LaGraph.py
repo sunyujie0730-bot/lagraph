@@ -79,6 +79,16 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "vq_cooldown_epochs": 10,
     "vq_score_weight": 0.3,
     "score_topk_k": None,
+    "use_temporal_graph_regularization": False,
+    "lambda_temporal_graph_smooth": 0.0,
+    "lambda_temporal_graph_locality": 0.0,
+    "use_robust_reconstruction_loss": False,
+    "robust_loss_trim_ratio": 0.0,
+    "robust_loss_min_weight": 0.2,
+    "robust_loss_warmup_epochs": 10,
+    "use_score_channel_normalization": False,
+    "score_channel_norm_mode": "robust_z",
+    "score_channel_norm_eps": 1e-6,
     # --- RTX 5070 single-GPU training path ---
     "dataloader_num_workers": 2,
     "dataloader_prefetch_factor": 2,
@@ -899,6 +909,16 @@ class LaGraph:
                 "vq_cooldown_epochs": getattr(self.config, "vq_cooldown_epochs", None),
                 "vq_score_weight": getattr(self.config, "vq_score_weight", None),
                 "score_topk_k": getattr(self.config, "score_topk_k", None),
+                "use_temporal_graph_regularization": getattr(self.config, "use_temporal_graph_regularization", None),
+                "lambda_temporal_graph_smooth": getattr(self.config, "lambda_temporal_graph_smooth", None),
+                "lambda_temporal_graph_locality": getattr(self.config, "lambda_temporal_graph_locality", None),
+                "use_robust_reconstruction_loss": getattr(self.config, "use_robust_reconstruction_loss", None),
+                "robust_loss_trim_ratio": getattr(self.config, "robust_loss_trim_ratio", None),
+                "robust_loss_min_weight": getattr(self.config, "robust_loss_min_weight", None),
+                "robust_loss_warmup_epochs": getattr(self.config, "robust_loss_warmup_epochs", None),
+                "use_score_channel_normalization": getattr(self.config, "use_score_channel_normalization", None),
+                "score_channel_norm_mode": getattr(self.config, "score_channel_norm_mode", None),
+                "score_channel_norm_eps": getattr(self.config, "score_channel_norm_eps", None),
                 "use_vq_bypass": getattr(self.config, "use_vq_bypass", None),
                 "dynamic_temporal_residual_init": getattr(self.config, "dynamic_temporal_residual_init", None),
                 "dynamic_temporal_topk": getattr(self.config, "dynamic_temporal_topk", None),
@@ -933,12 +953,99 @@ class LaGraph:
             for input_data, _ in vali_loader:
                 input_data = input_data.float().to(self.device, non_blocking=True)
                 rec, _, _, _, _, aux_losses, _ = self.model(input_data)
-                loss = F.mse_loss(rec, input_data)
+                loss = self._reconstruction_loss(rec, input_data)
                 # ★ P0-1: lambda_causal_l1 → lambda_locality_l1
                 if aux_losses and 'sparse_loss' in aux_losses:
                     loss = loss + self.config.lambda_locality_l1 * aux_losses['sparse_loss']
+                loss = self._add_temporal_graph_regularization(loss, aux_losses)
                 loss_list.append(loss.item())
         return np.average(loss_list) if loss_list else 0.0
+
+
+    def _reconstruction_loss(self, rec, target):
+        elem_loss = F.mse_loss(rec, target, reduction='none')
+        sample_loss = elem_loss.mean(dim=(1, 2))
+        if not getattr(self.config, "use_robust_reconstruction_loss", False):
+            return sample_loss.mean()
+
+        epoch = getattr(self, "_current_train_epoch", 0)
+        warmup = int(getattr(self.config, "robust_loss_warmup_epochs", 0) or 0)
+        trim_ratio = float(getattr(self.config, "robust_loss_trim_ratio", 0.0) or 0.0)
+        if epoch < warmup or trim_ratio <= 0.0 or sample_loss.numel() < 2:
+            return sample_loss.mean()
+
+        trim_ratio = min(max(trim_ratio, 0.0), 0.5)
+        min_weight = float(getattr(self.config, "robust_loss_min_weight", 0.2) or 0.0)
+        min_weight = min(max(min_weight, 0.0), 1.0)
+        with torch.no_grad():
+            cutoff = torch.quantile(sample_loss.detach(), 1.0 - trim_ratio)
+            weights = (sample_loss.detach() <= cutoff).to(sample_loss.dtype)
+            if min_weight > 0:
+                weights = weights.clamp_min(min_weight)
+        return (sample_loss * weights).sum() / weights.sum().clamp_min(1.0)
+
+
+    def _add_temporal_graph_regularization(self, loss, aux_losses):
+        if not aux_losses:
+            return loss
+        lambda_smooth = getattr(self.config, "lambda_temporal_graph_smooth", 0.0)
+        lambda_locality = getattr(self.config, "lambda_temporal_graph_locality", 0.0)
+        if lambda_smooth > 0 and 'temporal_graph_smooth_loss' in aux_losses:
+            loss = loss + lambda_smooth * aux_losses['temporal_graph_smooth_loss']
+        if lambda_locality > 0 and 'temporal_graph_locality_loss' in aux_losses:
+            loss = loss + lambda_locality * aux_losses['temporal_graph_locality_loss']
+        return loss
+
+    @torch.no_grad()
+    def _fit_score_channel_stats(self, train_data: pd.DataFrame):
+        if train_data is None or self.model is None:
+            return
+        raw_model = self._get_raw_model()
+        if not hasattr(raw_model, "set_score_channel_stats"):
+            return
+
+        print("\n  [ScoreNorm] Fitting channel-wise reconstruction error stats...")
+        if self.early_stopping is not None and self.early_stopping.check_point is not None:
+            raw_model.load_state_dict(self.early_stopping.check_point)
+        self.model.to(self.device)
+        self.model.eval()
+
+        scaled_data = pd.DataFrame(
+            self.scaler.transform(train_data.values),
+            columns=train_data.columns, index=train_data.index,
+        )
+        loader = anomaly_detection_data_provider(
+            scaled_data,
+            batch_size=min(self.config.batch_size, 64),
+            win_size=self.config.win_size,
+            step=1,
+            mode="test",
+            num_workers=0,
+        )
+
+        channel_errors = []
+        for input_data, _ in loader:
+            input_data = input_data.float().to(self.device)
+            rec, _, _, _, _, _, _ = self.model(input_data)
+            err = torch.abs(rec - input_data).mean(dim=1)
+            channel_errors.append(err.cpu().numpy())
+
+        if not channel_errors:
+            return
+
+        errors = np.concatenate(channel_errors, axis=0)
+        center = np.median(errors, axis=0)
+        q25 = np.percentile(errors, 25, axis=0)
+        q75 = np.percentile(errors, 75, axis=0)
+        scale = q75 - q25
+        eps = float(getattr(self.config, "score_channel_norm_eps", 1e-6) or 1e-6)
+        fallback = np.maximum(np.abs(center), eps)
+        scale = np.where(scale > eps, scale, fallback)
+        raw_model.set_score_channel_stats(center, scale)
+        print(
+            "  [ScoreNorm] center median="
+            f"{float(np.median(center)):.6f}, scale median={float(np.median(scale)):.6f}"
+        )
 
     # ======================== 训练（单卡）=======================
     def _destroy_model_and_clean_cuda(self):
@@ -1011,6 +1118,9 @@ class LaGraph:
             self._get_raw_model().load_state_dict(self.early_stopping.check_point)
 
         self.trained = True
+
+        if getattr(self.config, "use_score_channel_normalization", False):
+            self._fit_score_channel_stats(self._train_raw)
 
         # ★ v10 fix: 训练集缓存分数
         if self._train_raw is not None:
@@ -1086,6 +1196,10 @@ class LaGraph:
             use_multi_scale_scorer=getattr(self.config, "use_multi_scale_scorer", False),
             vq_score_weight=getattr(self.config, "vq_score_weight", 0.3),
             score_topk_k=getattr(self.config, "score_topk_k", None),
+            use_temporal_graph_regularization=getattr(self.config, "use_temporal_graph_regularization", False),
+            use_score_channel_normalization=getattr(self.config, "use_score_channel_normalization", False),
+            score_channel_norm_mode=getattr(self.config, "score_channel_norm_mode", "robust_z"),
+            score_channel_norm_eps=getattr(self.config, "score_channel_norm_eps", 1e-6),
         )
         self.model.to(self.device)
 
@@ -1174,6 +1288,7 @@ class LaGraph:
         for epoch in range(self.config.num_epochs):
             epoch_start = time.time()
             epoch_losses = []
+            self._current_train_epoch = epoch
 
             warmup_alpha = min(1.0, epoch / max(1, self.config.num_epochs * 0.1))
             self.model.set_warmup_progress(warmup_alpha)
@@ -1192,11 +1307,12 @@ class LaGraph:
                 input_data = input_data.float().to(self.device, non_blocking=True)
                 rec, _, _, _, _, aux_losses, _ = self.model(input_data)
 
-                loss = F.mse_loss(rec, input_data)
+                loss = self._reconstruction_loss(rec, input_data)
 
                 # ★ P0-1: lambda_causal_l1 → lambda_locality_l1
                 if aux_losses and 'sparse_loss' in aux_losses:
                     loss = loss + self.config.lambda_locality_l1 * aux_losses['sparse_loss']
+                loss = self._add_temporal_graph_regularization(loss, aux_losses)
 
                 if use_vq_bypass and aux_losses and 'vq_loss' in aux_losses and epoch < vq_cooldown_epochs:
                     loss = aux_losses['vq_loss']
@@ -1291,6 +1407,10 @@ class LaGraph:
             use_multi_scale_scorer=getattr(self.config, "use_multi_scale_scorer", False),
             vq_score_weight=getattr(self.config, "vq_score_weight", 0.3),
             score_topk_k=getattr(self.config, "score_topk_k", None),
+            use_temporal_graph_regularization=getattr(self.config, "use_temporal_graph_regularization", False),
+            use_score_channel_normalization=getattr(self.config, "use_score_channel_normalization", False),
+            score_channel_norm_mode=getattr(self.config, "score_channel_norm_mode", "robust_z"),
+            score_channel_norm_eps=getattr(self.config, "score_channel_norm_eps", 1e-6),
         )
         self.model.to(self.device)
 
@@ -1362,6 +1482,7 @@ class LaGraph:
         for epoch in range(self.config.num_epochs):
             epoch_start = time.time()
             epoch_losses = []
+            self._current_train_epoch = epoch
 
             self.model.train()
             self.optimizer.zero_grad()
@@ -1372,11 +1493,12 @@ class LaGraph:
 
                 rec, _, _, _, _, aux_losses, _ = self.model(input_data)
 
-                loss = F.mse_loss(rec, input_data)
+                loss = self._reconstruction_loss(rec, input_data)
 
                 # ★ P0-1: lambda_causal_l1 → lambda_locality_l1
                 if aux_losses and 'sparse_loss' in aux_losses:
                     loss = loss + self.config.lambda_locality_l1 * aux_losses['sparse_loss']
+                loss = self._add_temporal_graph_regularization(loss, aux_losses)
 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
@@ -1441,6 +1563,16 @@ class LaGraph:
                 "vq_cooldown_epochs": getattr(self.config, "vq_cooldown_epochs", None),
                 "vq_score_weight": getattr(self.config, "vq_score_weight", None),
                 "score_topk_k": getattr(self.config, "score_topk_k", None),
+                "use_temporal_graph_regularization": getattr(self.config, "use_temporal_graph_regularization", None),
+                "lambda_temporal_graph_smooth": getattr(self.config, "lambda_temporal_graph_smooth", None),
+                "lambda_temporal_graph_locality": getattr(self.config, "lambda_temporal_graph_locality", None),
+                "use_robust_reconstruction_loss": getattr(self.config, "use_robust_reconstruction_loss", None),
+                "robust_loss_trim_ratio": getattr(self.config, "robust_loss_trim_ratio", None),
+                "robust_loss_min_weight": getattr(self.config, "robust_loss_min_weight", None),
+                "robust_loss_warmup_epochs": getattr(self.config, "robust_loss_warmup_epochs", None),
+                "use_score_channel_normalization": getattr(self.config, "use_score_channel_normalization", None),
+                "score_channel_norm_mode": getattr(self.config, "score_channel_norm_mode", None),
+                "score_channel_norm_eps": getattr(self.config, "score_channel_norm_eps", None),
                 "dataloader_num_workers": getattr(self.config, "dataloader_num_workers", None),
                 "dataloader_prefetch_factor": getattr(self.config, "dataloader_prefetch_factor", None),
                 "use_channel_graph": getattr(self.config, "use_channel_graph", None),

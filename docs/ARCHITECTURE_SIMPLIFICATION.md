@@ -1,6 +1,6 @@
 # LaGraph Architecture Simplification Plan
 
-Date: 2026-05-23
+Date: 2026-05-24
 Branch: `codex/5070-env-migration`
 
 ## Goal
@@ -42,6 +42,11 @@ should not be treated as valid modules or ablations.
 | `full` | on | on | on | removed | off | Main compact architecture |
 | `dynamic-temporal` | on | dynamic | on | removed | off | Candidate architecture with content-adaptive temporal graph |
 | `dynamic-temporal-gated` | on | dynamic + residual gate | on | removed | off | Current main candidate for dual-graph narrative |
+| `dynamic-temporal-regularized` | on | dynamic + residual gate + temporal graph regularization | on | removed | off | Rejected graph smoothness/locality regularization profile |
+| `dynamic-temporal-robust` | on | dynamic + residual gate | on | removed | off | Rejected 5% trimmed reconstruction loss profile |
+| `dynamic-temporal-robust-lite` | on | dynamic + residual gate | on | removed | off | Rejected 2% trimmed reconstruction loss profile |
+| `dynamic-temporal-channelnorm` | on | dynamic + residual gate | on | removed | off | Rejected robust channel-normalized scoring profile |
+| `dynamic-temporal-channelnorm-scale` | on | dynamic + residual gate | on | removed | off | Rejected scale-only channel-normalized scoring profile |
 | `dynamic-temporal-aff` | on | dynamic + time/channel gate | on | removed | off | Rejected affiliation-oriented post-processing profile |
 | `dynamic-temporal-aff-lite` | on | dynamic + time/channel gate | on | removed | off | Rejected conservative affiliation post-processing profile |
 | `dynamic-temporal-aff-peak` | on | dynamic + residual gate | on | removed | off | Rejected local max-score expansion profile |
@@ -178,6 +183,32 @@ post-processing and naive score expansion. The current best path remains
 `dynamic-temporal-gated`. Future affiliation improvements should target the
 learned representation or threshold calibration, not generic smoothing,
 dilation, or wider top-k scoring.
+
+## Affiliation Optimization Attempts
+
+After the gated dynamic temporal graph became the best dual-graph candidate,
+additional seed-2021 MSL experiments tested whether affiliation F1 could be
+improved by graph regularization, robust contaminated-training objectives, and
+channel-aware scoring. Reported values are best over the standard anomaly-ratio
+grid.
+
+| Profile / setting | Main change | Raw F1 | Adjusted F1 | Affiliation F1 | Decision |
+| --- | --- | ---: | ---: | ---: | --- |
+| `dynamic-temporal-gated` | Baseline gated dynamic temporal graph | 0.1221 | 0.8584 | 0.7014 | Keep |
+| `dynamic-temporal-regularized` | Temporal graph smoothness + locality loss | 0.1139 | 0.8577 | 0.6940 | Reject |
+| `dynamic-temporal-robust` | 5% trimmed reconstruction loss after VQ warmup | 0.1179 | 0.8530 | 0.6932 | Reject |
+| `dynamic-temporal-robust-lite` | 2% trimmed reconstruction loss after VQ warmup | 0.1163 | 0.8579 | 0.6963 | Reject |
+| `dynamic-temporal-channelnorm` | Robust z-score channel-normalized scoring | 0.1176 | 0.8542 | 0.6996 | Reject |
+| `dynamic-temporal-channelnorm-scale` | Scale-only channel-normalized scoring | 0.1176 | 0.8542 | 0.6996 | Reject |
+| `dynamic-temporal-gated --score-topk-k 3` | Top-3 channel aggregation instead of default top-5 | 0.1156 | 0.8573 | 0.6961 | Reject |
+
+Interpretation: the current shortfall is not solved by adding regularizers or
+score calibration layers. The graph regularizer lowered ranking quality, robust
+training reduced reconstruction loss without improving anomaly separability, and
+channel normalization traded recall for precision. For the paper, do not claim
+these as final modules. Treat them as negative ablations showing that the
+selected `dynamic-temporal-gated` design is not the result of unchecked module
+stacking.
 
 ## Commands
 

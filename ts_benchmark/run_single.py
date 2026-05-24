@@ -127,6 +127,11 @@ def main():
             "temporal-only",
             "dynamic-temporal",
             "dynamic-temporal-gated",
+            "dynamic-temporal-regularized",
+            "dynamic-temporal-robust",
+            "dynamic-temporal-robust-lite",
+            "dynamic-temporal-channelnorm",
+            "dynamic-temporal-channelnorm-scale",
             "dynamic-temporal-aff",
             "dynamic-temporal-aff-lite",
             "dynamic-temporal-aff-peak",
@@ -155,6 +160,12 @@ def main():
         type=float,
         default=None,
         help="VQ anomaly score fusion weight; default uses model config",
+    )
+    parser.add_argument(
+        "--score-topk-k",
+        type=int,
+        default=None,
+        help="Override channel top-k aggregation used by the reconstruction anomaly score",
     )
     args = parser.parse_args()
 
@@ -317,6 +328,66 @@ def main():
             "use_vq_bypass": True,
             "use_multi_scale_scorer": False,
         },
+        "dynamic-temporal-regularized": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_dynamic_temporal_graph": True,
+            "dynamic_temporal_residual_init": 0.1,
+            "temporal_graph_lr_scale": 1.0,
+            "use_temporal_graph_regularization": True,
+            "lambda_temporal_graph_smooth": 0.01,
+            "lambda_temporal_graph_locality": 0.001,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+        },
+        "dynamic-temporal-robust": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_dynamic_temporal_graph": True,
+            "dynamic_temporal_residual_init": 0.1,
+            "temporal_graph_lr_scale": 1.0,
+            "use_robust_reconstruction_loss": True,
+            "robust_loss_trim_ratio": 0.05,
+            "robust_loss_min_weight": 0.2,
+            "robust_loss_warmup_epochs": 10,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+        },
+        "dynamic-temporal-robust-lite": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_dynamic_temporal_graph": True,
+            "dynamic_temporal_residual_init": 0.1,
+            "temporal_graph_lr_scale": 1.0,
+            "use_robust_reconstruction_loss": True,
+            "robust_loss_trim_ratio": 0.02,
+            "robust_loss_min_weight": 0.5,
+            "robust_loss_warmup_epochs": 10,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+        },
+        "dynamic-temporal-channelnorm": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_dynamic_temporal_graph": True,
+            "dynamic_temporal_residual_init": 0.1,
+            "temporal_graph_lr_scale": 1.0,
+            "use_score_channel_normalization": True,
+            "score_channel_norm_mode": "robust_z",
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+        },
+        "dynamic-temporal-channelnorm-scale": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_dynamic_temporal_graph": True,
+            "dynamic_temporal_residual_init": 0.1,
+            "temporal_graph_lr_scale": 1.0,
+            "use_score_channel_normalization": True,
+            "score_channel_norm_mode": "scale",
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+        },
         "dynamic-temporal-aff": {
             "use_channel_graph": True,
             "use_temporal_graph": True,
@@ -396,6 +467,9 @@ def main():
         vq_hyper_params["lambda_vq"] = max(0.0, lambda_vq)
     if vq_score_weight is not None:
         vq_hyper_params["vq_score_weight"] = max(0.0, vq_score_weight)
+    score_hyper_params = {}
+    if args.score_topk_k is not None:
+        score_hyper_params["score_topk_k"] = max(1, args.score_topk_k)
 
     model_config = {
         "models": [
@@ -413,6 +487,7 @@ def main():
                     "dataloader_prefetch_factor": dataloader_prefetch_factor,
                     **arch_switches,
                     **vq_hyper_params,
+                    **score_hyper_params,
                     "d_model": d_model_scale,
                     "e_layers": e_layers_scale,
                     "n_heads": n_heads_scale,

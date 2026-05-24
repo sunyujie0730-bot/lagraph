@@ -252,6 +252,10 @@ class SparseGCN(nn.Module):
                  use_multi_scale_scorer=True,
                  vq_score_weight=0.3,
                  score_topk_k=None,
+                 use_temporal_graph_regularization=False,
+                 use_score_channel_normalization=False,
+                 score_channel_norm_mode="robust_z",
+                 score_channel_norm_eps=1e-6,
                  **kwargs):
         super(SparseGCN, self).__init__()
 
@@ -268,6 +272,20 @@ class SparseGCN(nn.Module):
         self.use_vq_bypass = use_vq_bypass
         self.use_multi_scale_scorer = use_multi_scale_scorer
         self.score_topk_k = score_topk_k
+        self.use_temporal_graph_regularization = use_temporal_graph_regularization
+        self.use_score_channel_normalization = use_score_channel_normalization
+        self.score_channel_norm_mode = score_channel_norm_mode
+        self.score_channel_norm_eps = score_channel_norm_eps
+        self.register_buffer(
+            'score_channel_center',
+            torch.zeros(1, 1, channel),
+            persistent=False,
+        )
+        self.register_buffer(
+            'score_channel_scale',
+            torch.ones(1, 1, channel),
+            persistent=False,
+        )
 
         # === 自适应通道图 ===
         self.channel_graph = ChannelAdaptiveGraph(
@@ -375,6 +393,28 @@ class SparseGCN(nn.Module):
             return
         self.channel_graph.set_warmup_progress(alpha)
 
+    def set_score_channel_stats(self, center, scale):
+        center = torch.as_tensor(center, dtype=self.score_channel_center.dtype)
+        scale = torch.as_tensor(scale, dtype=self.score_channel_scale.dtype)
+        center = center.reshape(1, 1, -1).to(self.score_channel_center.device)
+        scale = scale.reshape(1, 1, -1).to(self.score_channel_scale.device)
+        if center.shape[-1] != self.score_channel_center.shape[-1]:
+            raise ValueError(
+                f"channel stat size mismatch: {center.shape[-1]} != {self.score_channel_center.shape[-1]}"
+            )
+        self.score_channel_center.copy_(center)
+        self.score_channel_scale.copy_(scale.clamp_min(self.score_channel_norm_eps))
+
+    def _normalize_score_error(self, err):
+        if not self.use_score_channel_normalization:
+            return err
+        center = self.score_channel_center.to(device=err.device, dtype=err.dtype)
+        scale = self.score_channel_scale.to(device=err.device, dtype=err.dtype)
+        scale = scale.clamp_min(self.score_channel_norm_eps)
+        if self.score_channel_norm_mode == "scale":
+            return err / scale
+        return (err - center).clamp_min(0.0) / scale
+
     def forward(self, x):
         """
         x: (B, L, C)
@@ -442,6 +482,14 @@ class SparseGCN(nn.Module):
         aux_losses['sparse_loss'] = self.get_sparse_loss()
         aux_losses['vq_loss'] = vq_loss_val
         aux_losses['vq_dist'] = vq_dist  # (B, L) — 用于增强异常评分
+        if self.use_temporal_graph_regularization and A_temp is not None:
+            aux_losses['temporal_graph_smooth_loss'] = (
+                A_temp[:, 1:, :] - A_temp[:, :-1, :]
+            ).pow(2).mean()
+            idx = torch.arange(A_temp.shape[-1], device=A_temp.device, dtype=A_temp.dtype)
+            dist = (idx[:, None] - idx[None, :]).abs()
+            dist = dist / max(1, A_temp.shape[-1] - 1)
+            aux_losses['temporal_graph_locality_loss'] = (A_temp * dist.unsqueeze(0)).mean()
 
         return x_rec, A_adaptive, d_score, None, continuous_feat, aux_losses, None
 
@@ -526,6 +574,7 @@ class SparseGCN(nn.Module):
         else:
             ws = max(valid_sizes)
             err = F.l1_loss(x_rec_dict[ws], x_input_dict[ws], reduction='none')
+            err = self._normalize_score_error(err)
             k = self.score_topk_k or self.multi_scale_scorer.topk_k
             k = min(max(1, int(k)), err.shape[-1])
             score = err.topk(k=k, dim=-1, largest=True, sorted=False)[0].mean(dim=-1)
