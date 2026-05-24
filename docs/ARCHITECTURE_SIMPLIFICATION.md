@@ -176,17 +176,16 @@ anomaly-ratio grid for each metric.
 | MSL | raw F1 | 0.1139 / 0.1170 / 0.1164 | 0.1158 | 0.0016 | 10% / 15% / 10% |
 | MSL | adjusted F1 | 0.8577 / 0.8525 / 0.8575 | 0.8559 | 0.0029 | 1% / 1% / 1% |
 | MSL | affiliation F1 | 0.6940 / 0.6946 / 0.6917 | 0.6934 | 0.0015 | 1% / 1% / 2% |
-| SWaT | raw F1 | 0.3571 / 0.3396 / 0.3278 | 0.3415 | 0.0147 | 5% / 5% / 5% |
+| SWaT | raw F1 | 0.3571 / 0.3404 / 0.3275 | 0.3417 | 0.0148 | 5% / 5% / 5% |
 | SWaT | adjusted F1 | 0.9196 / 0.9210 / 0.9154 | 0.9187 | 0.0029 | 2% / 2% / 2% |
-| SWaT | affiliation F1 | 0.8614 / 0.8461 / 0.8502 | 0.8526 | 0.0079 | 5% / 5% / 5% |
+| SWaT | affiliation F1 | 0.8614 / 0.8471 / 0.8500 | 0.8528 | 0.0075 | 5% / 5% / 5% |
 
 Compared with `full`, `dynamic-temporal-gated` improves mean raw F1 but lowers
-mean MSL affiliation F1 and SWaT adjusted F1. The SWaT seed-2021 value was rerun
-with the current default `num_workers=2`; the two later SWaT seeds were earlier
-run with `num_workers=0`, so SWaT stability should be rerun under a single worker
-setting before making a final multi-seed claim. The current conclusion is that
-gated dynamic temporal modeling is useful, but not a uniformly dominant
-replacement for `full`.
+mean MSL affiliation F1 and SWaT adjusted F1. SWaT stability was rerun with the
+current default `num_workers=2 --prefetch-factor=2`, so the table now uses a
+single worker setting. The current conclusion is that gated dynamic temporal
+modeling is useful, especially for raw F1 and SWaT affiliation F1, but not a
+uniformly dominant replacement for `full`.
 
 ## Affiliation-Oriented Scoring Check
 
