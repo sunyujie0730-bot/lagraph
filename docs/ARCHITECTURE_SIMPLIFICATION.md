@@ -78,12 +78,13 @@ results are recorded in `docs/VQ_TUNING_LOG.md`.
 
 Use `full` as the stable baseline in future experiments.
 
-Use `dynamic-temporal-gated` as the current main candidate if the paper keeps a
-dual-graph narrative. It replaces the fixed-position temporal graph with a
-content-adaptive temporal adjacency, adds a learnable residual gate to avoid
-overwriting the stronger channel graph signal, and trains the dynamic temporal
-graph at the base learning rate. Use `dynamic-temporal` only as the ungated
-candidate ablation. Use `with-scorer` to report the old multi-scale/VQ scoring path as an ablation,
+Use `dynamic-temporal-gated` as the strongest adaptive-temporal candidate, not
+as the default replacement for `full` yet. It replaces the fixed-position
+temporal graph with a content-adaptive temporal adjacency, adds a learnable
+residual gate to avoid overwriting the stronger channel graph signal, and trains
+the dynamic temporal graph at the base learning rate. Use `dynamic-temporal`
+only as the ungated candidate ablation. Use `with-scorer` to report the old
+multi-scale/VQ scoring path as an ablation,
 because the scorer was not consistently better than direct reconstruction
 scoring. Use `no-vq` as the primary VQ ablation, `channel-only` and
 `temporal-only` to justify the dual-graph design, and `reconstruction` as the
@@ -147,23 +148,22 @@ strong dual-graph claim.
 | --- | --- | ---: | ---: | ---: | --- |
 | `full` | MSL | 0.1109 | 0.8576 | 0.7006 | Fixed-position temporal graph |
 | `dynamic-temporal` | MSL | 0.1117 | 0.8574 | 0.6983 | Ungated dynamic temporal graph |
-| `dynamic-temporal-gated` | MSL | 0.1221 | 0.8584 | 0.7014 | Best MSL balance in this check |
+| `dynamic-temporal-gated` | MSL | 0.1139 | 0.8577 | 0.6940 | Current-code rerun; improves raw but lowers affiliation |
 | `channel-only` | MSL | 0.1162 | 0.8584 | 0.6936 | Strong raw F1, weaker affiliation |
 | `full` | SWaT | 0.3169 | 0.9361 | 0.8458 | Fixed-position temporal graph |
 | `dynamic-temporal` | SWaT | 0.3259 | 0.9267 | 0.8492 | Improves raw/affiliation, lower adjusted |
-| `dynamic-temporal-gated` | SWaT | 0.3386 | 0.9211 | 0.8554 | Better than `full` on raw/affiliation |
+| `dynamic-temporal-gated` | SWaT | 0.3571 | 0.9196 | 0.8614 | Better than `full` on raw/affiliation |
 | `channel-only` | SWaT | 0.3510 | 0.9216 | 0.8594 | Still strongest on raw/affiliation |
 
 Interpretation: the ungated dynamic temporal graph is not enough. The gated
-variant is the first dual-graph candidate that improves `full` on MSL raw F1,
-MSL affiliation F1, SWaT raw F1, and SWaT affiliation F1 in the same seed.
-However, SWaT adjusted F1 drops relative to `full`, and `channel-only` remains
-stronger on SWaT raw/affiliation. The defensible paper claim is therefore not
-"both graphs improve every metric"; it is that a channel graph provides the main
-cross-variable structure, while a gated dynamic temporal graph provides adaptive
-temporal refinement that improves point-wise and affiliation quality without
-destroying MSL adjusted performance. Before promotion to the final main method,
-`dynamic-temporal-gated` needs the same multi-seed check as `full`.
+variant improves `full` on MSL raw F1 and SWaT raw/affiliation F1, but it lowers
+MSL affiliation F1 and SWaT adjusted F1 in the current-code rerun. The defensible
+paper claim is therefore not "both graphs improve every metric"; it is that a
+channel graph provides the stable cross-variable structure, while a gated
+dynamic temporal graph is an adaptive temporal refinement that can improve
+point-wise ranking and SWaT event coverage. At this stage, `full` remains the
+safer main method and `dynamic-temporal-gated` should be reported as the
+strongest adaptive-temporal candidate.
 
 ## Dynamic-Gated Stability Check
 
@@ -173,20 +173,20 @@ anomaly-ratio grid for each metric.
 
 | Dataset | Metric | Seed values | Mean | Std | Best ratio |
 | --- | --- | ---: | ---: | ---: | ---: |
-| MSL | raw F1 | 0.1221 / 0.1170 / 0.1164 | 0.1185 | 0.0032 | 15% / 15% / 10% |
-| MSL | adjusted F1 | 0.8584 / 0.8525 / 0.8575 | 0.8562 | 0.0032 | 1% / 1% / 1% |
-| MSL | affiliation F1 | 0.7014 / 0.6946 / 0.6917 | 0.6959 | 0.0050 | 1% / 1% / 2% |
-| SWaT | raw F1 | 0.3386 / 0.3396 / 0.3278 | 0.3353 | 0.0065 | 5% / 5% / 5% |
-| SWaT | adjusted F1 | 0.9211 / 0.9210 / 0.9154 | 0.9192 | 0.0032 | 2% / 2% / 2% |
-| SWaT | affiliation F1 | 0.8554 / 0.8461 / 0.8502 | 0.8505 | 0.0046 | 5% / 5% / 5% |
+| MSL | raw F1 | 0.1139 / 0.1170 / 0.1164 | 0.1158 | 0.0016 | 10% / 15% / 10% |
+| MSL | adjusted F1 | 0.8577 / 0.8525 / 0.8575 | 0.8559 | 0.0029 | 1% / 1% / 1% |
+| MSL | affiliation F1 | 0.6940 / 0.6946 / 0.6917 | 0.6934 | 0.0015 | 1% / 1% / 2% |
+| SWaT | raw F1 | 0.3571 / 0.3396 / 0.3278 | 0.3415 | 0.0147 | 5% / 5% / 5% |
+| SWaT | adjusted F1 | 0.9196 / 0.9210 / 0.9154 | 0.9187 | 0.0029 | 2% / 2% / 2% |
+| SWaT | affiliation F1 | 0.8614 / 0.8461 / 0.8502 | 0.8526 | 0.0079 | 5% / 5% / 5% |
 
-Compared with `full`, `dynamic-temporal-gated` improves mean raw F1 on MSL and
-SWaT and improves mean SWaT affiliation F1, but it slightly lowers mean MSL
-affiliation F1 and SWaT adjusted F1. The defensible conclusion is that gated
-dynamic temporal modeling improves point-wise ranking and can improve
-affiliation quality, but it is not a uniformly dominant replacement for `full`.
-For the paper, it should be reported as the strongest adaptive temporal-graph
-candidate unless subsequent all-dataset tests show broader degradation.
+Compared with `full`, `dynamic-temporal-gated` improves mean raw F1 but lowers
+mean MSL affiliation F1 and SWaT adjusted F1. The SWaT seed-2021 value was rerun
+with the current default `num_workers=2`; the two later SWaT seeds were earlier
+run with `num_workers=0`, so SWaT stability should be rerun under a single worker
+setting before making a final multi-seed claim. The current conclusion is that
+gated dynamic temporal modeling is useful, but not a uniformly dominant
+replacement for `full`.
 
 ## Affiliation-Oriented Scoring Check
 
