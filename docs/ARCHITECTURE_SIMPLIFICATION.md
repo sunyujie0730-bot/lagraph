@@ -43,6 +43,13 @@ should not be treated as valid modules or ablations.
 | `dynamic-temporal` | on | dynamic | on | removed | off | Candidate architecture with content-adaptive temporal graph |
 | `dynamic-temporal-gated` | on | dynamic + residual gate | on | removed | off | Current main candidate for dual-graph narrative |
 | `dynamic-temporal-gated-vqscore` | on | dynamic + residual gate | on | removed | off | Rejected direct VQ-score fusion profile |
+| `parallel-dual` | on | fixed parallel branch | on | removed | off | Rejected dual-graph fusion profile |
+| `parallel-dual-time` | on | fixed time-gated parallel branch | on | removed | off | Rejected dual-graph fusion profile |
+| `residual-dual` | on | fixed residual parallel correction | on | removed | off | Rejected conservative dual-graph fusion profile |
+| `residual-dual-time` | on | fixed time-gated residual correction | on | removed | off | Rejected conservative dual-graph fusion profile |
+| `graph-shift` | on | on | on | removed | off | Rejected normal-graph deviation scoring profile |
+| `graph-shift-lite` | on | on | on | removed | off | Rejected low-weight graph-shift profile |
+| `graph-shift-strong` | on | on | on | removed | off | Rejected high-weight graph-shift profile |
 | `dynamic-temporal-regularized` | on | dynamic + residual gate + temporal graph regularization | on | removed | off | Rejected graph smoothness/locality regularization profile |
 | `dynamic-temporal-robust` | on | dynamic + residual gate | on | removed | off | Rejected 5% trimmed reconstruction loss profile |
 | `dynamic-temporal-robust-lite` | on | dynamic + residual gate | on | removed | off | Rejected 2% trimmed reconstruction loss profile |
@@ -186,6 +193,27 @@ current default `num_workers=2 --prefetch-factor=2`, so the table now uses a
 single worker setting. The current conclusion is that gated dynamic temporal
 modeling is useful, especially for raw F1 and SWaT affiliation F1, but not a
 uniformly dominant replacement for `full`.
+
+## Parallel Fusion and Graph-Shift Check
+
+After finding that the serial dual-graph path did not consistently outperform
+single-graph ablations, several alternatives were tested on MSL with seed 2021,
+15 epochs, `num_workers=2`, and `prefetch_factor=2`.
+
+| Profile | Main change | Raw F1 | Adjusted F1 | Affiliation F1 | Decision |
+| --- | --- | ---: | ---: | ---: | --- |
+| `full` | Current compact architecture | 0.1109 | 0.8576 | 0.7006 | Keep as main |
+| `parallel-dual-time` | Channel and temporal branches fused by time-wise gate | 0.1189 | 0.8579 | 0.6938 | Reject |
+| `residual-dual-time` | `full` plus small time-wise parallel residual | 0.1081 | 0.8577 | 0.6998 | Reject |
+| `graph-shift` | Add deviation from normal channel graph to score | 0.1097 | 0.8572 | 0.7001 | Reject |
+| `graph-shift-lite` | Lower graph-shift score weight | 0.1105 | 0.8576 | 0.6959 | Reject |
+
+Interpretation: the problem is not solved by changing serial dual-graph
+composition into parallel fusion. The gate is still trained by reconstruction
+on normal windows, so it has no direct signal for anomaly-time graph selection.
+Graph-shift scoring is interpretable, but the same-time channel graph is too
+stable on MSL to improve the anomaly ranking. Keep these profiles only for
+reproducibility and negative-ablation reporting.
 
 ## Affiliation-Oriented Scoring Check
 

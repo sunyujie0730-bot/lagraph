@@ -253,6 +253,13 @@ class SparseGCN(nn.Module):
                  use_direct_vq_score=False,
                  vq_score_weight=0.3,
                  score_topk_k=None,
+                 use_parallel_graph_fusion=False,
+                 graph_fusion_gate_mode="sample",
+                 graph_fusion_strategy="parallel",
+                 graph_fusion_residual_init=0.1,
+                 use_graph_shift_score=False,
+                 graph_shift_score_weight=0.1,
+                 graph_shift_score_eps=1e-6,
                  use_temporal_graph_regularization=False,
                  use_score_channel_normalization=False,
                  score_channel_norm_mode="robust_z",
@@ -274,6 +281,12 @@ class SparseGCN(nn.Module):
         self.use_multi_scale_scorer = use_multi_scale_scorer
         self.use_direct_vq_score = use_direct_vq_score
         self.score_topk_k = score_topk_k
+        self.use_parallel_graph_fusion = use_parallel_graph_fusion
+        self.graph_fusion_gate_mode = graph_fusion_gate_mode
+        self.graph_fusion_strategy = graph_fusion_strategy
+        self.use_graph_shift_score = use_graph_shift_score
+        self.graph_shift_score_weight = float(graph_shift_score_weight)
+        self.graph_shift_score_eps = float(graph_shift_score_eps)
         self.use_temporal_graph_regularization = use_temporal_graph_regularization
         self.use_score_channel_normalization = use_score_channel_normalization
         self.score_channel_norm_mode = score_channel_norm_mode
@@ -286,6 +299,21 @@ class SparseGCN(nn.Module):
         self.register_buffer(
             'score_channel_scale',
             torch.ones(1, 1, channel),
+            persistent=False,
+        )
+        self.register_buffer(
+            'graph_shift_center',
+            torch.zeros(1, channel, channel),
+            persistent=False,
+        )
+        self.register_buffer(
+            'graph_shift_score_center',
+            torch.zeros(1),
+            persistent=False,
+        )
+        self.register_buffer(
+            'graph_shift_score_scale',
+            torch.ones(1),
             persistent=False,
         )
 
@@ -313,6 +341,33 @@ class SparseGCN(nn.Module):
             )
 
         # === EncoderStack（精简版）===
+        if use_parallel_graph_fusion:
+            fusion_hidden = max(16, c_out)
+            self.graph_fusion_sample_gate = nn.Sequential(
+                nn.Linear(c_out * 4, fusion_hidden),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(fusion_hidden, 1),
+                nn.Sigmoid(),
+            )
+            self.graph_fusion_time_gate = nn.Sequential(
+                nn.Linear(c_out * 4, fusion_hidden),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(fusion_hidden, 1),
+                nn.Sigmoid(),
+            )
+            graph_fusion_residual_init = min(max(float(graph_fusion_residual_init), 1e-3), 1.0 - 1e-3)
+            self.graph_fusion_residual_logit = nn.Parameter(
+                torch.tensor(
+                    float(np.log(graph_fusion_residual_init / (1.0 - graph_fusion_residual_init))),
+                )
+            )
+        else:
+            self.graph_fusion_sample_gate = None
+            self.graph_fusion_time_gate = None
+            self.graph_fusion_residual_logit = None
+
         self.encoder = EncoderStack(
             num_layers=e_layers, d_model=d_model, d_ff=d_ff,
             win_size=win_size, n_heads=n_heads, d_state=16, d_conv=4,
@@ -375,14 +430,31 @@ class SparseGCN(nn.Module):
 
     @staticmethod
     def _set_trainable(module: nn.Module, trainable: bool):
+        if module is None:
+            return
         for param in module.parameters():
             param.requires_grad = trainable
 
     def _apply_architecture_switches(self):
         self._set_trainable(self.channel_graph, self.use_channel_graph)
         self._set_trainable(self.temporal_graph, self.use_temporal_graph)
+        self._set_trainable(self.graph_fusion_sample_gate, self.use_parallel_graph_fusion)
+        self._set_trainable(self.graph_fusion_time_gate, self.use_parallel_graph_fusion)
+        if self.graph_fusion_residual_logit is not None:
+            self.graph_fusion_residual_logit.requires_grad = self.use_parallel_graph_fusion
         self._set_trainable(self.vq_bottleneck, self.use_vq_bypass)
         self._set_trainable(self.multi_scale_scorer, self.use_multi_scale_scorer)
+
+    def _parallel_fuse_graphs(self, resid, resid_channel, resid_temporal):
+        gate_input = torch.cat(
+            [resid, resid_channel, resid_temporal, (resid_channel - resid_temporal).abs()],
+            dim=-1,
+        )
+        if self.graph_fusion_gate_mode == "time":
+            gate = self.graph_fusion_time_gate(gate_input)
+        else:
+            gate = self.graph_fusion_sample_gate(gate_input.mean(dim=1)).view(resid.shape[0], 1, 1)
+        return gate * resid_channel + (1.0 - gate) * resid_temporal, gate
 
     def get_sparse_loss(self):
         """通道图 L1 稀疏正则化损失"""
@@ -406,6 +478,29 @@ class SparseGCN(nn.Module):
             )
         self.score_channel_center.copy_(center)
         self.score_channel_scale.copy_(scale.clamp_min(self.score_channel_norm_eps))
+
+    def set_graph_shift_stats(self, center, score_center, score_scale):
+        center = torch.as_tensor(center, dtype=self.graph_shift_center.dtype)
+        center = center.reshape(1, center.shape[-2], center.shape[-1]).to(self.graph_shift_center.device)
+        if center.shape[-2:] != self.graph_shift_center.shape[-2:]:
+            raise ValueError(
+                f"graph stat size mismatch: {center.shape[-2:]} != {self.graph_shift_center.shape[-2:]}"
+            )
+        self.graph_shift_center.copy_(center)
+        self.graph_shift_score_center.copy_(
+            torch.as_tensor([score_center], dtype=self.graph_shift_score_center.dtype, device=self.graph_shift_score_center.device)
+        )
+        self.graph_shift_score_scale.copy_(
+            torch.as_tensor([score_scale], dtype=self.graph_shift_score_scale.dtype, device=self.graph_shift_score_scale.device)
+            .clamp_min(self.graph_shift_score_eps)
+        )
+
+    def _graph_shift_score(self, A_adaptive):
+        center = self.graph_shift_center.to(device=A_adaptive.device, dtype=A_adaptive.dtype)
+        raw = (A_adaptive - center).abs().mean(dim=(1, 2))
+        score_center = self.graph_shift_score_center.to(device=A_adaptive.device, dtype=A_adaptive.dtype)
+        score_scale = self.graph_shift_score_scale.to(device=A_adaptive.device, dtype=A_adaptive.dtype)
+        return (raw - score_center).clamp_min(0.0) / score_scale.clamp_min(self.graph_shift_score_eps)
 
     def _normalize_score_error(self, err):
         if not self.use_score_channel_normalization:
@@ -436,6 +531,7 @@ class SparseGCN(nn.Module):
         # ========== 阶段一：表示学习 ==========
         # 步骤 1: 序列分解
         resid, trend = self.decomp(x)
+        graph_fusion_gate = None
 
         # 步骤 2: 自适应通道依赖图
         if self.use_channel_graph:
@@ -445,13 +541,27 @@ class SparseGCN(nn.Module):
             A_adaptive = torch.eye(C, device=x.device).unsqueeze(0).expand(B, C, C)
 
         # 步骤 3: 简化时序图
-        if self.use_temporal_graph:
-            resid_temp, A_temp = self.temporal_graph(resid_adapted, A_proximity=A_adaptive)
+        if self.use_parallel_graph_fusion and self.use_channel_graph and self.use_temporal_graph:
+            if self.graph_fusion_strategy == "residual_serial":
+                resid_serial, A_temp = self.temporal_graph(resid_adapted, A_proximity=A_adaptive)
+                resid_temp, _ = self.temporal_graph(resid, A_proximity=A_adaptive)
+                parallel_feat, graph_fusion_gate = self._parallel_fuse_graphs(
+                    resid, resid_adapted, resid_temp,
+                )
+                residual_weight = torch.sigmoid(self.graph_fusion_residual_logit)
+                stage1_feat = resid_serial + residual_weight * (parallel_feat - resid_serial)
+            else:
+                resid_temp, A_temp = self.temporal_graph(resid, A_proximity=A_adaptive)
+                stage1_feat, graph_fusion_gate = self._parallel_fuse_graphs(
+                    resid, resid_adapted, resid_temp,
+                )
         else:
-            resid_temp = resid_adapted
-            A_temp = None
-
-        stage1_feat = resid_temp  # (B, L, C)
+            if self.use_temporal_graph:
+                resid_temp, A_temp = self.temporal_graph(resid_adapted, A_proximity=A_adaptive)
+            else:
+                resid_temp = resid_adapted
+                A_temp = None
+            stage1_feat = resid_temp  # (B, L, C)
 
         # ★ P0: Dual-Path VQ — 旁路模式
         #   VQ 不参与重建路径，仅计算 vq_dist 和 vq_loss
@@ -484,6 +594,11 @@ class SparseGCN(nn.Module):
         aux_losses['sparse_loss'] = self.get_sparse_loss()
         aux_losses['vq_loss'] = vq_loss_val
         aux_losses['vq_dist'] = vq_dist  # (B, L) — 用于增强异常评分
+        if graph_fusion_gate is not None:
+            aux_losses['graph_fusion_gate_mean'] = graph_fusion_gate.detach().mean()
+            aux_losses['graph_fusion_residual_weight'] = torch.sigmoid(
+                self.graph_fusion_residual_logit.detach()
+            )
         if self.use_temporal_graph_regularization and A_temp is not None:
             aux_losses['temporal_graph_smooth_loss'] = (
                 A_temp[:, 1:, :] - A_temp[:, :-1, :]
@@ -520,6 +635,7 @@ class SparseGCN(nn.Module):
         x_rec_dict = {}
         x_input_dict = {}
         vq_dist_dict = {}
+        graph_shift_dict = {}
 
         for ws in valid_sizes:
             x_win = x[:, -ws:, :]  # (B, ws, C)
@@ -530,7 +646,7 @@ class SparseGCN(nn.Module):
             else:
                 x_pad = x_win
 
-            rec_pad, _, _, _, _, aux_losses, _ = self.forward(x_pad)  # (B, win_size, C)
+            rec_pad, A_adaptive, _, _, _, aux_losses, _ = self.forward(x_pad)  # (B, win_size, C)
 
             # 收集 VQ 距离
             vq_d = aux_losses.get('vq_dist', None)
@@ -548,6 +664,9 @@ class SparseGCN(nn.Module):
             x_rec_dict[ws] = rec_win
             x_input_dict[ws] = x_win
             vq_dist_dict[ws] = vq_d_win  # (B, ws)
+            if self.use_graph_shift_score:
+                graph_shift = self._graph_shift_score(A_adaptive).unsqueeze(1)
+                graph_shift_dict[ws] = graph_shift.expand(-1, ws)
 
         # v11.1 FIX [Bug 2]: 自适应 VQ 距离归一化
         raw_vq_score = self._aggregate_vq_dist(vq_dist_dict, valid_sizes, B, L, x.device)
@@ -587,6 +706,15 @@ class SparseGCN(nn.Module):
                     pad_vq = torch.zeros(B, pad_len, device=score.device)
                     vq_score_direct = torch.cat([pad_vq, vq_score_direct], dim=1)
                 score = score + vq_score_direct
+
+        if self.use_graph_shift_score and graph_shift_dict:
+            graph_score = self._aggregate_vq_dist(graph_shift_dict, valid_sizes, B, L, x.device)
+            graph_score = graph_score[:, -score.shape[1]:] if graph_score.shape[1] >= score.shape[1] else graph_score
+            if graph_score.shape[1] < score.shape[1]:
+                pad_len = score.shape[1] - graph_score.shape[1]
+                pad_graph = torch.zeros(B, pad_len, device=score.device)
+                graph_score = torch.cat([pad_graph, graph_score], dim=1)
+            score = score + self.graph_shift_score_weight * graph_score
 
         # score 输出是 L_max（即 max(win_sizes)），按实际有效窗口截断
         L_eff = max(valid_sizes)

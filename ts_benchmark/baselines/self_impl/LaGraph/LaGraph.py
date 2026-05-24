@@ -80,6 +80,13 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "vq_cooldown_epochs": 10,
     "vq_score_weight": 0.3,
     "score_topk_k": None,
+    "use_parallel_graph_fusion": False,
+    "graph_fusion_gate_mode": "sample",
+    "graph_fusion_strategy": "parallel",
+    "graph_fusion_residual_init": 0.1,
+    "use_graph_shift_score": False,
+    "graph_shift_score_weight": 0.1,
+    "graph_shift_score_eps": 1e-6,
     "use_temporal_graph_regularization": False,
     "lambda_temporal_graph_smooth": 0.0,
     "lambda_temporal_graph_locality": 0.0,
@@ -911,6 +918,12 @@ class LaGraph:
                 "vq_score_weight": getattr(self.config, "vq_score_weight", None),
                 "use_direct_vq_score": getattr(self.config, "use_direct_vq_score", None),
                 "score_topk_k": getattr(self.config, "score_topk_k", None),
+                "use_parallel_graph_fusion": getattr(self.config, "use_parallel_graph_fusion", None),
+                "graph_fusion_gate_mode": getattr(self.config, "graph_fusion_gate_mode", None),
+                "graph_fusion_strategy": getattr(self.config, "graph_fusion_strategy", None),
+                "graph_fusion_residual_init": getattr(self.config, "graph_fusion_residual_init", None),
+                "use_graph_shift_score": getattr(self.config, "use_graph_shift_score", None),
+                "graph_shift_score_weight": getattr(self.config, "graph_shift_score_weight", None),
                 "use_temporal_graph_regularization": getattr(self.config, "use_temporal_graph_regularization", None),
                 "lambda_temporal_graph_smooth": getattr(self.config, "lambda_temporal_graph_smooth", None),
                 "lambda_temporal_graph_locality": getattr(self.config, "lambda_temporal_graph_locality", None),
@@ -1049,6 +1062,71 @@ class LaGraph:
             f"{float(np.median(center)):.6f}, scale median={float(np.median(scale)):.6f}"
         )
 
+    @torch.no_grad()
+    def _fit_graph_shift_stats(self, train_data: pd.DataFrame):
+        if train_data is None or self.model is None:
+            return
+        raw_model = self._get_raw_model()
+        if not hasattr(raw_model, "set_graph_shift_stats"):
+            return
+
+        print("\n  [GraphShift] Fitting normal channel-graph statistics...")
+        if self.early_stopping is not None and self.early_stopping.check_point is not None:
+            raw_model.load_state_dict(self.early_stopping.check_point)
+        self.model.to(self.device)
+        self.model.eval()
+
+        scaled_data = pd.DataFrame(
+            self.scaler.transform(train_data.values),
+            columns=train_data.columns, index=train_data.index,
+        )
+
+        def _loader():
+            return anomaly_detection_data_provider(
+                scaled_data,
+                batch_size=min(self.config.batch_size, 64),
+                win_size=self.config.win_size,
+                step=1,
+                mode="test",
+                num_workers=0,
+            )
+
+        graph_sum = None
+        n_graphs = 0
+        for input_data, _ in _loader():
+            input_data = input_data.float().to(self.device)
+            _, A_adaptive, _, _, _, _, _ = self.model(input_data)
+            A_cpu = A_adaptive.detach().cpu()
+            graph_sum = A_cpu.sum(dim=0) if graph_sum is None else graph_sum + A_cpu.sum(dim=0)
+            n_graphs += A_cpu.shape[0]
+
+        if graph_sum is None or n_graphs == 0:
+            return
+
+        center = graph_sum / float(n_graphs)
+        center_dev = center.to(self.device)
+        shifts = []
+        for input_data, _ in _loader():
+            input_data = input_data.float().to(self.device)
+            _, A_adaptive, _, _, _, _, _ = self.model(input_data)
+            shift = (A_adaptive - center_dev).abs().mean(dim=(1, 2))
+            shifts.append(shift.detach().cpu().numpy())
+
+        if not shifts:
+            return
+
+        shifts = np.concatenate(shifts, axis=0)
+        score_center = float(np.median(shifts))
+        q25 = float(np.percentile(shifts, 25))
+        q75 = float(np.percentile(shifts, 75))
+        eps = float(getattr(self.config, "graph_shift_score_eps", 1e-6) or 1e-6)
+        score_scale = max(q75 - q25, float(np.std(shifts)), abs(score_center), eps)
+        raw_model.set_graph_shift_stats(center.numpy(), score_center, score_scale)
+        print(
+            "  [GraphShift] shift median="
+            f"{score_center:.6f}, scale={score_scale:.6f}, graphs={n_graphs}"
+        )
+
     # ======================== 训练（单卡）=======================
     def _destroy_model_and_clean_cuda(self):
         import gc
@@ -1123,6 +1201,9 @@ class LaGraph:
 
         if getattr(self.config, "use_score_channel_normalization", False):
             self._fit_score_channel_stats(self._train_raw)
+
+        if getattr(self.config, "use_graph_shift_score", False):
+            self._fit_graph_shift_stats(self._train_raw)
 
         # ★ v10 fix: 训练集缓存分数
         if self._train_raw is not None:
@@ -1199,6 +1280,13 @@ class LaGraph:
             use_direct_vq_score=getattr(self.config, "use_direct_vq_score", False),
             vq_score_weight=getattr(self.config, "vq_score_weight", 0.3),
             score_topk_k=getattr(self.config, "score_topk_k", None),
+            use_parallel_graph_fusion=getattr(self.config, "use_parallel_graph_fusion", False),
+            graph_fusion_gate_mode=getattr(self.config, "graph_fusion_gate_mode", "sample"),
+            graph_fusion_strategy=getattr(self.config, "graph_fusion_strategy", "parallel"),
+            graph_fusion_residual_init=getattr(self.config, "graph_fusion_residual_init", 0.1),
+            use_graph_shift_score=getattr(self.config, "use_graph_shift_score", False),
+            graph_shift_score_weight=getattr(self.config, "graph_shift_score_weight", 0.1),
+            graph_shift_score_eps=getattr(self.config, "graph_shift_score_eps", 1e-6),
             use_temporal_graph_regularization=getattr(self.config, "use_temporal_graph_regularization", False),
             use_score_channel_normalization=getattr(self.config, "use_score_channel_normalization", False),
             score_channel_norm_mode=getattr(self.config, "score_channel_norm_mode", "robust_z"),
@@ -1411,6 +1499,13 @@ class LaGraph:
             use_direct_vq_score=getattr(self.config, "use_direct_vq_score", False),
             vq_score_weight=getattr(self.config, "vq_score_weight", 0.3),
             score_topk_k=getattr(self.config, "score_topk_k", None),
+            use_parallel_graph_fusion=getattr(self.config, "use_parallel_graph_fusion", False),
+            graph_fusion_gate_mode=getattr(self.config, "graph_fusion_gate_mode", "sample"),
+            graph_fusion_strategy=getattr(self.config, "graph_fusion_strategy", "parallel"),
+            graph_fusion_residual_init=getattr(self.config, "graph_fusion_residual_init", 0.1),
+            use_graph_shift_score=getattr(self.config, "use_graph_shift_score", False),
+            graph_shift_score_weight=getattr(self.config, "graph_shift_score_weight", 0.1),
+            graph_shift_score_eps=getattr(self.config, "graph_shift_score_eps", 1e-6),
             use_temporal_graph_regularization=getattr(self.config, "use_temporal_graph_regularization", False),
             use_score_channel_normalization=getattr(self.config, "use_score_channel_normalization", False),
             score_channel_norm_mode=getattr(self.config, "score_channel_norm_mode", "robust_z"),
@@ -1568,6 +1663,12 @@ class LaGraph:
                 "vq_score_weight": getattr(self.config, "vq_score_weight", None),
                 "use_direct_vq_score": getattr(self.config, "use_direct_vq_score", None),
                 "score_topk_k": getattr(self.config, "score_topk_k", None),
+                "use_parallel_graph_fusion": getattr(self.config, "use_parallel_graph_fusion", None),
+                "graph_fusion_gate_mode": getattr(self.config, "graph_fusion_gate_mode", None),
+                "graph_fusion_strategy": getattr(self.config, "graph_fusion_strategy", None),
+                "graph_fusion_residual_init": getattr(self.config, "graph_fusion_residual_init", None),
+                "use_graph_shift_score": getattr(self.config, "use_graph_shift_score", None),
+                "graph_shift_score_weight": getattr(self.config, "graph_shift_score_weight", None),
                 "use_temporal_graph_regularization": getattr(self.config, "use_temporal_graph_regularization", None),
                 "lambda_temporal_graph_smooth": getattr(self.config, "lambda_temporal_graph_smooth", None),
                 "lambda_temporal_graph_locality": getattr(self.config, "lambda_temporal_graph_locality", None),

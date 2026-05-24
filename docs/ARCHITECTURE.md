@@ -8,8 +8,8 @@ Runtime target: RTX 5070 single GPU
 
 LaGraph is currently a compact reconstruction-based multivariate time-series
 anomaly detector. The stable main profile is `full`, which keeps the dual-graph
-representation, VQ regularization, dynamic temporal encoding, and direct
-reconstruction anomaly scoring.
+representation, VQ regularization, EncoderStack temporal-scale encoding, and
+direct reconstruction anomaly scoring.
 
 The current system should not be described as a large module-stacking method.
 Several earlier modules have been removed or moved to ablation-only status
@@ -50,6 +50,12 @@ replaces the fixed temporal graph with a content-adaptive temporal graph and a
 residual gate. It improves raw F1 and SWaT affiliation F1, but it is not a
 uniform replacement for `full` because MSL affiliation F1 and SWaT adjusted F1
 can drop.
+
+Additional 2026-05-24 architecture candidates were tested but not promoted:
+`parallel-dual`, `parallel-dual-time`, `residual-dual`,
+`residual-dual-time`, `graph-shift`, `graph-shift-lite`, and
+`graph-shift-strong`. They remain reproducibility profiles rather than main
+paper architecture.
 
 ## System Flow
 
@@ -230,6 +236,11 @@ Important details:
 | `full` | on | fixed | on | direct reconstruction | main method |
 | `dynamic-temporal` | on | dynamic | on | direct reconstruction | ungated dynamic temporal ablation |
 | `dynamic-temporal-gated` | on | dynamic + residual gate | on | direct reconstruction | strongest adaptive-temporal candidate |
+| `parallel-dual` | on | fixed, parallel branch | on | direct reconstruction | rejected dual-graph fusion candidate |
+| `parallel-dual-time` | on | fixed, time-gated parallel branch | on | direct reconstruction | rejected dual-graph fusion candidate |
+| `residual-dual` | on | fixed, residual parallel correction | on | direct reconstruction | rejected conservative fusion candidate |
+| `residual-dual-time` | on | fixed, time-gated residual correction | on | direct reconstruction | rejected conservative fusion candidate |
+| `graph-shift` | on | fixed | on | reconstruction + graph-shift score | rejected structure-shift scoring candidate |
 | `with-scorer` | on | fixed | on | old multi-scale scorer | old scoring ablation |
 | `no-vq` | on | fixed | off | old multi-scale scorer | VQ ablation |
 | `channel-only` | on | off | on | direct reconstruction | channel graph ablation |
@@ -268,6 +279,25 @@ Current conclusion:
   rigorous claim: the compact architecture is stable, efficient, and
   interpretable; adaptive temporal graphing improves some ranking/event metrics
   but has dataset-dependent tradeoffs.
+
+## Latest Architecture Search
+
+MSL seed-2021, 15 epochs, current aligned code path:
+
+| Profile | Main change | Raw F1 | Adjusted F1 | Affiliation F1 | Decision |
+| --- | --- | ---: | ---: | ---: | --- |
+| `full` | stable compact architecture | 0.1109 | 0.8576 | 0.7006 | keep main |
+| `parallel-dual-time` | channel and temporal branches fused by time-wise gate | 0.1189 | 0.8579 | 0.6938 | reject; raw improves but affiliation drops |
+| `residual-dual-time` | `full` plus small time-wise parallel residual | 0.1081 | 0.8577 | 0.6998 | reject; near-affiliation tie but no gain |
+| `graph-shift` | add normal-graph deviation to anomaly score | 0.1097 | 0.8572 | 0.7001 | reject; interpretable but not better |
+| `graph-shift-lite` | lower graph-shift weight | 0.1105 | 0.8576 | 0.6959 | reject |
+
+Interpretation: the issue with the dual graph is not just serial ordering. The
+unsupervised reconstruction objective gives no direct supervision for a fusion
+gate to learn "when to trust channel versus temporal structure." Parallel and
+residual fusion therefore change score ranking, but do not improve event-level
+affiliation on MSL. Graph-shift scoring is more interpretable, but the learned
+same-time channel graph is too stable on MSL to add useful anomaly evidence.
 
 ## Causal Inference Status
 
@@ -329,20 +359,19 @@ the current dependency graph is already a causal graph
 
 ## Practical Next Step
 
-The next architecture experiment should be a fixed/dynamic temporal mixture, not
-another generic module:
+Do not spend more experiments on generic dual-graph fusion. The higher-priority
+architecture direction is now a lagged causal/structural graph on top of the
+stable `full` profile:
 
 ```text
-resid_temp = alpha * fixed_temporal(resid_adapted)
-           + (1 - alpha) * gated_dynamic_temporal(resid_adapted)
+parents_i(t) = sparse set of X_j(t-k), k > 0
+mechanism_i = f_i(parents_i(t))
+score = reconstruction_error + mechanism_violation
 ```
 
-This has a clear motivation: preserve the MSL affiliation stability of `full`
-while capturing the SWaT raw/affiliation gain from `dynamic-temporal-gated`.
-
-The next causal experiment should then add lagged channel parents on top of the
-stable `full` profile, because channel dependency is the most interpretable part
-of the current model.
+This gives the paper a concrete causal claim through temporal precedence and
+mechanism violation. A fixed/dynamic temporal mixture can still be tested later,
+but it has lower priority than making the channel graph causally meaningful.
 
 ## Commands
 
