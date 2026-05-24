@@ -164,6 +164,25 @@ temporal refinement that improves point-wise and affiliation quality without
 destroying MSL adjusted performance. Before promotion to the final main method,
 `dynamic-temporal-gated` needs the same multi-seed check as `full`.
 
+## Dynamic-Gated MSL Stability Check
+
+A three-seed MSL follow-up was run for `dynamic-temporal-gated` with 15 epochs.
+Reported values are the best values over the standard anomaly-ratio grid for
+each metric.
+
+| Metric | Seed values | Mean | Std | Best ratio |
+| --- | ---: | ---: | ---: | ---: |
+| raw F1 | 0.1221 / 0.1170 / 0.1164 | 0.1185 | 0.0032 | 15% / 15% / 10% |
+| adjusted F1 | 0.8584 / 0.8525 / 0.8575 | 0.8562 | 0.0032 | 1% / 1% / 1% |
+| affiliation F1 | 0.7014 / 0.6946 / 0.6917 | 0.6959 | 0.0050 | 1% / 1% / 2% |
+
+Interpretation: `dynamic-temporal-gated` remains a reasonable dual-graph
+candidate, but the MSL multi-seed result does not prove a stable affiliation
+advantage over `full` yet. The paper should not overclaim this profile until
+SWaT stability and more datasets are checked. Its current value is architectural:
+it provides a more defensible adaptive temporal graph than the fixed-position
+temporal graph, while keeping raw F1 competitive.
+
 ## Affiliation-Oriented Scoring Check
 
 Several affiliation-oriented inference variants were tested on MSL with
