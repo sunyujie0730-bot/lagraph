@@ -42,6 +42,7 @@ should not be treated as valid modules or ablations.
 | `full` | on | on | on | removed | off | Main compact architecture |
 | `dynamic-temporal` | on | dynamic | on | removed | off | Candidate architecture with content-adaptive temporal graph |
 | `dynamic-temporal-gated` | on | dynamic + residual gate | on | removed | off | Current main candidate for dual-graph narrative |
+| `dynamic-temporal-gated-vqscore` | on | dynamic + residual gate | on | removed | off | Rejected direct VQ-score fusion profile |
 | `dynamic-temporal-regularized` | on | dynamic + residual gate + temporal graph regularization | on | removed | off | Rejected graph smoothness/locality regularization profile |
 | `dynamic-temporal-robust` | on | dynamic + residual gate | on | removed | off | Rejected 5% trimmed reconstruction loss profile |
 | `dynamic-temporal-robust-lite` | on | dynamic + residual gate | on | removed | off | Rejected 2% trimmed reconstruction loss profile |
@@ -224,14 +225,23 @@ grid.
 | `dynamic-temporal-channelnorm` | Robust z-score channel-normalized scoring | 0.1176 | 0.8542 | 0.6996 | Reject |
 | `dynamic-temporal-channelnorm-scale` | Scale-only channel-normalized scoring | 0.1176 | 0.8542 | 0.6996 | Reject |
 | `dynamic-temporal-gated --score-topk-k 3` | Top-3 channel aggregation instead of default top-5 | 0.1156 | 0.8573 | 0.6961 | Reject |
+| `dynamic-temporal-gated-vqscore` | Direct VQ score fusion, weight 0.10 | 0.1160 | 0.8583 | 0.6941 | Reject |
+| `dynamic-temporal-gated-vqscore --vq-score-weight 0.02` | Direct VQ score fusion, weight 0.02 | 0.1152 | 0.8577 | 0.6958 | Reject |
+| `dynamic-temporal-gated --dynamic-temporal-residual-init 0.05` | Weaker dynamic temporal residual | 0.1134 | 0.8578 | 0.6951 | Reject |
+| `dynamic-temporal-gated --dynamic-temporal-residual-init 0.20` | Stronger dynamic temporal residual | 0.1153 | 0.8529 | 0.6941 | Reject |
+| `dynamic-temporal-gated --dynamic-temporal-topk 8` | Sparser dynamic temporal adjacency | 0.1136 | 0.8577 | 0.6961 | Reject |
+| `dynamic-temporal-gated --dynamic-temporal-topk 50` | Denser dynamic temporal adjacency | 0.1129 | 0.8577 | 0.6948 | Reject |
 
 Interpretation: the current shortfall is not solved by adding regularizers or
 score calibration layers. The graph regularizer lowered ranking quality, robust
 training reduced reconstruction loss without improving anomaly separability, and
-channel normalization traded recall for precision. For the paper, do not claim
-these as final modules. Treat them as negative ablations showing that the
-selected `dynamic-temporal-gated` design is not the result of unchecked module
-stacking.
+channel normalization traded recall for precision. Direct VQ-score fusion also
+hurt ranking quality, so VQ should remain a training-side bottleneck rather than
+the main anomaly score. The residual-gate and dynamic-topk sweeps indicate that
+the default gated temporal graph is already near the best MSL seed-2021 setting
+among the tested local variants. For the paper, do not claim these as final
+modules. Treat them as negative ablations showing that the selected
+`dynamic-temporal-gated` design is not the result of unchecked module stacking.
 
 ## Commands
 

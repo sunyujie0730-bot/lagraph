@@ -250,6 +250,7 @@ class SparseGCN(nn.Module):
                  dynamic_temporal_gate_mode="global",
                  use_vq_bypass=True,
                  use_multi_scale_scorer=True,
+                 use_direct_vq_score=False,
                  vq_score_weight=0.3,
                  score_topk_k=None,
                  use_temporal_graph_regularization=False,
@@ -271,6 +272,7 @@ class SparseGCN(nn.Module):
         self.dynamic_temporal_gate_mode = dynamic_temporal_gate_mode
         self.use_vq_bypass = use_vq_bypass
         self.use_multi_scale_scorer = use_multi_scale_scorer
+        self.use_direct_vq_score = use_direct_vq_score
         self.score_topk_k = score_topk_k
         self.use_temporal_graph_regularization = use_temporal_graph_regularization
         self.use_score_channel_normalization = use_score_channel_normalization
@@ -578,6 +580,13 @@ class SparseGCN(nn.Module):
             k = self.score_topk_k or self.multi_scale_scorer.topk_k
             k = min(max(1, int(k)), err.shape[-1])
             score = err.topk(k=k, dim=-1, largest=True, sorted=False)[0].mean(dim=-1)
+            if self.use_direct_vq_score and self.use_vq_bypass:
+                vq_score_direct = vq_score[:, -score.shape[1]:] if vq_score.shape[1] >= score.shape[1] else vq_score
+                if vq_score_direct.shape[1] < score.shape[1]:
+                    pad_len = score.shape[1] - vq_score_direct.shape[1]
+                    pad_vq = torch.zeros(B, pad_len, device=score.device)
+                    vq_score_direct = torch.cat([pad_vq, vq_score_direct], dim=1)
+                score = score + vq_score_direct
 
         # score 输出是 L_max（即 max(win_sizes)），按实际有效窗口截断
         L_eff = max(valid_sizes)

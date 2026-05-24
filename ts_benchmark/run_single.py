@@ -127,6 +127,7 @@ def main():
             "temporal-only",
             "dynamic-temporal",
             "dynamic-temporal-gated",
+            "dynamic-temporal-gated-vqscore",
             "dynamic-temporal-regularized",
             "dynamic-temporal-robust",
             "dynamic-temporal-robust-lite",
@@ -166,6 +167,24 @@ def main():
         type=int,
         default=None,
         help="Override channel top-k aggregation used by the reconstruction anomaly score",
+    )
+    parser.add_argument(
+        "--dynamic-temporal-residual-init",
+        type=float,
+        default=None,
+        help="Override the residual gate initialization for dynamic temporal graph profiles",
+    )
+    parser.add_argument(
+        "--dynamic-temporal-topk",
+        type=int,
+        default=None,
+        help="Override row-wise top-k sparsity for dynamic temporal graph profiles",
+    )
+    parser.add_argument(
+        "--temporal-graph-lr-scale",
+        type=float,
+        default=None,
+        help="Override the temporal graph learning-rate scale",
     )
     args = parser.parse_args()
 
@@ -328,6 +347,17 @@ def main():
             "use_vq_bypass": True,
             "use_multi_scale_scorer": False,
         },
+        "dynamic-temporal-gated-vqscore": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_dynamic_temporal_graph": True,
+            "dynamic_temporal_residual_init": 0.1,
+            "temporal_graph_lr_scale": 1.0,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "use_direct_vq_score": True,
+            "vq_score_weight": 0.1,
+        },
         "dynamic-temporal-regularized": {
             "use_channel_graph": True,
             "use_temporal_graph": True,
@@ -470,6 +500,12 @@ def main():
     score_hyper_params = {}
     if args.score_topk_k is not None:
         score_hyper_params["score_topk_k"] = max(1, args.score_topk_k)
+    if args.dynamic_temporal_residual_init is not None:
+        score_hyper_params["dynamic_temporal_residual_init"] = max(0.0, args.dynamic_temporal_residual_init)
+    if args.dynamic_temporal_topk is not None:
+        score_hyper_params["dynamic_temporal_topk"] = max(1, args.dynamic_temporal_topk)
+    if args.temporal_graph_lr_scale is not None:
+        score_hyper_params["temporal_graph_lr_scale"] = max(0.0, args.temporal_graph_lr_scale)
 
     model_config = {
         "models": [
