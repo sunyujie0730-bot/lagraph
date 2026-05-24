@@ -140,6 +140,11 @@ def main():
             "causal-cf-hurt",
             "synthetic-aux",
             "synthetic-aux-q75",
+            "loss-smoothl1",
+            "loss-logcosh",
+            "loss-mse-mae",
+            "loss-diff",
+            "loss-smoothl1-diff",
             "dynamic-temporal",
             "dynamic-temporal-gated",
             "dynamic-temporal-gated-vqscore",
@@ -248,6 +253,36 @@ def main():
         type=float,
         default=None,
         help="Override synthetic anomaly head score fusion weight",
+    )
+    parser.add_argument(
+        "--reconstruction-loss",
+        choices=["mse", "mae", "smooth_l1", "log_cosh", "charbonnier", "mse_mae"],
+        default=None,
+        help="Override the reconstruction training loss type",
+    )
+    parser.add_argument(
+        "--smooth-l1-beta",
+        type=float,
+        default=None,
+        help="SmoothL1 beta when --reconstruction-loss=smooth_l1",
+    )
+    parser.add_argument(
+        "--mse-l1-alpha",
+        type=float,
+        default=None,
+        help="MSE weight for reconstruction-loss=mse_mae",
+    )
+    parser.add_argument(
+        "--charbonnier-eps",
+        type=float,
+        default=None,
+        help="Epsilon for reconstruction-loss=charbonnier",
+    )
+    parser.add_argument(
+        "--lambda-temporal-diff-loss",
+        type=float,
+        default=None,
+        help="Weight for temporal first-difference reconstruction loss",
     )
     args = parser.parse_args()
 
@@ -554,6 +589,46 @@ def main():
             "synthetic_score_weight": 0.10,
             "score_aggregation": "q75",
         },
+        "loss-smoothl1": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "reconstruction_loss_type": "smooth_l1",
+            "smooth_l1_beta": 1.0,
+        },
+        "loss-logcosh": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "reconstruction_loss_type": "log_cosh",
+        },
+        "loss-mse-mae": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "reconstruction_loss_type": "mse_mae",
+            "mse_l1_alpha": 0.7,
+        },
+        "loss-diff": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "reconstruction_loss_type": "mse",
+            "lambda_temporal_diff_loss": 0.1,
+        },
+        "loss-smoothl1-diff": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "reconstruction_loss_type": "smooth_l1",
+            "smooth_l1_beta": 1.0,
+            "lambda_temporal_diff_loss": 0.1,
+        },
         "dynamic-temporal": {
             "use_channel_graph": True,
             "use_temporal_graph": True,
@@ -749,6 +824,16 @@ def main():
         score_hyper_params["lambda_synthetic_anomaly"] = max(0.0, args.lambda_synthetic_anomaly)
     if args.synthetic_score_weight is not None:
         score_hyper_params["synthetic_score_weight"] = max(0.0, args.synthetic_score_weight)
+    if args.reconstruction_loss is not None:
+        score_hyper_params["reconstruction_loss_type"] = args.reconstruction_loss
+    if args.smooth_l1_beta is not None:
+        score_hyper_params["smooth_l1_beta"] = max(float(args.smooth_l1_beta), 1e-6)
+    if args.mse_l1_alpha is not None:
+        score_hyper_params["mse_l1_alpha"] = min(max(float(args.mse_l1_alpha), 0.0), 1.0)
+    if args.charbonnier_eps is not None:
+        score_hyper_params["charbonnier_eps"] = max(float(args.charbonnier_eps), 1e-12)
+    if args.lambda_temporal_diff_loss is not None:
+        score_hyper_params["lambda_temporal_diff_loss"] = max(0.0, args.lambda_temporal_diff_loss)
     effective_switches = {
         **arch_switches,
         **vq_hyper_params,

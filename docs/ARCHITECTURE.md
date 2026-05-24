@@ -221,15 +221,27 @@ standard anomaly-ratio thresholds and a POT default threshold.
 The main training objective is:
 
 ```text
-loss = MSE(reconstruction, input)
+loss = reconstruction_loss(reconstruction, input)
      + lambda_locality_l1 * sparse_channel_loss
      + lambda_vq * vq_loss
+```
+
+The default reconstruction loss remains MSE. The code now also supports
+`mae`, `smooth_l1`, `log_cosh`, `charbonnier`, and `mse_mae` for controlled
+loss-function sensitivity experiments. A first-difference temporal loss is also
+implemented as an optional candidate:
+
+```text
+loss = loss + lambda_temporal_diff_loss * MSE(diff(reconstruction), diff(input))
 ```
 
 Important details:
 
 - no supervised anomaly labels are used during training;
 - robust/trimmed reconstruction loss was tested and rejected;
+- `log_cosh` and `smooth_l1` improved MSL affiliation F1 but degraded SWaT, so
+  they are not promoted to the default loss;
+- first-difference reconstruction loss was tested and rejected on MSL;
 - temporal graph smoothness/locality regularization was tested and rejected;
 - channel-normalized scoring was tested and rejected.
 
@@ -249,6 +261,11 @@ Important details:
 | `causal-lag-score` | on | fixed | on | reconstruction + lagged mechanism score | first causal-score candidate |
 | `synthetic-aux` | on | fixed | on | reconstruction + synthetic-head score | industrial perturbation auxiliary candidate |
 | `synthetic-aux-q75` | on | fixed | on | q75 aggregation + synthetic-head score | rejected combination candidate |
+| `loss-smoothl1` | on | fixed | on | direct reconstruction | SmoothL1 loss sensitivity candidate |
+| `loss-logcosh` | on | fixed | on | direct reconstruction | log-cosh loss sensitivity candidate |
+| `loss-mse-mae` | on | fixed | on | direct reconstruction | mixed MSE/MAE loss candidate |
+| `loss-diff` | on | fixed | on | direct reconstruction | first-difference loss candidate |
+| `loss-smoothl1-diff` | on | fixed | on | direct reconstruction | SmoothL1 plus first-difference loss candidate |
 | `with-scorer` | on | fixed | on | old multi-scale scorer | old scoring ablation |
 | `no-vq` | on | fixed | off | old multi-scale scorer | VQ ablation |
 | `channel-only` | on | off | on | direct reconstruction | channel graph ablation |
@@ -339,6 +356,35 @@ affiliation gain, while max aggregation improves raw F1 but damages adjusted and
 affiliation metrics. The synthetic industrial perturbation auxiliary objective
 is the best current signal, but its margin is still too small to promote before
 multi-seed and SWaT validation.
+
+## Reconstruction Loss Search
+
+The loss-function search tested whether a reconstruction objective more robust
+than MSE can improve event-level localization without adding new architecture
+modules. MSL and SWaT were run with seed 2021, 15 epochs,
+`num_workers=2`, and `prefetch_factor=2`. Reported values are the best values
+over the standard anomaly-ratio grid.
+
+| Profile | Dataset | Raw F1 | Adjusted F1 | Affiliation F1 | Decision |
+| --- | --- | ---: | ---: | ---: | --- |
+| `full` | MSL | 0.1109 | 0.8576 | 0.7006 | MSE baseline |
+| `loss-smoothl1` | MSL | 0.1090 | 0.8572 | 0.7052 | positive MSL-only candidate |
+| `loss-logcosh` | MSL | 0.1097 | 0.8573 | 0.7059 | best MSL affiliation candidate |
+| `loss-mse-mae` | MSL | 0.1114 | 0.8575 | 0.7017 | too small |
+| `loss-diff` | MSL | 0.1104 | 0.8579 | 0.6994 | reject |
+| `loss-smoothl1-diff` | MSL | 0.1111 | 0.8574 | 0.6929 | reject |
+| `full` | SWaT | 0.3169 | 0.9361 | 0.8458 | MSE baseline |
+| `loss-logcosh` | SWaT | 0.2800 | 0.9269 | 0.8168 | reject as default |
+| `loss-smoothl1` | SWaT | 0.2810 | 0.9257 | 0.8172 | reject as default |
+
+Interpretation: robust losses reduce the influence of large reconstruction
+errors during training. This helps MSL affiliation F1, suggesting that MSL
+benefits from a less outlier-dominated normal reconstruction objective. The same
+change hurts SWaT raw, adjusted, and affiliation F1, which means the effect is
+dataset-sensitive rather than a general improvement. The default paper profile
+should therefore keep MSE. `loss-logcosh` and `loss-smoothl1` can be reported as
+loss sensitivity ablations or revisited for industrial datasets whose normal
+training data contain more outlier-like contamination.
 
 ## Causal Inference Status
 

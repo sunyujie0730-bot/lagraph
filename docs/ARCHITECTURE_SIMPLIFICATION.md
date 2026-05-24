@@ -57,6 +57,11 @@ should not be treated as valid modules or ablations.
 | `causal-cf-hurt` | on | on | on | removed | off | Best current counterfactual causal candidate |
 | `synthetic-aux` | on | on | on | removed | off | Synthetic industrial perturbation auxiliary candidate |
 | `synthetic-aux-q75` | on | on | on | removed | off | Synthetic auxiliary plus q75 aggregation candidate |
+| `loss-smoothl1` | on | on | on | removed | off | SmoothL1 reconstruction loss candidate |
+| `loss-logcosh` | on | on | on | removed | off | log-cosh reconstruction loss candidate |
+| `loss-mse-mae` | on | on | on | removed | off | mixed MSE/MAE reconstruction loss candidate |
+| `loss-diff` | on | on | on | removed | off | first-difference reconstruction loss candidate |
+| `loss-smoothl1-diff` | on | on | on | removed | off | SmoothL1 plus first-difference loss candidate |
 | `dynamic-temporal-regularized` | on | dynamic + residual gate + temporal graph regularization | on | removed | off | Rejected graph smoothness/locality regularization profile |
 | `dynamic-temporal-robust` | on | dynamic + residual gate | on | removed | off | Rejected 5% trimmed reconstruction loss profile |
 | `dynamic-temporal-robust-lite` | on | dynamic + residual gate | on | removed | off | Rejected 2% trimmed reconstruction loss profile |
@@ -296,6 +301,33 @@ Interpretation: aggregation alone has limited headroom. The synthetic auxiliary
 profile gives the best MSL affiliation signal in this sweep, but the gain is
 only about 0.0017 over `full`. It should remain a candidate until multi-seed and
 SWaT checks confirm that the effect is not dataset-specific.
+
+## Reconstruction Loss Search
+
+The reconstruction loss search added configurable objectives without changing
+the default `full` architecture. MSE remains the main loss because the robust
+alternatives were not consistently better across datasets.
+
+MSL and SWaT, seed 2021, 15 epochs, `num_workers=2`, `prefetch_factor=2`:
+
+| Profile | Dataset | Raw F1 | Adjusted F1 | Affiliation F1 | Decision |
+| --- | --- | ---: | ---: | ---: | --- |
+| `full` | MSL | 0.1109 | 0.8576 | 0.7006 | MSE baseline |
+| `loss-smoothl1` | MSL | 0.1090 | 0.8572 | 0.7052 | useful MSL candidate |
+| `loss-logcosh` | MSL | 0.1097 | 0.8573 | 0.7059 | best MSL affiliation candidate |
+| `loss-mse-mae` | MSL | 0.1114 | 0.8575 | 0.7017 | too small |
+| `loss-diff` | MSL | 0.1104 | 0.8579 | 0.6994 | reject |
+| `loss-smoothl1-diff` | MSL | 0.1111 | 0.8574 | 0.6929 | reject |
+| `full` | SWaT | 0.3169 | 0.9361 | 0.8458 | MSE baseline |
+| `loss-logcosh` | SWaT | 0.2800 | 0.9269 | 0.8168 | reject as default |
+| `loss-smoothl1` | SWaT | 0.2810 | 0.9257 | 0.8172 | reject as default |
+
+Conclusion: `log_cosh` and `smooth_l1` can improve MSL affiliation F1 by
+reducing outlier-dominated gradients, but the same losses degrade SWaT. They
+should be kept as reproducibility profiles and loss-sensitivity ablations, not
+as the main compact architecture. The first-difference loss does not help MSL
+and should not be expanded further unless a new temporal-boundary hypothesis is
+introduced.
 
 ## Affiliation-Oriented Scoring Check
 

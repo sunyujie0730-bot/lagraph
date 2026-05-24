@@ -109,6 +109,11 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "use_temporal_graph_regularization": False,
     "lambda_temporal_graph_smooth": 0.0,
     "lambda_temporal_graph_locality": 0.0,
+    "reconstruction_loss_type": "mse",
+    "smooth_l1_beta": 1.0,
+    "mse_l1_alpha": 0.7,
+    "charbonnier_eps": 1e-3,
+    "lambda_temporal_diff_loss": 0.0,
     "use_robust_reconstruction_loss": False,
     "robust_loss_trim_ratio": 0.0,
     "robust_loss_min_weight": 0.2,
@@ -966,6 +971,11 @@ class LaGraph:
                 "use_temporal_graph_regularization": getattr(self.config, "use_temporal_graph_regularization", None),
                 "lambda_temporal_graph_smooth": getattr(self.config, "lambda_temporal_graph_smooth", None),
                 "lambda_temporal_graph_locality": getattr(self.config, "lambda_temporal_graph_locality", None),
+                "reconstruction_loss_type": getattr(self.config, "reconstruction_loss_type", None),
+                "smooth_l1_beta": getattr(self.config, "smooth_l1_beta", None),
+                "mse_l1_alpha": getattr(self.config, "mse_l1_alpha", None),
+                "charbonnier_eps": getattr(self.config, "charbonnier_eps", None),
+                "lambda_temporal_diff_loss": getattr(self.config, "lambda_temporal_diff_loss", None),
                 "use_robust_reconstruction_loss": getattr(self.config, "use_robust_reconstruction_loss", None),
                 "robust_loss_trim_ratio": getattr(self.config, "robust_loss_trim_ratio", None),
                 "robust_loss_min_weight": getattr(self.config, "robust_loss_min_weight", None),
@@ -1008,6 +1018,7 @@ class LaGraph:
                 input_data = input_data.float().to(self.device, non_blocking=True)
                 rec, _, _, _, _, aux_losses, _ = self.model(input_data)
                 loss = self._reconstruction_loss(rec, input_data)
+                loss = self._add_temporal_difference_loss(loss, rec, input_data)
                 # ★ P0-1: lambda_causal_l1 → lambda_locality_l1
                 if aux_losses and 'sparse_loss' in aux_losses:
                     loss = loss + self.config.lambda_locality_l1 * aux_losses['sparse_loss']
@@ -1017,7 +1028,30 @@ class LaGraph:
 
 
     def _reconstruction_loss(self, rec, target):
-        elem_loss = F.mse_loss(rec, target, reduction='none')
+        loss_type = str(getattr(self.config, "reconstruction_loss_type", "mse") or "mse").lower()
+        diff = rec - target
+        if loss_type == "mse":
+            elem_loss = diff.pow(2)
+        elif loss_type == "mae":
+            elem_loss = diff.abs()
+        elif loss_type == "smooth_l1":
+            beta = float(getattr(self.config, "smooth_l1_beta", 1.0) or 1.0)
+            elem_loss = F.smooth_l1_loss(rec, target, reduction='none', beta=max(beta, 1e-6))
+        elif loss_type == "log_cosh":
+            abs_diff = diff.abs()
+            elem_loss = abs_diff + F.softplus(-2.0 * abs_diff) - np.log(2.0)
+        elif loss_type == "charbonnier":
+            eps = float(getattr(self.config, "charbonnier_eps", 1e-3) or 1e-3)
+            elem_loss = torch.sqrt(diff.pow(2) + eps * eps) - eps
+        elif loss_type == "mse_mae":
+            alpha = float(getattr(self.config, "mse_l1_alpha", 0.7) or 0.7)
+            alpha = min(max(alpha, 0.0), 1.0)
+            elem_loss = alpha * diff.pow(2) + (1.0 - alpha) * diff.abs()
+        else:
+            raise ValueError(
+                f"Unsupported reconstruction_loss_type={loss_type!r}. "
+                "Choose from mse, mae, smooth_l1, log_cosh, charbonnier, mse_mae."
+            )
         sample_loss = elem_loss.mean(dim=(1, 2))
         if not getattr(self.config, "use_robust_reconstruction_loss", False):
             return sample_loss.mean()
@@ -1037,6 +1071,14 @@ class LaGraph:
             if min_weight > 0:
                 weights = weights.clamp_min(min_weight)
         return (sample_loss * weights).sum() / weights.sum().clamp_min(1.0)
+
+    def _add_temporal_difference_loss(self, loss, rec, target):
+        weight = float(getattr(self.config, "lambda_temporal_diff_loss", 0.0) or 0.0)
+        if weight <= 0 or rec.shape[1] < 2:
+            return loss
+        rec_diff = rec[:, 1:, :] - rec[:, :-1, :]
+        target_diff = target[:, 1:, :] - target[:, :-1, :]
+        return loss + weight * F.mse_loss(rec_diff, target_diff)
 
 
     def _add_temporal_graph_regularization(self, loss, aux_losses):
@@ -1646,6 +1688,7 @@ class LaGraph:
                 rec, _, _, _, _, aux_losses, _ = self.model(input_data)
 
                 loss = self._reconstruction_loss(rec, input_data)
+                loss = self._add_temporal_difference_loss(loss, rec, input_data)
 
                 # ★ P0-1: lambda_causal_l1 → lambda_locality_l1
                 if aux_losses and 'sparse_loss' in aux_losses:
@@ -1854,6 +1897,7 @@ class LaGraph:
                 rec, _, _, _, _, aux_losses, _ = self.model(input_data)
 
                 loss = self._reconstruction_loss(rec, input_data)
+                loss = self._add_temporal_difference_loss(loss, rec, input_data)
 
                 # ★ P0-1: lambda_causal_l1 → lambda_locality_l1
                 if aux_losses and 'sparse_loss' in aux_losses:
@@ -1943,6 +1987,11 @@ class LaGraph:
                 "use_temporal_graph_regularization": getattr(self.config, "use_temporal_graph_regularization", None),
                 "lambda_temporal_graph_smooth": getattr(self.config, "lambda_temporal_graph_smooth", None),
                 "lambda_temporal_graph_locality": getattr(self.config, "lambda_temporal_graph_locality", None),
+                "reconstruction_loss_type": getattr(self.config, "reconstruction_loss_type", None),
+                "smooth_l1_beta": getattr(self.config, "smooth_l1_beta", None),
+                "mse_l1_alpha": getattr(self.config, "mse_l1_alpha", None),
+                "charbonnier_eps": getattr(self.config, "charbonnier_eps", None),
+                "lambda_temporal_diff_loss": getattr(self.config, "lambda_temporal_diff_loss", None),
                 "use_robust_reconstruction_loss": getattr(self.config, "use_robust_reconstruction_loss", None),
                 "robust_loss_trim_ratio": getattr(self.config, "robust_loss_trim_ratio", None),
                 "robust_loss_min_weight": getattr(self.config, "robust_loss_min_weight", None),
