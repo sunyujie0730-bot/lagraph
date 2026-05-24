@@ -212,6 +212,75 @@ class MultiScaleAnomalyScorer(nn.Module):
 #  ★ P0 [MODIFIED] SparseGCN — Dual-Path VQ + MultiScaleAnomalyScorer
 # ══════════════════════════════════════════════════════════════════
 
+class LaggedCausalMechanism(nn.Module):
+    """
+    Lag-constrained structural mechanism.
+
+    The module predicts X_i(t) from X_j(t-k), k > 0. This is not a complete
+    causal identification procedure, but it gives the model an explicit
+    temporal-precedence constraint that can be tested by ablation.
+    """
+
+    def __init__(self, channel, lags=(1, 2, 4), topk=5, dropout=0.1):
+        super().__init__()
+        self.channel = channel
+        self.lags = tuple(int(lag) for lag in lags if int(lag) > 0)
+        if not self.lags:
+            self.lags = (1,)
+        self.max_lag = max(self.lags)
+        self.topk = min(max(1, int(topk)), channel)
+
+        self.edge_logits = nn.Parameter(
+            torch.randn(len(self.lags), channel, channel) * 0.01,
+        )
+        self.lag_logits = nn.Parameter(torch.zeros(len(self.lags)))
+        self.self_loop_bias = nn.Parameter(torch.tensor(0.5))
+        self.dropout = nn.Dropout(dropout)
+
+    def _sparse_parent_weights(self):
+        logits = self.edge_logits.clone()
+        eye = torch.eye(self.channel, device=logits.device, dtype=torch.bool).unsqueeze(0)
+        logits = torch.where(eye, logits + self.self_loop_bias, logits)
+        weights = F.softmax(logits, dim=1)
+        if self.topk < self.channel:
+            topk_idx = torch.topk(weights, k=self.topk, dim=1).indices
+            mask = torch.zeros_like(weights).scatter_(1, topk_idx, 1.0)
+            weights = weights * mask
+            weights = weights / weights.sum(dim=1, keepdim=True).clamp_min(1e-8)
+        return weights
+
+    def forward(self, x):
+        B, L, C = x.shape
+        parent_weights = self._sparse_parent_weights()
+        if L <= self.max_lag:
+            zero_score = x.new_zeros(B, L)
+            return x, zero_score, parent_weights
+
+        current = x[:, self.max_lag:, :]
+        lag_weights = F.softmax(self.lag_logits, dim=0)
+        pred = current.new_zeros(current.shape)
+
+        for lag_idx, lag in enumerate(self.lags):
+            start = self.max_lag - lag
+            past = x[:, start:L - lag, :]
+            pred = pred + lag_weights[lag_idx] * torch.einsum(
+                "blc,co->blo", past, parent_weights[lag_idx],
+            )
+        pred = self.dropout(pred)
+
+        err = F.smooth_l1_loss(pred, current, reduction="none")
+        score_valid = err.mean(dim=-1)
+        score = F.pad(score_valid, (self.max_lag, 0), mode="constant", value=0.0)
+
+        pred_full = x.new_zeros(B, L, C)
+        pred_full[:, :self.max_lag, :] = x[:, :self.max_lag, :]
+        pred_full[:, self.max_lag:, :] = pred
+        return pred_full, score, parent_weights
+
+    def get_sparsity_loss(self):
+        return self._sparse_parent_weights().abs().mean()
+
+
 class SparseGCN(nn.Module):
     """
     SparseLaGraph v11.2 — 极简双图协同异常检测模型
@@ -260,6 +329,13 @@ class SparseGCN(nn.Module):
                  use_graph_shift_score=False,
                  graph_shift_score_weight=0.1,
                  graph_shift_score_eps=1e-6,
+                 use_lagged_causal_graph=False,
+                 causal_lags=(1, 2, 4),
+                 causal_topk=5,
+                 causal_detach_backbone=True,
+                 use_causal_score=False,
+                 causal_score_weight=0.1,
+                 causal_score_eps=1e-6,
                  use_temporal_graph_regularization=False,
                  use_score_channel_normalization=False,
                  score_channel_norm_mode="robust_z",
@@ -287,6 +363,15 @@ class SparseGCN(nn.Module):
         self.use_graph_shift_score = use_graph_shift_score
         self.graph_shift_score_weight = float(graph_shift_score_weight)
         self.graph_shift_score_eps = float(graph_shift_score_eps)
+        self.use_lagged_causal_graph = use_lagged_causal_graph
+        if isinstance(causal_lags, str):
+            causal_lags = [int(x.strip()) for x in causal_lags.split(",") if x.strip()]
+        self.causal_lags = tuple(int(lag) for lag in causal_lags)
+        self.causal_topk = int(causal_topk)
+        self.causal_detach_backbone = causal_detach_backbone
+        self.use_causal_score = use_causal_score
+        self.causal_score_weight = float(causal_score_weight)
+        self.causal_score_eps = float(causal_score_eps)
         self.use_temporal_graph_regularization = use_temporal_graph_regularization
         self.use_score_channel_normalization = use_score_channel_normalization
         self.score_channel_norm_mode = score_channel_norm_mode
@@ -313,6 +398,16 @@ class SparseGCN(nn.Module):
         )
         self.register_buffer(
             'graph_shift_score_scale',
+            torch.ones(1),
+            persistent=False,
+        )
+        self.register_buffer(
+            'causal_score_center',
+            torch.zeros(1),
+            persistent=False,
+        )
+        self.register_buffer(
+            'causal_score_scale',
             torch.ones(1),
             persistent=False,
         )
@@ -417,6 +512,16 @@ class SparseGCN(nn.Module):
         # === VQ 增强权重 ===
         self.vq_score_weight = nn.Parameter(torch.tensor(float(vq_score_weight)))
 
+        if use_lagged_causal_graph:
+            self.lagged_causal_graph = LaggedCausalMechanism(
+                channel=c_out,
+                lags=self.causal_lags,
+                topk=self.causal_topk,
+                dropout=dropout,
+            )
+        else:
+            self.lagged_causal_graph = None
+
         # ★ 保持与原有 forward 返回格式兼容
         self.use_freq_loss = False
         self.lambda_freq = 0.0
@@ -442,6 +547,7 @@ class SparseGCN(nn.Module):
         self._set_trainable(self.graph_fusion_time_gate, self.use_parallel_graph_fusion)
         if self.graph_fusion_residual_logit is not None:
             self.graph_fusion_residual_logit.requires_grad = self.use_parallel_graph_fusion
+        self._set_trainable(self.lagged_causal_graph, self.use_lagged_causal_graph)
         self._set_trainable(self.vq_bottleneck, self.use_vq_bypass)
         self._set_trainable(self.multi_scale_scorer, self.use_multi_scale_scorer)
 
@@ -502,6 +608,20 @@ class SparseGCN(nn.Module):
         score_scale = self.graph_shift_score_scale.to(device=A_adaptive.device, dtype=A_adaptive.dtype)
         return (raw - score_center).clamp_min(0.0) / score_scale.clamp_min(self.graph_shift_score_eps)
 
+    def set_causal_score_stats(self, score_center, score_scale):
+        self.causal_score_center.copy_(
+            torch.as_tensor([score_center], dtype=self.causal_score_center.dtype, device=self.causal_score_center.device)
+        )
+        self.causal_score_scale.copy_(
+            torch.as_tensor([score_scale], dtype=self.causal_score_scale.dtype, device=self.causal_score_scale.device)
+            .clamp_min(self.causal_score_eps)
+        )
+
+    def _normalize_causal_score(self, causal_score):
+        center = self.causal_score_center.to(device=causal_score.device, dtype=causal_score.dtype)
+        scale = self.causal_score_scale.to(device=causal_score.device, dtype=causal_score.dtype)
+        return (causal_score - center).clamp_min(0.0) / scale.clamp_min(self.causal_score_eps)
+
     def _normalize_score_error(self, err):
         if not self.use_score_channel_normalization:
             return err
@@ -532,6 +652,18 @@ class SparseGCN(nn.Module):
         # 步骤 1: 序列分解
         resid, trend = self.decomp(x)
         graph_fusion_gate = None
+        causal_score = None
+        causal_mechanism_loss = None
+
+        if self.use_lagged_causal_graph and self.lagged_causal_graph is not None:
+            causal_input = resid.detach() if self.causal_detach_backbone else resid
+            causal_pred, causal_score, _ = self.lagged_causal_graph(causal_input)
+            valid_start = self.lagged_causal_graph.max_lag
+            if L > valid_start:
+                causal_mechanism_loss = F.smooth_l1_loss(
+                    causal_pred[:, valid_start:, :],
+                    causal_input[:, valid_start:, :],
+                )
 
         # 步骤 2: 自适应通道依赖图
         if self.use_channel_graph:
@@ -594,6 +726,11 @@ class SparseGCN(nn.Module):
         aux_losses['sparse_loss'] = self.get_sparse_loss()
         aux_losses['vq_loss'] = vq_loss_val
         aux_losses['vq_dist'] = vq_dist  # (B, L) — 用于增强异常评分
+        if causal_score is not None:
+            aux_losses['causal_score'] = causal_score
+        if causal_mechanism_loss is not None:
+            aux_losses['causal_mechanism_loss'] = causal_mechanism_loss
+            aux_losses['causal_sparse_loss'] = self.lagged_causal_graph.get_sparsity_loss()
         if graph_fusion_gate is not None:
             aux_losses['graph_fusion_gate_mean'] = graph_fusion_gate.detach().mean()
             aux_losses['graph_fusion_residual_weight'] = torch.sigmoid(
@@ -636,6 +773,7 @@ class SparseGCN(nn.Module):
         x_input_dict = {}
         vq_dist_dict = {}
         graph_shift_dict = {}
+        causal_score_dict = {}
 
         for ws in valid_sizes:
             x_win = x[:, -ws:, :]  # (B, ws, C)
@@ -667,6 +805,9 @@ class SparseGCN(nn.Module):
             if self.use_graph_shift_score:
                 graph_shift = self._graph_shift_score(A_adaptive).unsqueeze(1)
                 graph_shift_dict[ws] = graph_shift.expand(-1, ws)
+            if self.use_causal_score and aux_losses.get('causal_score', None) is not None:
+                c_score = aux_losses['causal_score']
+                causal_score_dict[ws] = c_score[:, :ws] if ws < self.win_size else c_score
 
         # v11.1 FIX [Bug 2]: 自适应 VQ 距离归一化
         raw_vq_score = self._aggregate_vq_dist(vq_dist_dict, valid_sizes, B, L, x.device)
@@ -715,6 +856,16 @@ class SparseGCN(nn.Module):
                 pad_graph = torch.zeros(B, pad_len, device=score.device)
                 graph_score = torch.cat([pad_graph, graph_score], dim=1)
             score = score + self.graph_shift_score_weight * graph_score
+
+        if self.use_causal_score and causal_score_dict:
+            causal_score = self._aggregate_vq_dist(causal_score_dict, valid_sizes, B, L, x.device)
+            causal_score = self._normalize_causal_score(causal_score)
+            causal_score = causal_score[:, -score.shape[1]:] if causal_score.shape[1] >= score.shape[1] else causal_score
+            if causal_score.shape[1] < score.shape[1]:
+                pad_len = score.shape[1] - causal_score.shape[1]
+                pad_causal = torch.zeros(B, pad_len, device=score.device)
+                causal_score = torch.cat([pad_causal, causal_score], dim=1)
+            score = score + self.causal_score_weight * causal_score
 
         # score 输出是 L_max（即 max(win_sizes)），按实际有效窗口截断
         L_eff = max(valid_sizes)

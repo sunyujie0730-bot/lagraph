@@ -87,6 +87,15 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "use_graph_shift_score": False,
     "graph_shift_score_weight": 0.1,
     "graph_shift_score_eps": 1e-6,
+    "use_lagged_causal_graph": False,
+    "causal_lags": [1, 2, 4],
+    "causal_topk": 5,
+    "causal_detach_backbone": True,
+    "lambda_causal_mechanism": 0.0,
+    "lambda_causal_sparse": 0.0,
+    "use_causal_score": False,
+    "causal_score_weight": 0.1,
+    "causal_score_eps": 1e-6,
     "use_temporal_graph_regularization": False,
     "lambda_temporal_graph_smooth": 0.0,
     "lambda_temporal_graph_locality": 0.0,
@@ -924,6 +933,14 @@ class LaGraph:
                 "graph_fusion_residual_init": getattr(self.config, "graph_fusion_residual_init", None),
                 "use_graph_shift_score": getattr(self.config, "use_graph_shift_score", None),
                 "graph_shift_score_weight": getattr(self.config, "graph_shift_score_weight", None),
+                "use_lagged_causal_graph": getattr(self.config, "use_lagged_causal_graph", None),
+                "causal_lags": getattr(self.config, "causal_lags", None),
+                "causal_topk": getattr(self.config, "causal_topk", None),
+                "causal_detach_backbone": getattr(self.config, "causal_detach_backbone", None),
+                "lambda_causal_mechanism": getattr(self.config, "lambda_causal_mechanism", None),
+                "lambda_causal_sparse": getattr(self.config, "lambda_causal_sparse", None),
+                "use_causal_score": getattr(self.config, "use_causal_score", None),
+                "causal_score_weight": getattr(self.config, "causal_score_weight", None),
                 "use_temporal_graph_regularization": getattr(self.config, "use_temporal_graph_regularization", None),
                 "lambda_temporal_graph_smooth": getattr(self.config, "lambda_temporal_graph_smooth", None),
                 "lambda_temporal_graph_locality": getattr(self.config, "lambda_temporal_graph_locality", None),
@@ -1009,6 +1026,12 @@ class LaGraph:
             loss = loss + lambda_smooth * aux_losses['temporal_graph_smooth_loss']
         if lambda_locality > 0 and 'temporal_graph_locality_loss' in aux_losses:
             loss = loss + lambda_locality * aux_losses['temporal_graph_locality_loss']
+        lambda_causal = getattr(self.config, "lambda_causal_mechanism", 0.0)
+        lambda_causal_sparse = getattr(self.config, "lambda_causal_sparse", 0.0)
+        if lambda_causal > 0 and 'causal_mechanism_loss' in aux_losses:
+            loss = loss + lambda_causal * aux_losses['causal_mechanism_loss']
+        if lambda_causal_sparse > 0 and 'causal_sparse_loss' in aux_losses:
+            loss = loss + lambda_causal_sparse * aux_losses['causal_sparse_loss']
         return loss
 
     @torch.no_grad()
@@ -1127,6 +1150,56 @@ class LaGraph:
             f"{score_center:.6f}, scale={score_scale:.6f}, graphs={n_graphs}"
         )
 
+    @torch.no_grad()
+    def _fit_causal_score_stats(self, train_data: pd.DataFrame):
+        if train_data is None or self.model is None:
+            return
+        raw_model = self._get_raw_model()
+        if not hasattr(raw_model, "set_causal_score_stats"):
+            return
+
+        print("\n  [CausalLag] Fitting lagged-mechanism score statistics...")
+        if self.early_stopping is not None and self.early_stopping.check_point is not None:
+            raw_model.load_state_dict(self.early_stopping.check_point)
+        self.model.to(self.device)
+        self.model.eval()
+
+        scaled_data = pd.DataFrame(
+            self.scaler.transform(train_data.values),
+            columns=train_data.columns, index=train_data.index,
+        )
+        loader = anomaly_detection_data_provider(
+            scaled_data,
+            batch_size=min(self.config.batch_size, 64),
+            win_size=self.config.win_size,
+            step=1,
+            mode="test",
+            num_workers=0,
+        )
+
+        scores = []
+        for input_data, _ in loader:
+            input_data = input_data.float().to(self.device)
+            _, _, _, _, _, aux_losses, _ = self.model(input_data)
+            causal_score = aux_losses.get("causal_score") if aux_losses else None
+            if causal_score is not None:
+                scores.append(causal_score.detach().cpu().numpy().reshape(-1))
+
+        if not scores:
+            return
+
+        scores = np.concatenate(scores, axis=0)
+        score_center = float(np.median(scores))
+        q25 = float(np.percentile(scores, 25))
+        q75 = float(np.percentile(scores, 75))
+        eps = float(getattr(self.config, "causal_score_eps", 1e-6) or 1e-6)
+        score_scale = max(q75 - q25, float(np.std(scores)), abs(score_center), eps)
+        raw_model.set_causal_score_stats(score_center, score_scale)
+        print(
+            "  [CausalLag] score median="
+            f"{score_center:.6f}, scale={score_scale:.6f}"
+        )
+
     # ======================== 训练（单卡）=======================
     def _destroy_model_and_clean_cuda(self):
         import gc
@@ -1204,6 +1277,9 @@ class LaGraph:
 
         if getattr(self.config, "use_graph_shift_score", False):
             self._fit_graph_shift_stats(self._train_raw)
+
+        if getattr(self.config, "use_causal_score", False):
+            self._fit_causal_score_stats(self._train_raw)
 
         # ★ v10 fix: 训练集缓存分数
         if self._train_raw is not None:
@@ -1287,6 +1363,13 @@ class LaGraph:
             use_graph_shift_score=getattr(self.config, "use_graph_shift_score", False),
             graph_shift_score_weight=getattr(self.config, "graph_shift_score_weight", 0.1),
             graph_shift_score_eps=getattr(self.config, "graph_shift_score_eps", 1e-6),
+            use_lagged_causal_graph=getattr(self.config, "use_lagged_causal_graph", False),
+            causal_lags=getattr(self.config, "causal_lags", [1, 2, 4]),
+            causal_topk=getattr(self.config, "causal_topk", 5),
+            causal_detach_backbone=getattr(self.config, "causal_detach_backbone", True),
+            use_causal_score=getattr(self.config, "use_causal_score", False),
+            causal_score_weight=getattr(self.config, "causal_score_weight", 0.1),
+            causal_score_eps=getattr(self.config, "causal_score_eps", 1e-6),
             use_temporal_graph_regularization=getattr(self.config, "use_temporal_graph_regularization", False),
             use_score_channel_normalization=getattr(self.config, "use_score_channel_normalization", False),
             score_channel_norm_mode=getattr(self.config, "score_channel_norm_mode", "robust_z"),
@@ -1506,6 +1589,13 @@ class LaGraph:
             use_graph_shift_score=getattr(self.config, "use_graph_shift_score", False),
             graph_shift_score_weight=getattr(self.config, "graph_shift_score_weight", 0.1),
             graph_shift_score_eps=getattr(self.config, "graph_shift_score_eps", 1e-6),
+            use_lagged_causal_graph=getattr(self.config, "use_lagged_causal_graph", False),
+            causal_lags=getattr(self.config, "causal_lags", [1, 2, 4]),
+            causal_topk=getattr(self.config, "causal_topk", 5),
+            causal_detach_backbone=getattr(self.config, "causal_detach_backbone", True),
+            use_causal_score=getattr(self.config, "use_causal_score", False),
+            causal_score_weight=getattr(self.config, "causal_score_weight", 0.1),
+            causal_score_eps=getattr(self.config, "causal_score_eps", 1e-6),
             use_temporal_graph_regularization=getattr(self.config, "use_temporal_graph_regularization", False),
             use_score_channel_normalization=getattr(self.config, "use_score_channel_normalization", False),
             score_channel_norm_mode=getattr(self.config, "score_channel_norm_mode", "robust_z"),
@@ -1669,6 +1759,14 @@ class LaGraph:
                 "graph_fusion_residual_init": getattr(self.config, "graph_fusion_residual_init", None),
                 "use_graph_shift_score": getattr(self.config, "use_graph_shift_score", None),
                 "graph_shift_score_weight": getattr(self.config, "graph_shift_score_weight", None),
+                "use_lagged_causal_graph": getattr(self.config, "use_lagged_causal_graph", None),
+                "causal_lags": getattr(self.config, "causal_lags", None),
+                "causal_topk": getattr(self.config, "causal_topk", None),
+                "causal_detach_backbone": getattr(self.config, "causal_detach_backbone", None),
+                "lambda_causal_mechanism": getattr(self.config, "lambda_causal_mechanism", None),
+                "lambda_causal_sparse": getattr(self.config, "lambda_causal_sparse", None),
+                "use_causal_score": getattr(self.config, "use_causal_score", None),
+                "causal_score_weight": getattr(self.config, "causal_score_weight", None),
                 "use_temporal_graph_regularization": getattr(self.config, "use_temporal_graph_regularization", None),
                 "lambda_temporal_graph_smooth": getattr(self.config, "lambda_temporal_graph_smooth", None),
                 "lambda_temporal_graph_locality": getattr(self.config, "lambda_temporal_graph_locality", None),

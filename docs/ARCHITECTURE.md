@@ -54,8 +54,9 @@ can drop.
 Additional 2026-05-24 architecture candidates were tested but not promoted:
 `parallel-dual`, `parallel-dual-time`, `residual-dual`,
 `residual-dual-time`, `graph-shift`, `graph-shift-lite`, and
-`graph-shift-strong`. They remain reproducibility profiles rather than main
-paper architecture.
+`graph-shift-strong`. A first lag-constrained causal branch was also added as
+`causal-lag`, `causal-lag-score`, and `causal-lag-score-strong`. These remain
+reproducibility profiles rather than main paper architecture.
 
 ## System Flow
 
@@ -241,6 +242,8 @@ Important details:
 | `residual-dual` | on | fixed, residual parallel correction | on | direct reconstruction | rejected conservative fusion candidate |
 | `residual-dual-time` | on | fixed, time-gated residual correction | on | direct reconstruction | rejected conservative fusion candidate |
 | `graph-shift` | on | fixed | on | reconstruction + graph-shift score | rejected structure-shift scoring candidate |
+| `causal-lag` | on | fixed | on | direct reconstruction | lagged mechanism branch, score off |
+| `causal-lag-score` | on | fixed | on | reconstruction + lagged mechanism score | first causal-score candidate |
 | `with-scorer` | on | fixed | on | old multi-scale scorer | old scoring ablation |
 | `no-vq` | on | fixed | off | old multi-scale scorer | VQ ablation |
 | `channel-only` | on | off | on | direct reconstruction | channel graph ablation |
@@ -291,6 +294,7 @@ MSL seed-2021, 15 epochs, current aligned code path:
 | `residual-dual-time` | `full` plus small time-wise parallel residual | 0.1081 | 0.8577 | 0.6998 | reject; near-affiliation tie but no gain |
 | `graph-shift` | add normal-graph deviation to anomaly score | 0.1097 | 0.8572 | 0.7001 | reject; interpretable but not better |
 | `graph-shift-lite` | lower graph-shift weight | 0.1105 | 0.8576 | 0.6959 | reject |
+| `causal-lag-score` | lagged parent mechanism, detached backbone, score weight 0.05 | 0.1102 | 0.8574 | 0.6983 | reject as main; keep as causal prototype |
 
 Interpretation: the issue with the dual graph is not just serial ordering. The
 unsupervised reconstruction objective gives no direct supervision for a fusion
@@ -298,6 +302,9 @@ gate to learn "when to trust channel versus temporal structure." Parallel and
 residual fusion therefore change score ranking, but do not improve event-level
 affiliation on MSL. Graph-shift scoring is more interpretable, but the learned
 same-time channel graph is too stable on MSL to add useful anomaly evidence.
+The first lagged causal branch confirms that temporal-precedence constraints are
+implementable, but a simple lagged reconstruction residual is not yet
+discriminative enough to improve affiliation F1.
 
 ## Causal Inference Status
 
@@ -360,8 +367,9 @@ the current dependency graph is already a causal graph
 ## Practical Next Step
 
 Do not spend more experiments on generic dual-graph fusion. The higher-priority
-architecture direction is now a lagged causal/structural graph on top of the
-stable `full` profile:
+architecture direction remains a lagged causal/structural graph on top of the
+stable `full` profile, but the first prototype should be treated as negative
+evidence rather than a final causal module:
 
 ```text
 parents_i(t) = sparse set of X_j(t-k), k > 0
@@ -370,8 +378,12 @@ score = reconstruction_error + mechanism_violation
 ```
 
 This gives the paper a concrete causal claim through temporal precedence and
-mechanism violation. A fixed/dynamic temporal mixture can still be tested later,
-but it has lower priority than making the channel graph causally meaningful.
+mechanism violation. The next version should not merely add the lagged residual
+as a score. It should learn sparse parent mechanisms with stronger
+counterfactual tests, for example masking candidate parents and measuring the
+change in reconstruction or mechanism residual. A fixed/dynamic temporal
+mixture can still be tested later, but it has lower priority than making the
+channel graph causally meaningful.
 
 ## Commands
 

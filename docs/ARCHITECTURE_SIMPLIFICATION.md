@@ -50,6 +50,9 @@ should not be treated as valid modules or ablations.
 | `graph-shift` | on | on | on | removed | off | Rejected normal-graph deviation scoring profile |
 | `graph-shift-lite` | on | on | on | removed | off | Rejected low-weight graph-shift profile |
 | `graph-shift-strong` | on | on | on | removed | off | Rejected high-weight graph-shift profile |
+| `causal-lag` | on | on | on | removed | off | Lagged mechanism branch, score disabled |
+| `causal-lag-score` | on | on | on | removed | off | Rejected lagged mechanism score profile |
+| `causal-lag-score-strong` | on | on | on | removed | off | Stronger lagged mechanism score profile |
 | `dynamic-temporal-regularized` | on | dynamic + residual gate + temporal graph regularization | on | removed | off | Rejected graph smoothness/locality regularization profile |
 | `dynamic-temporal-robust` | on | dynamic + residual gate | on | removed | off | Rejected 5% trimmed reconstruction loss profile |
 | `dynamic-temporal-robust-lite` | on | dynamic + residual gate | on | removed | off | Rejected 2% trimmed reconstruction loss profile |
@@ -214,6 +217,29 @@ on normal windows, so it has no direct signal for anomaly-time graph selection.
 Graph-shift scoring is interpretable, but the same-time channel graph is too
 stable on MSL to improve the anomaly ranking. Keep these profiles only for
 reproducibility and negative-ablation reporting.
+
+## Lagged Causal Prototype Check
+
+A first lag-constrained causal prototype was added after the graph-fusion
+experiments. The module predicts `X_i(t)` from lagged parents `X_j(t-k)` with
+`k in {1, 2, 4}` and top-5 sparse parents. To avoid disturbing the main
+reconstruction backbone, the current implementation trains this branch on
+`resid.detach()` by default. This makes it an explanatory/scoring branch rather
+than a module that changes the main representation.
+
+MSL seed-2021, 15 epochs:
+
+| Profile | Main change | Raw F1 | Adjusted F1 | Affiliation F1 | Decision |
+| --- | --- | ---: | ---: | ---: | --- |
+| `full` | Current compact architecture | 0.1109 | 0.8576 | 0.7006 | Keep as main |
+| `causal-lag` | Lagged mechanism branch, no causal score | 0.1101 | 0.8530 | 0.6970 | Reject as main |
+| `causal-lag-score` | Detached lagged mechanism score, weight 0.05 | 0.1102 | 0.8574 | 0.6983 | Reject as main |
+
+Interpretation: temporal precedence is now represented in code, which helps the
+paper direction, but the first mechanism-residual score is not discriminative
+enough to improve affiliation F1. The next causal attempt should use
+counterfactual parent masking or intervention-style edge validation instead of
+simply adding lagged prediction error to the anomaly score.
 
 ## Affiliation-Oriented Scoring Check
 
