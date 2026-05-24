@@ -1,492 +1,412 @@
-# LaGraph v11.3 P1-FIXED (SparseLaGraph) Architecture
+# LaGraph Architecture
 
-> **Version**: v11.3 P1-FIXED (SparseLaGraph) — Dual-Path VQ + Attention-based Multi-Scale Aggregation + Top-K Channel Aggregation + BoundaryDetector + Dimension-Adaptive Top-K
-> **Parameters**: ~0.4M (d_model=128, e_layers=2, vq_codebook=64)
-> **Paper**: TKDE 2026
-> **Previous**: v11.2 P0 — ① Top-K Channel Aggregation ② Attention-based Aggregation ③ Dual-Path VQ ④ 移除 Top-K Peak Extraction ⑤ 移除 FocalLoss ⑥ BoundaryDetector 权重平衡
-> **P1 Changes (2026-05-19 ~ 2026-05-20)**: 
->   ① **P1-A FIXED (2026-05-20)**: 自适应异常加权 MSE **不再在训练阶段使用** (详见第9章)。训练阶段恢复为纯重建 MSE + VQ + L1 稀疏正则化。
->   ② **P1-C 低维通道自适应 Top-K**: 按通道维度分档选择 Top-K 比例（≥50维→10%, 20-50维→15%, <20维→25%）
+Date: 2026-05-24
+Branch: `codex/5070-env-migration`
+Runtime target: RTX 5070 single GPU
 
----
+## Positioning
 
-## Overall Architecture v11.2 P0
+LaGraph is currently a compact reconstruction-based multivariate time-series
+anomaly detector. The stable main profile is `full`, which keeps the dual-graph
+representation, VQ regularization, dynamic temporal encoding, and direct
+reconstruction anomaly scoring.
 
+The current system should not be described as a large module-stacking method.
+Several earlier modules have been removed or moved to ablation-only status
+because recent experiments did not support them as reliable contributors.
+
+The strongest current paper direction is:
+
+- efficient dual-graph representation learning;
+- interpretable channel and temporal dependency structures;
+- VQ-regularized normal-pattern representation;
+- transparent negative ablations showing why unused modules were removed;
+- optional future extension toward explicit causal structure learning.
+
+Large metric gains are still possible, but they are unlikely to come from adding
+more generic blocks. The best remaining opportunities are causal/structural graph
+learning and score calibration. Until those are implemented and validated, the
+paper should emphasize interpretability, efficiency, and stability rather than
+claiming a universal metric lead.
+
+## Main Profile
+
+The default profile for reporting is `full`.
+
+| Component | Status | Role |
+| --- | --- | --- |
+| MoE decomposition | kept | separates trend and residual signals |
+| Channel adaptive graph | kept | models cross-variable dependency |
+| Fixed temporal graph | kept | provides stable temporal refinement |
+| Dual-path VQ bottleneck | kept | regularizes normal-pattern representation during training |
+| EncoderStack | kept | dynamic temporal-scale feature extraction |
+| Direct reconstruction scoring | kept | main anomaly ranking signal |
+| BoundaryDetector | removed | unsupported after simplification |
+| Multi-scale/VQ scorer | ablation only | old scoring path, not consistently better |
+| Prediction/contrastive/frequency/prototype switches | removed | dead switches in current single-run path |
+
+The strongest adaptive-temporal candidate is `dynamic-temporal-gated`. It
+replaces the fixed temporal graph with a content-adaptive temporal graph and a
+residual gate. It improves raw F1 and SWaT affiliation F1, but it is not a
+uniform replacement for `full` because MSL affiliation F1 and SWaT adjusted F1
+can drop.
+
+## System Flow
+
+```mermaid
+flowchart TD
+    accTitle: LaGraph Main Architecture
+    accDescr: Current LaGraph full profile from input windows to anomaly scores.
+
+    input["Input window<br/>(B, L, C)"]
+    decomp["MoE decomposition<br/>residual + trend"]
+    channel["ChannelAdaptiveGraph<br/>C x C dependency graph"]
+    temporal["SimplifiedTemporalGraph<br/>stable L x L temporal graph"]
+    vq["Dual-path VQ<br/>training-side regularization"]
+    proj["Projection + residual shortcut"]
+    encoder["EncoderStack<br/>dynamic temporal scales"]
+    recon["Reconstruction<br/>(B, L, C)"]
+    score["Direct reconstruction score<br/>top-k channel L1 error"]
+    threshold["Percentile/POT thresholding"]
+    output["Predicted anomaly labels"]
+
+    input --> decomp
+    decomp --> channel
+    channel --> temporal
+    temporal --> vq
+    vq --> proj
+    proj --> encoder
+    encoder --> recon
+    recon --> score
+    score --> threshold
+    threshold --> output
+
+    classDef core fill:#e8f1ff,stroke:#2563eb,stroke-width:1px,color:#111827
+    classDef score_cls fill:#eef8ee,stroke:#16a34a,stroke-width:1px,color:#111827
+    class input,decomp,channel,temporal,vq,proj,encoder,recon core
+    class score,threshold,output score_cls
 ```
-Input: (B, L, C)
-    │
-    ▼
-┌─────────────────────────────────────────┐
-│        MoE Series Decomposition         │
-│  (residual + trend, channel-wise MoE)   │
-└────────────────────┬────────────────────┘
-                     │ residual (B,L,C)
-                     ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                   Dual-Graph Synergy Module                       │
-│                                                                   │
-│  ┌─────────────────────────────┐    ┌─────────────────────────┐  │
-│  │  ChannelAdaptiveGraph       │    │  SimplifiedTemporalGraph │  │
-│  │  (Spatial, C×C)            │    │  (Temporal, L×L)        │  │
-│  │  - PriorE embedding: C→d   │    │  - Pos embedding: L→d   │  │
-│  │  - Data-driven: outer prod │    │  - Lap normalization     │  │
-│  │  - Gated fusion: σ(W·z+b)  │    │  - Causal bias temp     │  │
-│  │  - Top-K sparsity (k=5)    │    │  - Conv + Attn fusion   │  │
-│  │  - 单层消息传递(防过平滑)     │    │                         │  │
-│  │  - L1 regularization       │    │  Output: (B,L,C)        │  │
-│  │  Output: (B,L,C), A_adaptive│   │                         │  │
-│  └─────────────┬───────────────┘    └─────────────┬───────────┘  │
-│                │                                  │               │
-│                └────────────────┬─────────────────┘              │
-│                          resid_temp (B,L,C)                      │
-└─────────────────────────────────┬────────────────────────────────┘
-                                  │
-                                  ▼
-┌──────────────────────────────────────────────┐
-│   ★ Dual-Path VQ Bottleneck (旁路)           │
-│                              ┌─────────────┐ │
-│  resid_temp ──┬──→ VQ ─────→│ vq_dist     │ │
-│               │             │ (异常评分用)   │ │
-│               │             └─────────────┘ │
-│               ├──→ 主路径: continuous_feat  │ │
-│               │    (无量化损失，用于重建)      │ │
-└───────────────┼──────────────────────────────┘
-                │ (B,L,C) — continuous_feat
-                ▼
-┌─────────────────────────────────────────┐
-│           Proj + Residual Gate           │
-│      Linear(C, d_model) + σ gate        │
-│      Residual shortcut from vq_feat     │
-└────────────────────┬────────────────────┘
-                     │ (B,L,128)
-                     ▼
-┌─────────────────────────────────────────┐
-│     ★ EncoderStack (×2, 动态尺度门控)     │
-│                                          │
-│  ┌─────────────────────────────────┐    │
-│  │  MultiScaleTemporalConv        │    │
-│  │  dilation=[1,3,7,15]           │    │
-│  │  SE-style 动态门控               │    │
-│  └──────────────┬──────────────────┘    │
-│                 ▼                       │
-│  ┌─────────────────────────────────┐    │
-│  │  OrdAttention (n_heads=4)      │    │
-│  │  - Learnable skew matrix       │    │
-│  │  - Ordinariness prior          │    │
-│  └──────────────┬──────────────────┘    │
-│                 ▼                       │
-│  ┌─────────────────────────────────┐    │
-│  │  FFN (d_ff=256, GELU)          │    │
-│  └─────────────────────────────────┘    │
-└────────────────────┬────────────────────┘
-                     │ (B,L,128)
-                     ▼
-┌─────────────────────────────────────────┐
-│                Output Proj               │
-│         Linear(128, C) + Trend Linear   │
-└────────────────────┬────────────────────┘
-                     │ Reconstruction (B,L,C)
-                     ▼
-              ┌─────────────────────────────────────┐
-              │ ★ Standard MSE + L1 + VQ Loss       │  (training only)
-              │  MSE(x, x_rec) + λ_sparse·L1_sparse │
-              │  + λ_vq·VQ_loss                     │
-              └─────────────────────────────────────┘
-
-═══════════════════════════════════════
-        推理阶段 (multi_scale_forward)
-═══════════════════════════════════════
-
-for each ws in valid_sizes ([win//4, win//2, win]):
-    x_win = x[:, -ws:, :]
-    Pad to win_size → forward → rec, vq_dist
-    Trim to ws
-    Store rec_win, x_win, vq_dist_win
-
-VQ Score:
-    raw_vq = _aggregate_vq_dist(multi-scale vq_dist)  → (B, L)
-    vq_norm = min-max normalize to [0,1] per batch     ★ Bug 2 fix
-    vq_score = vq_score_weight × vq_norm
-
-Multi-Scale Anomaly Scoring:
-    ★ Attention-based Aggregation:
-        MultiScaleAnomalyScorer(x_rec_dict, x_input_dict, vq_score)
-        → score (B, L_eff)  其中 L_eff = max(valid_sizes)
-
-    ★ P0: BoundaryDetector 作为辅助锐化器:
-        boundary_score = boundary_detector(avg_recon_error)  (B, L)
-        score = recon_weight × score + boundary_weight × boundary_score_aligned
-        recon_weight.clamp(0.5, 1.5) = 1.0
-        boundary_weight.clamp(0.1, 1.0) = 0.3
-
-    ★ P0 REMOVED: Top-K Peak Extraction — 硬阈值截断已移除
-       保留原始分数连续分布，确保阈值计算的鲁棒性
-
-    Final: align score to (B, L)
-
-Output: anomaly_score (B, L), vq_score (B, L)
-```
-
----
 
 ## Module Details
 
-### 1. MoE Series Decomposition (`decomp.py`)
+### MoE Decomposition
 
-Input: (B, L, C) → Output: residual (B,L,C), trend (B,L,C)
+File: `ts_benchmark/baselines/self_impl/LaGraph/decomp.py`
 
-- **MoE Decomposition**: Channel-dependent mixture-of-experts for series decomposition
-- **Moving Average Experts**: 5 kernel sizes [5, 15, 25, 35, 45], gated fusion via GatingNet
-- **Residual**: Original - trend (anomaly-rich component)
-- **Linear Trend**: Future trend prediction (for residual connection)
+Input shape is `(B, L, C)`. The module decomposes each window into:
 
-### 2. ChannelAdaptiveGraph (`graph_learner.py`)
+- residual: anomaly-sensitive local fluctuation;
+- trend: smoother low-frequency component.
 
-Input: residual (B,L,C) → Output: resid_adapted (B,L,C), A_adaptive (B,C,C)
+The model reconstructs `residual + trend` at the output. This keeps the detector
+within a self-supervised reconstruction setting and avoids relying on anomaly
+labels during training.
 
-- **Prior Embedding**: `nn.Embedding(C, d_model)` + `Linear(d_model, C×C)` → C×C prior graph
-- **Data-Driven**: Temporal mean pooling `(B,L,C)→(B,C,1)`, outer product `matmul(pool, pool.T)` → C×C data graph
-- **Gated Fusion**: `σ(W·[prior, data] + b)` → element-wise fusion weight
-- **Top-K Sparsity**: Keep top-K (default=5) per row, zero out rest
-- **Single-layer message passing** (Bug 3 fix: 2 layers caused over-smoothing on 51-dim SWaT)
-- **L1 Regularization**: `||A_channel||₁` to encourage sparsity
+### ChannelAdaptiveGraph
 
-### 3. SimplifiedTemporalGraph (`graph_learner.py`)
+File: `ts_benchmark/baselines/self_impl/LaGraph/graph_learner.py`
 
-Input: resid_adapted (B,L,C), A_adaptive (B,C,C) → Output: resid_temp (B,L,C)
+The channel graph models variable-to-variable dependency. It combines:
 
-- **Position Encoding**: Learnable `nn.Parameter(L, d_model)` → positional features
-- **Causal Bias Temperature Modulation**: 
-  - `causal_encoder` MLP: `C → d_model/2 → 1`
-  - `temp = sigmoid(causal_encoder(x)) * T_max` — per-channel temperature
-  - Controls temporal graph locality adaptively
-- **Laplacian Normalization**: `I - D^{-1/2} A D^{-1/2}` for stability
-- **Temporal Convolution**: Dilated conv on time dimension
-- **Attention Fusion**: Multi-head dot-product attention with temporal features
+- learned channel prior embeddings;
+- data-driven dependency from pooled residual features;
+- gated fusion between prior and data terms;
+- top-k sparsification;
+- single-layer message passing to avoid over-smoothing.
 
-### 4. ★ VQ Bottleneck — Dual-Path (`vq_bottleneck.py`)
+The output is `resid_adapted` and an interpretable `C x C` adjacency matrix.
+This is currently the strongest architectural component for paper narrative
+because it has a direct multivariate interpretation.
 
-Input: resid_temp (B,L,C) → Output: continuous_feat (B,L,C), vq_loss, vq_dist (B,L)
+### Temporal Graph
 
-**Dual-Path VQ 模式** (P0: `serial_mode=False`):
+The stable `full` profile uses `SimplifiedTemporalGraph`.
 
-```
-Dual-Path 模式:
-  resid_temp
-    ├── 主路径 (Continuous Path): 连续特征直通 → EncoderStack
-    │    无量化损失，保持完整信息流
-    │
-    └── 旁路 VQ (VQ Bypass): VQ量化 → vq_dist (B,L)
-         仅用于异常评分增强，不参与重建
-```
+The candidate `dynamic-temporal-gated` profile uses `DynamicTemporalGraph`,
+which generates an adaptive temporal adjacency by QK attention over the current
+window, applies row-wise top-k sparsity, then mixes dynamic temporal aggregation
+with local convolution through a residual gate.
 
-| 路径 | 用途 | 信息 | 
-|:---|:---|:---|
-| 主路径 continuous_feat | 重建 (EncoderStack) | 连续，无损 |
-| 旁路 vq_dist | 异常评分（推理时） | 离散度信号 |
+Current evidence:
 
-- **Vector Quantization**: Maps continuous features to nearest codebook entries
-- **Codebook Size**: 64 entries, each of dimension C
-- **Loss**: `commitment_cost * MSE(z, sg(z_q)) + MSE(sg(z), z_q)` where `commitment_cost=0.25`
-- **Training Strategy**:
-  - **VQ Cooldown**: First `vq_cooldown_epochs` (15) epochs freeze all non-VQ params
-  - After cooldown: full model trains with `lambda_vq=0.1` × VQ loss
+- fixed temporal graph is more stable as the main method;
+- gated dynamic temporal graph improves raw F1 and SWaT affiliation F1;
+- dynamic temporal graph is sensitive to residual strength and top-k sparsity;
+- tested residual-init `0.05/0.20` and dynamic top-k `8/50` were worse than the
+  default gated setting.
 
-### 5. ★ EncoderStack — Dynamic Scale Selection (`temporal_encoder.py`)
+### Dual-Path VQ
 
-Input: (B, L, 128) → Output: (B, L, 128)
+File: `ts_benchmark/baselines/self_impl/LaGraph/vq_bottleneck.py`
 
-**Two identical encoder layers**:
+VQ is retained as a training-side regularizer. It should not be described as the
+main anomaly score.
 
-1. **MultiScaleTemporalConv (Dynamic Scale Selection)**:
-   - `Conv1d(128→128, kernel=3, dilation=[1,3,7,15])` — 4 parallel convs
-   - SE-style 动态门控:
-     - `squeeze`: AdaptiveAvgPool1d → (B, d_model)
-     - `excitation`: FC(d_model→d/4→4) → Softmax → (B, 4) 动态权重
-   - Merge: `Linear(d_model, d_model)` + GELU
-2. **OrdAttention** (`attention.py`):
-   - Standard multi-head attention (n_heads=4)
-   - **Channel Mask**: Learnable binary mask restricting attention patterns
-   - Depth-wise separable conv preprocessing for local temporal features
-3. **FFN**: `Linear(128→256) → GELU → Dropout(0.25) → Linear(256→128)`
+Current default:
 
-### 6. ★ MultiScaleAnomalyScorer — P0: Top-K Channel Aggregation + Cross-Scale Attention (`gcn_model.py`)
-
-**P0 双重改进**:
-
-Input: multi-scale reconstruction errors → Output: fused anomaly score
-
-**P0/P1-C 改进 1 — Top-K Channel Aggregation** (替代 max-pooling):
-```
-err = L1_loss(rec, inp)  # (B, ws, C)
-★ old: err_per_t = err.max(dim=-1)[0]           # 单通道 max → 噪声敏感
-★ P0:  topk_vals = err.topk(k=k, dim=-1)[0]     # 选择 top-K 通道
-       err_per_t = topk_vals.mean(dim=-1)        # 均值聚合 → 过滤噪声
-       k = max(3, int(C * 0.1))                  # 统一 10% 比例
-★ P1-C: k = dim_adaptive_topk(channel)           # 按维度分档自适应
+```text
+vq_cooldown_epochs = 10
+lambda_vq = 0.1
+vq_score_weight = 0.3
 ```
 
-**原理**: 单通道 max 对噪声敏感（某噪声通道高误差→误报），
-而 top-k mean 过滤噪声通道，保留真正异常通道的信号。
+During cooldown, VQ-related parameters are trained first. After cooldown, the
+main reconstruction path is trained with reconstruction loss, channel sparsity
+regularization, and VQ loss.
 
-**P1-C 低维通道自适应 Top-K** (2026-05-19):
-```
-问题: 统一 10% 比例对不同维度效果差异大
-     MSL(25维): 25×10%=2.5→3 (占12%) — 过滤效果不足，3/25≈12%通道仍可能含噪声
-     SWaT(55维): 55×10%=5.5→5 (占9%) — 适中
+Direct VQ score fusion was tested and rejected:
 
-P1-C 修复: 按维度分档
-     ≥50维: k = max(5, C×0.10)    — SWaT(55维): 5 (9%)
-     20-50维: k = max(2, C×0.15)  — MSL(25维): 3 (12%) — 与旧版一致，保守
-     <20维: k = max(1, C×0.25)    — 极端低维: 更高比例保证信息不丢失
-```
+| Variant | Raw F1 | Adjusted F1 | Affiliation F1 | Decision |
+| --- | ---: | ---: | ---: | --- |
+| `dynamic-temporal-gated` | 0.1139 | 0.8577 | 0.6940 | baseline candidate |
+| VQ score weight 0.10 | 0.1160 | 0.8583 | 0.6941 | reject |
+| VQ score weight 0.02 | 0.1152 | 0.8577 | 0.6958 | reject |
 
-**P0 改进 2 — Cross-Scale Attention** (替代固定权重):
-```
-1. 将 3 个尺度的重建误差作为 value vectors
-2. 可学习 query 向量 (1, 1, d_attn) — 跨样本共享
-3. 每个尺度全局池化后投影到 d_model → key
-4. 注意力分数 = sigmoid(Q @ K^T / temperature) → 每个样本独立权重
-5. 融合: α × fixed_agg + (1-α) × mean — 门控平衡
-```
+The result supports using VQ for representation regularization, not direct
+score addition.
 
-**原理**: 不同异常模式的持续长度差异极大（SWaT: 10-1000 步），
-固定权重对所有位置一视同仁，无法捕捉局部最佳尺度。
-注意力聚合使模型能对不同样本选择最匹配的窗口尺度。
+### EncoderStack
 
-### 7. ★ BoundaryDetector (`temporal_encoder.py`)
+File: `ts_benchmark/baselines/self_impl/LaGraph/temporal_encoder.py`
 
-**P0 权重调整 — 辅助锐化器** (非主评分来源):
+The encoder uses two layers with:
 
-```
-recon_error (B, L, C)
-    │
-    ▼
-┌──────────────────────────────────────────┐
-│ 1. 时间梯度: grad = Δ|x|                 │  — 突出突变位置
-│ 2. 深度分离 Conv1d(k=3)                   │  — 平滑增强
-│ 3. GELU 激活                             │
-│ 4. 通道 max 池化                          │  — (B,L,C)→(B,L)
-└──────────────────┬───────────────────────┘
-                   ▼
-            boundary_score (B, L)
+- multi-scale temporal convolution;
+- dynamic scale selection;
+- multi-head attention;
+- feed-forward projection.
+
+The current default model capacity is intentionally small:
+
+```text
+d_model = 128
+e_layers = 2
+n_heads = 4
+dropout = 0.25
 ```
 
-**P0 权重设计**:
-```python
-self.recon_weight = nn.Parameter(torch.tensor(1.0))      # 重建误差主评分源
-self.boundary_weight = nn.Parameter(torch.tensor(0.3))    # BoundaryDetector 辅助锐化
+This gives roughly 0.4M trainable parameters, depending on the dataset channel
+count and profile.
+
+### Direct Reconstruction Scoring
+
+File: `ts_benchmark/baselines/self_impl/LaGraph/gcn_model.py`
+
+The main path uses direct reconstruction error:
+
+```text
+err = L1(rec, input)
+score_t = mean(top-k channel errors at time t)
 ```
 
-| 权重 | 值 | 作用 |
-|:---|:---:|:---|
-| `recon_weight` | **1.0** (clamp [0.5, 1.5]) | 重建误差提供连续的异常概率分布 |
-| `boundary_weight` | **0.3** (clamp [0.1, 1.0]) | 边界锐化增强点级定位，不主导评分 |
+The old multi-scale scorer exists only for `with-scorer` ablation. It is not the
+default because direct reconstruction scoring was more stable in recent tests.
 
-**避免 Hard Nuke**: v11.2 尝试 `recon_weight=0.1` 导致重建误差被彻底压制→低异常率(0.5%-1%)的微弱信号被 BoundaryDetector 摧毁。**P0 修正**: 重建误差占主导，boundary 仅辅助锐化，确保 low-anomaly-ratio 性能。
+`detect_score` aggregates overlapping window scores back to point-level scores
+by averaging all windows covering each timestamp. `detect_label` then evaluates
+standard anomaly-ratio thresholds and a POT default threshold.
 
-### 8. ★ P0 移除: FocalLoss & Top-K Peak Extraction
+## Training Objective
 
-**P0 移除项目** (从 `LaGraph.py` 中彻底删除):
+The main training objective is:
 
-| 移除项 | 原因 | 影响的接口 |
-|:---|:---|:---|
-| **FocalLoss** | 重建范式不适合分类型 Focal Loss: sigmoid(重建误差)≠概率 | `_single_gpu_train`, `_single_gpu_train_reweight` |
-| **Top-K Peak Extraction** (`detect_score` 后处理硬截断) | 硬阈值截断导致 `threshold=0` 断裂，低异常率无法产生有效阈值 | `detect_score`, `detect_label`, `_detect_forward` |
-| **`detect_topk_ratio` 参数** | 同上 | 默认超参词典 |
-
-**移除后保持**:
-- `detect_score` 返回原始连续分数分布
-- `detect_label` 使用 percentile 阈值选取（基于训练集缓存 `_train_anomaly_scores`）
-
-### 9. ★★ P1-A FIXED: 训练阶段使用标准 MSE（取消异常加权）
-
-**P1-A FIXED (2026-05-20)**: 自适应异常加权 MSE **不在训练阶段使用**。
-
-#### 原因
-
-P1-A 自适应异常加权在 `LaGraph.py` 代码中**仅以占位符形式保留** (`lambda_anomaly_weight=None`)，实际训练时被绕过，因为:
-
-1. **SegLoader 输入限制**: `LaGraph.SegLoader.__getitem__` 返回的 `labels` 字段是**原始数据副本** (`self.data_x[idx]`)，而非 0/1 异常标签。自监督异常检测的 SegLoader 没有真实标签可用。
-
-2. **未实现加权计算**: `_single_gpu_train` 和 `_single_gpu_train_reweight` 中的 loss 计算直接使用 `F.mse_loss(x, x_rec)` 标准 MSE，没有实现 `weights` 参数的分发和加权计算。
-
-3. **重构一致性**: v11.2 P0 已移除 `FocalLoss` 和 `Top-K Peak Extraction`，P1-A FIXED 继续这个方向——训练阶段保持纯粹的重建目标，所有异常检测决策延迟到推理阶段。
-
-#### 实际训练 Loss
-
-```python
-# LaGraph.py _single_gpu_train
-loss = F.mse_loss(x, x_rec)                  # 标准重建 MSE
-     + lambda_sparse * sparse_loss            # L1 通道稀疏正则化
-     + lambda_vq * vq_loss                    # VQ commitment loss
+```text
+loss = MSE(reconstruction, input)
+     + lambda_locality_l1 * sparse_channel_loss
+     + lambda_vq * vq_loss
 ```
 
-- `lambda_sparse` = `lambda_causal_l1` = 0.001
-- `lambda_vq` = 0.1
+Important details:
 
-#### 保留的超参占位符
+- no supervised anomaly labels are used during training;
+- robust/trimmed reconstruction loss was tested and rejected;
+- temporal graph smoothness/locality regularization was tested and rejected;
+- channel-normalized scoring was tested and rejected.
 
-以下参数以占位符形式存在于 `default_hparams` 中，**实际不使用**，仅为未来实现预留接口:
+## Runtime Profiles
 
-```python
-"lambda_anomaly_weight": None,   # 未使用（占位符，原为自适应异常加权）
-"target_anomaly_ratio": 0.20,    # 未使用（占位符）
-"anomaly_weight_end_epoch": 0,   # 未使用（占位符）
+| Profile | Channel graph | Temporal graph | VQ | Scorer | Use |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `full` | on | fixed | on | direct reconstruction | main method |
+| `dynamic-temporal` | on | dynamic | on | direct reconstruction | ungated dynamic temporal ablation |
+| `dynamic-temporal-gated` | on | dynamic + residual gate | on | direct reconstruction | strongest adaptive-temporal candidate |
+| `with-scorer` | on | fixed | on | old multi-scale scorer | old scoring ablation |
+| `no-vq` | on | fixed | off | old multi-scale scorer | VQ ablation |
+| `channel-only` | on | off | on | direct reconstruction | channel graph ablation |
+| `temporal-only` | off | fixed | on | direct reconstruction | temporal graph ablation |
+| `reconstruction` | off | off | off | direct reconstruction | lower-bound baseline |
+
+Rejected experimental profiles are kept for reproducibility:
+
+- `dynamic-temporal-regularized`;
+- `dynamic-temporal-robust`;
+- `dynamic-temporal-robust-lite`;
+- `dynamic-temporal-channelnorm`;
+- `dynamic-temporal-channelnorm-scale`;
+- `dynamic-temporal-gated-vqscore`;
+- affiliation-oriented smoothing/segment-shaping variants.
+
+## Current Experimental Summary
+
+Three-seed checks on MSL and SWaT show that `full` is the safer main method.
+
+| Profile | Dataset | Raw F1 mean | Adjusted F1 mean | Affiliation F1 mean | Interpretation |
+| --- | --- | ---: | ---: | ---: | --- |
+| `full` | MSL | 0.1078 | 0.8561 | 0.6980 | stable baseline |
+| `full` | SWaT | 0.3138 | 0.9296 | 0.8441 | stable baseline |
+| `dynamic-temporal-gated` | MSL | 0.1158 | 0.8559 | 0.6934 | better raw F1, worse affiliation |
+| `dynamic-temporal-gated` | SWaT | 0.3417 | 0.9187 | 0.8528 | better raw/affiliation, worse adjusted |
+
+Current conclusion:
+
+- If the paper prioritizes robustness and balanced reporting, use `full` as the
+  main architecture.
+- If the paper needs an adaptive temporal graph story, report
+  `dynamic-temporal-gated` as an important extension or ablation, not as a
+  universally better replacement.
+- Do not claim every module improves every metric. The evidence supports a more
+  rigorous claim: the compact architecture is stable, efficient, and
+  interpretable; adaptive temporal graphing improves some ranking/event metrics
+  but has dataset-dependent tradeoffs.
+
+## Causal Inference Status
+
+The current code has graph learning and locality/proximity language, but it does
+not yet implement causal inference in the strict sense. A learned channel
+adjacency should not be called a causal graph unless additional identification
+or intervention-style constraints are added.
+
+For a stronger CCF-A-level contribution, causal inference can be made concrete
+in the following way.
+
+```mermaid
+flowchart LR
+    accTitle: Causal Extension Roadmap
+    accDescr: Practical path from current dependency graph learning to a defensible causal graph module.
+
+    dep["Current channel graph<br/>dependency adjacency"]
+    lag["Lagged candidate causes<br/>X(t-k) -> X(t)"]
+    mask["Sparse causal mask<br/>learned with acyclicity or lag constraint"]
+    invariant["Invariant normal dynamics<br/>stable across windows/datasets"]
+    anomaly["Causal residual score<br/>violation of learned mechanisms"]
+    evidence["Ablation evidence<br/>causal mask vs dependency graph"]
+
+    dep --> lag
+    lag --> mask
+    mask --> invariant
+    invariant --> anomaly
+    anomaly --> evidence
+
+    classDef current fill:#e8f1ff,stroke:#2563eb,stroke-width:1px,color:#111827
+    classDef future fill:#fff7ed,stroke:#ea580c,stroke-width:1px,color:#111827
+    class dep current
+    class lag,mask,invariant,anomaly,evidence future
 ```
 
-#### 检测阶段的自适应加权（替代）
+Recommended implementation direction:
 
-自适应异常加权的概念**在检测阶段被保留并实际工作**，通过 `detect_label()` 中的 percentile 阈值选择实现:
+| Idea | Concrete implementation | Why it is defensible |
+| --- | --- | --- |
+| Lagged causal graph | learn edges from `X_j(t-k)` to `X_i(t)` instead of same-time correlation only | respects temporal precedence |
+| Granger-style sparsity | compare prediction/reconstruction with and without candidate lagged parents | gives an operational causal criterion |
+| Mechanism invariance | require learned parent-child mechanisms to stay stable across windows or datasets | aligns with causal invariance |
+| Interventional dropout | randomly mask parent channels and penalize unstable reconstructions | tests whether an edge carries functional information |
+| Causal residual score | score violations of learned mechanisms separately from raw reconstruction error | produces interpretable anomaly causes |
 
-```python
-# LaGraph.py detect_label
-threshold = np.percentile(train_scores, 100 * (1 - anomaly_ratio))
+This direction has a real chance to improve results, but it must be validated
+with ablations. The claim should be:
+
+```text
+causal-structured dependency learning improves anomaly localization and
+interpretability
 ```
 
-- 以训练集上收集的 `_train_anomaly_scores` 的 percentile 阈值作为数据驱动的异常判定边界
-- 异常率越低的场景，阈值越严格（选择更高的百分位）
-- 这实现了 P1-A 的核心理念（按异常率自适应调整）但没有修改训练目标
+not:
 
----
-
-## Training Configuration v11.3 P1
-
-### Single GPU
-
-| Parameter | v11.2 P0 | v11.3 P1 | Description |
-|:---|:---:|:---:|:---|
-| train/val split | 80/20 | 80/20 | Temporal order (no shuffle) |
-| StandardScaler | fit on train | fit on train | Applied to train/val/test |
-| DataLoader | step=1, win_size=100 | step=1, win_size=100 | Full sliding window |
-| Optimizer | AdamW | AdamW | lr=1e-4 |
-| Differential LR | graph_params lr × 0.1 | graph_params lr × 0.1 | Graph stability |
-| Scheduler | Warmup(10) + CosineAnnealing | Warmup(10) + CosineAnnealing | — |
-| Loss | ★ AW-MSE + λ·L1_sparse + λ_vq·VQ | **★ MSE + λ·L1_sparse + λ_vq·VQ (标准重建)** | 纯重建 MSE，取消异常加权 |
-| **Channel Aggregation** | ★ Top-K (k=max(3, C×0.1)) | **★ Top-K (dim-adaptive, 3档比例)** | 分档自适应过滤噪声 |
-| **Scale Aggregation** | ★ Cross-Scale Attention | Cross-Scale Attention | 可学习注意力加权 |
-| λ_anomaly_weight | 10.0 (固定) | **None (占位符, 未使用)** | P1-A FIXED: 不在训练阶段使用 |
-| target_anomaly_ratio | — | **0.20 (占位符, 未使用)** | P1-A FIXED: 不在训练阶段使用 |
-| λ_vq | 0.1 | 0.1 | VQ commitment loss weight |
-| vq_cooldown_epochs | 15 | 15 | Freeze non-VQ params initially |
-| vq_codebook_size | 64 | 64 | Codebook entries |
-| VQ mode | Dual-Path (旁路) | Dual-Path (旁路) | 主路径无损，VQ 仅评分 |
-| **BoundaryDetector** | ★ recon=1.0,bd=0.3 | recon=1.0,bd=0.3 | 重建误差主评分 |
-| **FocalLoss** | ★ REMOVED | REMOVED | 重建范式不适用 |
-| **Top-K Peak Extraction** | ★ REMOVED | REMOVED | 硬截断破坏阈值 |
-| **detect_topk_ratio** | ★ REMOVED | REMOVED | 默认超参移除 |
-| dropout | 0.25 | 0.25 | — |
-| batch_size | 256 | 256 | — |
-| EarlyStopping | patience=15 | patience=15 | — |
-| Max epochs | 100 | 100 | — |
-| Mixed precision | bfloat16 | bfloat16 | (if supported) |
-| warmup_epochs | 10 | 10 | — |
-| lambda_causal_l1 | 0.001 | 0.001 | — |
-
-### RTX 5070 Single-GPU Path
-
-```
-LaGraph.py
-  - Single CUDA device, no torchrun subprocess
-  - batch_size=256
-  - Same VQ cooldown, optimizer, warmup/cosine scheduler, and early stopping logic
-  - Best checkpoint is kept by EarlyStopping and reloaded before detection
-  - n_gpus > 1 is accepted for compatibility but falls back to single GPU
+```text
+the current dependency graph is already a causal graph
 ```
 
----
+## Practical Next Step
 
-## Bug Fixes (v11.2 P0, 2026-05-19)
+The next architecture experiment should be a fixed/dynamic temporal mixture, not
+another generic module:
 
-| Bug | Symptom | Root Cause | Fix |
-|:---|:---|:---|:---|
-| **[Bug 1]** VQ aggregation causal leakage | `mode='replicate'` padding copies future VQ distances | Wrong padding mode | Changed to `mode='constant', value=0` |
-| **[Bug 2]** VQ distance not normalized | vq_dist (e-5~e-3) too small to affect anomaly score | No normalization | Added min-max normalization per batch |
-| **[Bug 3]** Graph over-smoothing | Channel embedding homogenization | 2-layer MP | Reverted to single-layer + residual |
-| **[Bug 4]** Dynamic scale degeneration | `[win//4, win//2, win]` dedup may yield <3 scales | Duplicate sizes after division | Added scale interpolation if dedup < 3 |
-| **[Bug 5]** Shape alignment | `RuntimeError` when L < max(win_sizes) | score / vq_score / boundary_score 长度不一致 | 四处截断/填充对齐 |
-| **★ P0 [Fix 1]** Top-K Channel Aggregation | 单通道 max 对噪声敏感 | max-pooling 选择最高噪声通道 | Top-K average 过滤噪声通道 |
-| **★ P0 [Fix 2]** Attention Aggregation | 固定权重无法适应不同异常长度 | 全局统一加权 | Cross-Scale Attention + sigmoid 门控 |
-
----
-
-## Evaluation Metrics
-
-| Metric | Description | Expected on SWaT (v11.2 P0) |
-|:---|:---|:---:|
-| **affiliation_f** | Point-level boundary F1 (paper's Table II F1) | **0.82-0.88** (≥5%) |
-| adjusted_f_score | Event-level with 7-point tolerance | >0.96 |
-| **raw_f_score** (≥2%) | Exact point-wise reconstruction error | >0.30 |
-| **raw_f_score** (1%) | Exact point-wise reconstruction error | ≥0.15 (期望) |
-| aupr | Area under precision-recall curve | >0.90 |
-| auc | Area under ROC curve | >0.95 |
-
----
-
-## File Structure
-
+```text
+resid_temp = alpha * fixed_temporal(resid_adapted)
+           + (1 - alpha) * gated_dynamic_temporal(resid_adapted)
 ```
+
+This has a clear motivation: preserve the MSL affiliation stability of `full`
+while capturing the SWaT raw/affiliation gain from `dynamic-temporal-gated`.
+
+The next causal experiment should then add lagged channel parents on top of the
+stable `full` profile, because channel dependency is the most interpretable part
+of the current model.
+
+## Commands
+
+Main method:
+
+```powershell
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets MSL.csv swat.csv --arch-profile full --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_main_15ep
+```
+
+Adaptive temporal candidate:
+
+```powershell
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets MSL.csv swat.csv --arch-profile dynamic-temporal-gated --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_candidate_dynamic_temporal_gated_15ep
+```
+
+Key ablations:
+
+```powershell
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile channel-only --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_ablation_channel_only
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile temporal-only --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_ablation_temporal_only
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile no-vq --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_ablation_no_vq
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile with-scorer --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_ablation_with_scorer
+```
+
+## Reporting Guidance
+
+For the paper, report:
+
+- `full` as the main compact method;
+- `dynamic-temporal-gated` as adaptive temporal graph extension;
+- `channel-only`, `temporal-only`, `no-vq`, `with-scorer`, and
+  `reconstruction` as ablations;
+- three-seed mean and standard deviation;
+- raw F1, adjusted F1, and affiliation F1 together;
+- parameter count and single-GPU runtime settings;
+- negative ablations as evidence that the final system is not module stacking.
+
+Do not over-optimize only one metric in the main table. It is acceptable to
+emphasize affiliation F1 if the paper's task framing is event-level anomaly
+coverage, but raw F1 and adjusted F1 should still be reported transparently.
+
+## File Map
+
+```text
 ts_benchmark/baselines/self_impl/LaGraph/
-├── LaGraph.py                  # ★ P0: 移除 FocalLoss + Top-K Peak Extraction + detect_topk_ratio
-├── gcn_model.py                # ★ P0: Top-K Channel + Cross-Scale Attention + Dual-Path VQ + Weight Balance
-├── graph_learner.py            # ChannelAdaptiveGraph + SimplifiedTemporalGraph
-├── temporal_encoder.py         # BoundaryDetector + EncoderStack
-├── attention.py                # OrdAttention
-├── decomp.py                   # MoE series decomposition
-├── RevIN.py                    # Reversible instance normalization
-├── channel_mask.py             # Channel masking
-├── vq_bottleneck.py            # VQ Bottleneck (Dual-Path, serial_mode=False)
-├── graph_evolution.py          # (v6 legacy, deprecated)
-└── vq_bottleneck.py            # (v7 legacy, deprecated)
+  LaGraph.py            training, validation, thresholding, scoring pipeline
+  gcn_model.py          SparseGCN, VQ integration, reconstruction scoring
+  graph_learner.py      ChannelAdaptiveGraph, SimplifiedTemporalGraph, DynamicTemporalGraph
+  temporal_encoder.py   EncoderStack and temporal feature extraction
+  decomp.py             MoE decomposition
+  vq_bottleneck.py      VQ bottleneck
+  attention.py          attention blocks
+  RevIN.py              reversible normalization utility
+  channel_mask.py       channel mask utility
 ```
 
----
+## Known Limitations
 
-## Architecture Evolution
+| Limitation | Impact | Recommendation |
+| --- | --- | --- |
+| Current graph is dependency-based, not causal | causal claims are not yet justified | add lagged causal graph and invariance tests |
+| `dynamic-temporal-gated` is dataset-dependent | improves SWaT but weakens MSL affiliation | keep as extension, not default |
+| Direct VQ score fusion is weak | VQ does not reliably improve ranking as a score | use VQ as training regularizer |
+| Post-processing hurt MSL affiliation | generic smoothing/segment shaping is unsafe | focus on representation and calibrated scoring |
+| Available default benchmark set currently excludes SMD | all-dataset claims are limited | report exclusions and optionally run SMD separately |
 
-```
-v10:  Baseline with serial VQ + fixed multi-scale
-   │
-   ▼
-v11.1: Bug fixes (causal leakage, normalization, over-smoothing, scale degeneration)
-   │
-   ▼
-v11.2 (pre-P0): 四项根本改进
-   ├── BoundaryDetector:        解决重建范式崩溃
-   ├── Dynamic Scale Selection: 解决静态尺度缺陷
-   ├── Dual-Path VQ:           解决VQ量化信息丢失
-   └── Cross-Scale Attention:  解决多尺度固定权重问题
-   │
-   ▼
-v11.2 P0 ★ (2026-05-19): P0 修正路线
-   ├── ① Top-K Channel Aggregation    ✅ 替代 max(dim=-1)，过滤噪声通道
-   ├── ② Cross-Scale Attention完整实现 ✅ 可学习 query + sigmoid 门控
-   ├── ③ Dual-Path VQ (旁路模式)       ✅ serial_mode=False
-   ├── ④ BoundaryDetector 权重平衡     ✅ recon=1.0, bd=0.3 (防 Hard Nuke)
-   ├── ⑤ 移除 FocalLoss               ✅ 重建范式不适用
-   ├── ⑥ 移除 Top-K Peak Extraction    ✅ 硬截断破坏阈值连续性
-   └── ⑦ 移除 detect_topk_ratio参数    ✅ 默认超参清理
-   │
-   ▼
-v11.3 P1-A FIXED ★ (2026-05-20): P1 修正反馈
-   ├── ① P1-A 移除训练阶段异常加权      ✅ SegLoader 无真实标签，恢复纯 MSE
-   ├── ② P1-C 低维通道自适应 Top-K     ✅ 按通道维度分档（≥50:10%, 20-50:15%, <20:25%）
-   └── ③ ARCHITECTURE.md 文档同步     ✅ P1-A FIXED 完整记录
-```
-
----
-
-## Known Limitations (v11.3 P1-FIXED)
-
-| 限制 | 表现 | 影响范围 | 可能的后续修复 |
-|:---|:---|:---:|:---|
-| 跨数据集差距 | SWaT vs MSL raw_f 差距 ≥ 0.10 | 泛化性 | 需要更通用的自适应机制 |
-| 图模块负贡献 | MSL 上 GCN 可能引入噪声 | 简单单变量数据 | 通道级 gating |
-| VQ codebook 稳定性 | 加权梯度可能影响 codebook 训练 | 训练早期 | 监控 VQ利用率+EMA更新 |
-| 弱信号灵敏度 | Top-K 聚合在 C 很小时 k=3 可能仍含噪声 | 低维度数据 (C≤10) | 自适应 k = max(1, C×0.2) |
-| P1-A 异常加权未在训练实现 | 仅在检测阶段通过 percentile 阈值替代 | 训练信号不足 | 若未来有真实标签可恢复 |
-| BoundaryDetector 未参数化 | 固定 sigmoid 门控，无 ratio-aware 自适应 | 不同异常率切换 | Ratio-Adaptive Gate (未来修复) |
-
----
-
-*Last updated: May 20, 2026 — v11.3 P1-FIXED SparseLaGraph (0.4M params, Standard MSE + L1 + VQ Loss, Dimension-Adaptive Top-K)*
+Last updated: 2026-05-24.
