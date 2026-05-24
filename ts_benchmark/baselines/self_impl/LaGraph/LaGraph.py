@@ -80,6 +80,14 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "vq_cooldown_epochs": 10,
     "vq_score_weight": 0.3,
     "score_topk_k": None,
+    "use_synthetic_anomaly_aux": False,
+    "use_synthetic_anomaly_head": False,
+    "use_synthetic_score": False,
+    "lambda_synthetic_anomaly": 0.0,
+    "synthetic_score_weight": 0.1,
+    "synthetic_score_eps": 1e-6,
+    "synthetic_min_len": 4,
+    "synthetic_max_len": 20,
     "use_parallel_graph_fusion": False,
     "graph_fusion_gate_mode": "sample",
     "graph_fusion_strategy": "parallel",
@@ -112,6 +120,9 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "dataloader_num_workers": 2,
     "dataloader_prefetch_factor": 2,
     # --- Affiliation-oriented inference shaping ---
+    "score_aggregation": "mean",
+    "score_aggregation_quantile": 0.9,
+    "score_center_width": 1,
     "score_smoothing_window": 1,
     "score_smoothing_method": "mean",
     "prediction_fill_gap": 0,
@@ -929,6 +940,13 @@ class LaGraph:
                 "vq_score_weight": getattr(self.config, "vq_score_weight", None),
                 "use_direct_vq_score": getattr(self.config, "use_direct_vq_score", None),
                 "score_topk_k": getattr(self.config, "score_topk_k", None),
+                "score_aggregation": getattr(self.config, "score_aggregation", None),
+                "score_aggregation_quantile": getattr(self.config, "score_aggregation_quantile", None),
+                "score_center_width": getattr(self.config, "score_center_width", None),
+                "use_synthetic_anomaly_aux": getattr(self.config, "use_synthetic_anomaly_aux", None),
+                "lambda_synthetic_anomaly": getattr(self.config, "lambda_synthetic_anomaly", None),
+                "use_synthetic_score": getattr(self.config, "use_synthetic_score", None),
+                "synthetic_score_weight": getattr(self.config, "synthetic_score_weight", None),
                 "use_parallel_graph_fusion": getattr(self.config, "use_parallel_graph_fusion", None),
                 "graph_fusion_gate_mode": getattr(self.config, "graph_fusion_gate_mode", None),
                 "graph_fusion_strategy": getattr(self.config, "graph_fusion_strategy", None),
@@ -1037,6 +1055,89 @@ class LaGraph:
         if lambda_causal_sparse > 0 and 'causal_sparse_loss' in aux_losses:
             loss = loss + lambda_causal_sparse * aux_losses['causal_sparse_loss']
         return loss
+
+    @torch.no_grad()
+    def _make_synthetic_anomaly_batch(self, input_data: torch.Tensor):
+        x = input_data.detach().clone()
+        B, L, C = x.shape
+        device = x.device
+        mask = torch.zeros(B, L, device=device, dtype=torch.float32)
+
+        min_len = int(getattr(self.config, "synthetic_min_len", 4) or 4)
+        max_len = int(getattr(self.config, "synthetic_max_len", 20) or 20)
+        min_len = min(max(1, min_len), max(1, L))
+        max_len = min(max(min_len, max_len), max(1, L))
+
+        for b in range(B):
+            n_segments = int(torch.randint(1, 3, (1,), device=device).item())
+            for _ in range(n_segments):
+                seg_len = int(torch.randint(min_len, max_len + 1, (1,), device=device).item())
+                start_hi = max(1, L - seg_len + 1)
+                start = int(torch.randint(0, start_hi, (1,), device=device).item())
+                end = min(L, start + seg_len)
+
+                frac = float(torch.empty((), device=device).uniform_(0.10, 0.35).item())
+                n_channels = min(C, max(1, int(round(C * frac))))
+                ch = torch.randperm(C, device=device)[:n_channels]
+                typ = int(torch.randint(0, 7, (1,), device=device).item())
+                scale = input_data[b, :, ch].std(dim=0).clamp_min(0.2)
+                sign = torch.where(
+                    torch.rand(n_channels, device=device) < 0.5,
+                    -torch.ones(n_channels, device=device),
+                    torch.ones(n_channels, device=device),
+                )
+                amp = sign * scale * torch.empty(n_channels, device=device).uniform_(1.5, 4.0)
+
+                if typ == 0:
+                    x[b, start:end, ch] = x[b, start:end, ch] + amp
+                elif typ == 1:
+                    ramp = torch.linspace(0.0, 1.0, end - start, device=device).unsqueeze(-1)
+                    x[b, start:end, ch] = x[b, start:end, ch] + ramp * amp
+                elif typ == 2:
+                    x[b, start:end, ch] = x[b, start:start + 1, ch].expand(end - start, -1)
+                elif typ == 3:
+                    x[b, start:end, ch] = 0.0
+                elif typ == 4:
+                    factor = torch.empty(n_channels, device=device).uniform_(0.3, 2.5)
+                    x[b, start:end, ch] = x[b, start:end, ch] * factor
+                elif typ == 5 and end - start > 1:
+                    perm = torch.randperm(end - start, device=device)
+                    x[b, start:end, ch] = x[b, start:end, ch][perm]
+                else:
+                    spike_count = max(1, min(end - start, seg_len // 4))
+                    local_idx = torch.randperm(end - start, device=device)[:spike_count] + start
+                    x[b, local_idx[:, None], ch] = x[b, local_idx[:, None], ch] + amp
+
+                mask[b, start:end] = 1.0
+
+        return x, mask
+
+    def _synthetic_anomaly_aux_loss(self, input_data, normal_aux_losses):
+        if not getattr(self.config, "use_synthetic_anomaly_aux", False):
+            return input_data.new_tensor(0.0)
+        lambda_synth = float(getattr(self.config, "lambda_synthetic_anomaly", 0.0) or 0.0)
+        if lambda_synth <= 0 or not normal_aux_losses:
+            return input_data.new_tensor(0.0)
+        normal_logits = normal_aux_losses.get("synthetic_logits")
+        if normal_logits is None:
+            return input_data.new_tensor(0.0)
+
+        synth_data, synth_mask = self._make_synthetic_anomaly_batch(input_data)
+        _, _, _, _, _, synth_aux, _ = self.model(synth_data)
+        synth_logits = synth_aux.get("synthetic_logits") if synth_aux else None
+        if synth_logits is None:
+            return input_data.new_tensor(0.0)
+
+        normal_target = torch.zeros_like(normal_logits)
+        normal_loss = F.binary_cross_entropy_with_logits(normal_logits, normal_target)
+
+        pos = synth_mask.sum().clamp_min(1.0)
+        neg = (synth_mask.numel() - synth_mask.sum()).clamp_min(1.0)
+        pos_weight = (neg / pos).clamp(1.0, 20.0)
+        synth_loss = F.binary_cross_entropy_with_logits(
+            synth_logits, synth_mask, pos_weight=pos_weight,
+        )
+        return lambda_synth * (synth_loss + 0.25 * normal_loss)
 
     @torch.no_grad()
     def _fit_score_channel_stats(self, train_data: pd.DataFrame):
@@ -1205,6 +1306,56 @@ class LaGraph:
         )
 
     # ======================== 训练（单卡）=======================
+    @torch.no_grad()
+    def _fit_synthetic_score_stats(self, train_data: pd.DataFrame):
+        if train_data is None or self.model is None:
+            return
+        raw_model = self._get_raw_model()
+        if not hasattr(raw_model, "set_synthetic_score_stats"):
+            return
+
+        print("\n  [SynthAux] Fitting synthetic-head score statistics...")
+        if self.early_stopping is not None and self.early_stopping.check_point is not None:
+            raw_model.load_state_dict(self.early_stopping.check_point)
+        self.model.to(self.device)
+        self.model.eval()
+
+        scaled_data = pd.DataFrame(
+            self.scaler.transform(train_data.values),
+            columns=train_data.columns, index=train_data.index,
+        )
+        loader = anomaly_detection_data_provider(
+            scaled_data,
+            batch_size=min(self.config.batch_size, 64),
+            win_size=self.config.win_size,
+            step=1,
+            mode="test",
+            num_workers=0,
+        )
+
+        scores = []
+        for input_data, _ in loader:
+            input_data = input_data.float().to(self.device)
+            _, _, _, _, _, aux_losses, _ = self.model(input_data)
+            logits = aux_losses.get("synthetic_logits") if aux_losses else None
+            if logits is not None:
+                scores.append(torch.sigmoid(logits).detach().cpu().numpy().reshape(-1))
+
+        if not scores:
+            return
+
+        scores = np.concatenate(scores, axis=0)
+        score_center = float(np.median(scores))
+        q25 = float(np.percentile(scores, 25))
+        q75 = float(np.percentile(scores, 75))
+        eps = float(getattr(self.config, "synthetic_score_eps", 1e-6) or 1e-6)
+        score_scale = max(q75 - q25, float(np.std(scores)), abs(score_center), eps)
+        raw_model.set_synthetic_score_stats(score_center, score_scale)
+        print(
+            "  [SynthAux] score median="
+            f"{score_center:.6f}, scale={score_scale:.6f}"
+        )
+
     def _destroy_model_and_clean_cuda(self):
         import gc
         if hasattr(self, 'model') and self.model is not None:
@@ -1285,6 +1436,9 @@ class LaGraph:
         if getattr(self.config, "use_causal_score", False):
             self._fit_causal_score_stats(self._train_raw)
 
+        if getattr(self.config, "use_synthetic_score", False):
+            self._fit_synthetic_score_stats(self._train_raw)
+
         # ★ v10 fix: 训练集缓存分数
         if self._train_raw is not None:
             print(f"\n  [INFO] Computing training reconstruction scores for threshold...")
@@ -1360,6 +1514,10 @@ class LaGraph:
             use_direct_vq_score=getattr(self.config, "use_direct_vq_score", False),
             vq_score_weight=getattr(self.config, "vq_score_weight", 0.3),
             score_topk_k=getattr(self.config, "score_topk_k", None),
+            use_synthetic_anomaly_head=getattr(self.config, "use_synthetic_anomaly_head", False),
+            use_synthetic_score=getattr(self.config, "use_synthetic_score", False),
+            synthetic_score_weight=getattr(self.config, "synthetic_score_weight", 0.1),
+            synthetic_score_eps=getattr(self.config, "synthetic_score_eps", 1e-6),
             use_parallel_graph_fusion=getattr(self.config, "use_parallel_graph_fusion", False),
             graph_fusion_gate_mode=getattr(self.config, "graph_fusion_gate_mode", "sample"),
             graph_fusion_strategy=getattr(self.config, "graph_fusion_strategy", "parallel"),
@@ -1499,6 +1657,7 @@ class LaGraph:
                 else:
                     if use_vq_bypass and aux_losses and 'vq_loss' in aux_losses:
                         loss = loss + lambda_vq * aux_losses['vq_loss']
+                    loss = loss + self._synthetic_anomaly_aux_loss(input_data, aux_losses)
 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
@@ -1588,6 +1747,10 @@ class LaGraph:
             use_direct_vq_score=getattr(self.config, "use_direct_vq_score", False),
             vq_score_weight=getattr(self.config, "vq_score_weight", 0.3),
             score_topk_k=getattr(self.config, "score_topk_k", None),
+            use_synthetic_anomaly_head=getattr(self.config, "use_synthetic_anomaly_head", False),
+            use_synthetic_score=getattr(self.config, "use_synthetic_score", False),
+            synthetic_score_weight=getattr(self.config, "synthetic_score_weight", 0.1),
+            synthetic_score_eps=getattr(self.config, "synthetic_score_eps", 1e-6),
             use_parallel_graph_fusion=getattr(self.config, "use_parallel_graph_fusion", False),
             graph_fusion_gate_mode=getattr(self.config, "graph_fusion_gate_mode", "sample"),
             graph_fusion_strategy=getattr(self.config, "graph_fusion_strategy", "parallel"),
@@ -1799,6 +1962,13 @@ class LaGraph:
                 "temporal_graph_lr_scale": getattr(self.config, "temporal_graph_lr_scale", None),
                 "use_vq_bypass": getattr(self.config, "use_vq_bypass", None),
                 "use_multi_scale_scorer": getattr(self.config, "use_multi_scale_scorer", None),
+                "score_aggregation": getattr(self.config, "score_aggregation", None),
+                "score_aggregation_quantile": getattr(self.config, "score_aggregation_quantile", None),
+                "score_center_width": getattr(self.config, "score_center_width", None),
+                "use_synthetic_anomaly_aux": getattr(self.config, "use_synthetic_anomaly_aux", None),
+                "lambda_synthetic_anomaly": getattr(self.config, "lambda_synthetic_anomaly", None),
+                "use_synthetic_score": getattr(self.config, "use_synthetic_score", None),
+                "synthetic_score_weight": getattr(self.config, "synthetic_score_weight", None),
                 "score_smoothing_window": getattr(self.config, "score_smoothing_window", None),
                 "score_smoothing_method": getattr(self.config, "score_smoothing_method", None),
                 "prediction_fill_gap": getattr(self.config, "prediction_fill_gap", None),
@@ -1828,24 +1998,112 @@ class LaGraph:
     # ════════════════════════════════════════════════════════════════
 
     @staticmethod
-    def _point_wise_aggregate(window_scores: np.ndarray, win_size: int, total_length: int) -> np.ndarray:
+    def _point_wise_aggregate(
+        window_scores: np.ndarray,
+        win_size: int,
+        total_length: int,
+        method: str = "mean",
+        quantile: float = 0.9,
+        center_width: int = 1,
+    ) -> np.ndarray:
+        window_scores = np.asarray(window_scores, dtype=np.float32)
+        if window_scores.ndim != 2 or len(window_scores) == 0:
+            return np.zeros(total_length, dtype=np.float32)
+
         N_windows = len(window_scores)
-        point_scores = np.zeros(total_length, dtype=np.float64)
-        point_counts = np.zeros(total_length, dtype=np.float64)
+        win_size = min(int(win_size), window_scores.shape[1])
+        total_length = int(total_length)
+        method = (method or "mean").lower()
 
-        for w in range(N_windows):
-            start = w
-            end = min(w + win_size, total_length)
-            actual_len = end - start
-            point_scores[start:end] += window_scores[w, :actual_len]
-            point_counts[start:end] += 1.0
+        def aggregate_mean() -> np.ndarray:
+            point_scores = np.zeros(total_length, dtype=np.float64)
+            point_counts = np.zeros(total_length, dtype=np.float64)
+            for offset in range(win_size):
+                n = min(N_windows, total_length - offset)
+                if n <= 0:
+                    break
+                point_scores[offset:offset + n] += window_scores[:n, offset]
+                point_counts[offset:offset + n] += 1.0
+            return np.divide(
+                point_scores, point_counts,
+                out=np.zeros_like(point_scores),
+                where=point_counts > 0,
+            )
 
-        point_scores = np.divide(
-            point_scores, point_counts,
-            out=np.zeros_like(point_scores),
-            where=point_counts > 0,
+        if method == "mean":
+            return aggregate_mean().astype(np.float32)
+
+        if method == "max":
+            point_scores = np.full(total_length, -np.inf, dtype=np.float64)
+            point_counts = np.zeros(total_length, dtype=np.float64)
+            for offset in range(win_size):
+                n = min(N_windows, total_length - offset)
+                if n <= 0:
+                    break
+                sl = slice(offset, offset + n)
+                point_scores[sl] = np.maximum(point_scores[sl], window_scores[:n, offset])
+                point_counts[sl] += 1.0
+            fallback = aggregate_mean()
+            point_scores = np.where(point_counts > 0, point_scores, fallback)
+            return point_scores.astype(np.float32)
+
+        if method in {"q75", "q90", "q95", "quantile"}:
+            if method == "q75":
+                q = 0.75
+            elif method == "q90":
+                q = 0.90
+            elif method == "q95":
+                q = 0.95
+            else:
+                q = float(quantile)
+            q = min(max(q, 0.0), 1.0)
+            values = np.full((total_length, win_size), np.nan, dtype=np.float32)
+            for offset in range(win_size):
+                n = min(N_windows, total_length - offset)
+                if n <= 0:
+                    break
+                values[offset:offset + n, offset] = window_scores[:n, offset]
+            return np.nanquantile(values, q, axis=1).astype(np.float32)
+
+        if method in {"center", "last"}:
+            fallback = aggregate_mean()
+            point_scores = np.zeros(total_length, dtype=np.float64)
+            point_counts = np.zeros(total_length, dtype=np.float64)
+            if method == "last":
+                offsets = [win_size - 1]
+            else:
+                width = max(1, int(center_width or 1))
+                center = win_size // 2
+                start = max(0, center - width // 2)
+                end = min(win_size, start + width)
+                offsets = list(range(start, end))
+            for offset in offsets:
+                n = min(N_windows, total_length - offset)
+                if n <= 0:
+                    continue
+                point_scores[offset:offset + n] += window_scores[:n, offset]
+                point_counts[offset:offset + n] += 1.0
+            point_scores = np.divide(
+                point_scores, point_counts,
+                out=fallback.astype(np.float64, copy=True),
+                where=point_counts > 0,
+            )
+            return point_scores.astype(np.float32)
+
+        raise ValueError(
+            f"Unsupported score_aggregation={method!r}. "
+            "Choose from mean, max, q75, q90, q95, quantile, center, last."
         )
-        return point_scores.astype(np.float32)
+
+    def _aggregate_window_scores(self, window_scores: np.ndarray, total_length: int) -> np.ndarray:
+        return self._point_wise_aggregate(
+            window_scores,
+            self.config.win_size,
+            total_length,
+            method=getattr(self.config, "score_aggregation", "mean"),
+            quantile=getattr(self.config, "score_aggregation_quantile", 0.9),
+            center_width=getattr(self.config, "score_center_width", 1),
+        )
 
     def _smooth_scores_for_detection(self, scores: np.ndarray) -> np.ndarray:
         window = int(getattr(self.config, "score_smoothing_window", 1) or 1)
@@ -1955,9 +2213,7 @@ class LaGraph:
 
         window_scores = np.concatenate(window_scores_list, axis=0)
 
-        point_scores = self._point_wise_aggregate(
-            window_scores, self.config.win_size, total_length,
-        )
+        point_scores = self._aggregate_window_scores(window_scores, total_length)
         point_scores = self._smooth_scores_for_detection(point_scores)
 
         return point_scores, point_scores
@@ -2013,9 +2269,7 @@ class LaGraph:
             return {r: dummy for r in self.config.anomaly_ratio}, np.zeros(total_length)
 
         test_windows = np.concatenate(test_window_list, axis=0)
-        test_energy = self._point_wise_aggregate(
-            test_windows, self.config.win_size, total_length,
-        )
+        test_energy = self._aggregate_window_scores(test_windows, total_length)
         test_energy = self._smooth_scores_for_detection(test_energy)
 
         # === 步骤 2：阈值选取（★ P0-2: 优先使用 POT 阈值）===

@@ -138,6 +138,8 @@ def main():
             "causal-lag-score-strong",
             "causal-cf-gain",
             "causal-cf-hurt",
+            "synthetic-aux",
+            "synthetic-aux-q75",
             "dynamic-temporal",
             "dynamic-temporal-gated",
             "dynamic-temporal-gated-vqscore",
@@ -182,6 +184,24 @@ def main():
         help="Override channel top-k aggregation used by the reconstruction anomaly score",
     )
     parser.add_argument(
+        "--score-aggregation",
+        choices=["mean", "max", "q75", "q90", "q95", "quantile", "center", "last"],
+        default=None,
+        help="How overlapping window scores are aggregated back to point scores",
+    )
+    parser.add_argument(
+        "--score-aggregation-quantile",
+        type=float,
+        default=None,
+        help="Quantile used when --score-aggregation=quantile (0~1)",
+    )
+    parser.add_argument(
+        "--score-center-width",
+        type=int,
+        default=None,
+        help="Number of central offsets used when --score-aggregation=center",
+    )
+    parser.add_argument(
         "--dynamic-temporal-residual-init",
         type=float,
         default=None,
@@ -216,6 +236,18 @@ def main():
         type=int,
         default=None,
         help="Override lagged causal parent top-k",
+    )
+    parser.add_argument(
+        "--lambda-synthetic-anomaly",
+        type=float,
+        default=None,
+        help="Override synthetic anomaly auxiliary loss weight",
+    )
+    parser.add_argument(
+        "--synthetic-score-weight",
+        type=float,
+        default=None,
+        help="Override synthetic anomaly head score fusion weight",
     )
     args = parser.parse_args()
 
@@ -499,6 +531,29 @@ def main():
             "causal_score_tail": "upper",
             "causal_score_weight": 0.10,
         },
+        "synthetic-aux": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "use_synthetic_anomaly_aux": True,
+            "use_synthetic_anomaly_head": True,
+            "lambda_synthetic_anomaly": 0.05,
+            "use_synthetic_score": True,
+            "synthetic_score_weight": 0.10,
+        },
+        "synthetic-aux-q75": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "use_synthetic_anomaly_aux": True,
+            "use_synthetic_anomaly_head": True,
+            "lambda_synthetic_anomaly": 0.05,
+            "use_synthetic_score": True,
+            "synthetic_score_weight": 0.10,
+            "score_aggregation": "q75",
+        },
         "dynamic-temporal": {
             "use_channel_graph": True,
             "use_temporal_graph": True,
@@ -670,6 +725,14 @@ def main():
     score_hyper_params = {}
     if args.score_topk_k is not None:
         score_hyper_params["score_topk_k"] = max(1, args.score_topk_k)
+    if args.score_aggregation is not None:
+        score_hyper_params["score_aggregation"] = args.score_aggregation
+    if args.score_aggregation_quantile is not None:
+        score_hyper_params["score_aggregation_quantile"] = min(
+            max(float(args.score_aggregation_quantile), 0.0), 1.0
+        )
+    if args.score_center_width is not None:
+        score_hyper_params["score_center_width"] = max(1, args.score_center_width)
     if args.dynamic_temporal_residual_init is not None:
         score_hyper_params["dynamic_temporal_residual_init"] = max(0.0, args.dynamic_temporal_residual_init)
     if args.dynamic_temporal_topk is not None:
@@ -682,6 +745,10 @@ def main():
         score_hyper_params["lambda_causal_mechanism"] = max(0.0, args.lambda_causal_mechanism)
     if args.causal_topk is not None:
         score_hyper_params["causal_topk"] = max(1, args.causal_topk)
+    if args.lambda_synthetic_anomaly is not None:
+        score_hyper_params["lambda_synthetic_anomaly"] = max(0.0, args.lambda_synthetic_anomaly)
+    if args.synthetic_score_weight is not None:
+        score_hyper_params["synthetic_score_weight"] = max(0.0, args.synthetic_score_weight)
     effective_switches = {
         **arch_switches,
         **vq_hyper_params,

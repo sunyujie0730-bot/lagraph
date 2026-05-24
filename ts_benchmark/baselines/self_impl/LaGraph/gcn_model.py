@@ -341,6 +341,10 @@ class SparseGCN(nn.Module):
                  use_direct_vq_score=False,
                  vq_score_weight=0.3,
                  score_topk_k=None,
+                 use_synthetic_anomaly_head=False,
+                 use_synthetic_score=False,
+                 synthetic_score_weight=0.1,
+                 synthetic_score_eps=1e-6,
                  use_parallel_graph_fusion=False,
                  graph_fusion_gate_mode="sample",
                  graph_fusion_strategy="parallel",
@@ -378,6 +382,10 @@ class SparseGCN(nn.Module):
         self.use_multi_scale_scorer = use_multi_scale_scorer
         self.use_direct_vq_score = use_direct_vq_score
         self.score_topk_k = score_topk_k
+        self.use_synthetic_anomaly_head = use_synthetic_anomaly_head
+        self.use_synthetic_score = use_synthetic_score
+        self.synthetic_score_weight = float(synthetic_score_weight)
+        self.synthetic_score_eps = float(synthetic_score_eps)
         self.use_parallel_graph_fusion = use_parallel_graph_fusion
         self.graph_fusion_gate_mode = graph_fusion_gate_mode
         self.graph_fusion_strategy = graph_fusion_strategy
@@ -436,6 +444,17 @@ class SparseGCN(nn.Module):
         )
 
         # === 自适应通道图 ===
+        self.register_buffer(
+            'synthetic_score_center',
+            torch.zeros(1),
+            persistent=False,
+        )
+        self.register_buffer(
+            'synthetic_score_scale',
+            torch.ones(1),
+            persistent=False,
+        )
+
         self.channel_graph = ChannelAdaptiveGraph(
             num_nodes=enc_in, topk=topk,
             sparse_topk=sparse_topk, dropout=dropout,
@@ -547,6 +566,17 @@ class SparseGCN(nn.Module):
             self.lagged_causal_graph = None
 
         # ★ 保持与原有 forward 返回格式兼容
+        if use_synthetic_anomaly_head:
+            hidden = max(32, d_model // 2)
+            self.synthetic_anomaly_head = nn.Sequential(
+                nn.Linear(d_model, hidden),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden, 1),
+            )
+        else:
+            self.synthetic_anomaly_head = None
+
         self.use_freq_loss = False
         self.lambda_freq = 0.0
         self.use_contrastive = False
@@ -572,6 +602,7 @@ class SparseGCN(nn.Module):
         if self.graph_fusion_residual_logit is not None:
             self.graph_fusion_residual_logit.requires_grad = self.use_parallel_graph_fusion
         self._set_trainable(self.lagged_causal_graph, self.use_lagged_causal_graph)
+        self._set_trainable(self.synthetic_anomaly_head, self.use_synthetic_anomaly_head)
         self._set_trainable(self.vq_bottleneck, self.use_vq_bypass)
         self._set_trainable(self.multi_scale_scorer, self.use_multi_scale_scorer)
 
@@ -647,6 +678,20 @@ class SparseGCN(nn.Module):
         if self.causal_score_tail == "lower":
             return (center - causal_score).clamp_min(0.0) / scale.clamp_min(self.causal_score_eps)
         return (causal_score - center).clamp_min(0.0) / scale.clamp_min(self.causal_score_eps)
+
+    def set_synthetic_score_stats(self, score_center, score_scale):
+        self.synthetic_score_center.copy_(
+            torch.as_tensor([score_center], dtype=self.synthetic_score_center.dtype, device=self.synthetic_score_center.device)
+        )
+        self.synthetic_score_scale.copy_(
+            torch.as_tensor([score_scale], dtype=self.synthetic_score_scale.dtype, device=self.synthetic_score_scale.device)
+            .clamp_min(self.synthetic_score_eps)
+        )
+
+    def _normalize_synthetic_score(self, synthetic_score):
+        center = self.synthetic_score_center.to(device=synthetic_score.device, dtype=synthetic_score.dtype)
+        scale = self.synthetic_score_scale.to(device=synthetic_score.device, dtype=synthetic_score.dtype)
+        return (synthetic_score - center).clamp_min(0.0) / scale.clamp_min(self.synthetic_score_eps)
 
     def _normalize_score_error(self, err):
         if not self.use_score_channel_normalization:
@@ -740,6 +785,9 @@ class SparseGCN(nn.Module):
 
         # 步骤 5: EncoderStack
         resid_enc = self.encoder(resid_proj)  # (B, L, d_model)
+        synthetic_logits = None
+        if self.synthetic_anomaly_head is not None:
+            synthetic_logits = self.synthetic_anomaly_head(resid_enc).squeeze(-1)
 
         # 步骤 6: 投影回 c_out
         resid_out = self.proj_out(resid_enc)  # (B, L, C)
@@ -757,6 +805,8 @@ class SparseGCN(nn.Module):
         if causal_mechanism_loss is not None:
             aux_losses['causal_mechanism_loss'] = causal_mechanism_loss
             aux_losses['causal_sparse_loss'] = self.lagged_causal_graph.get_sparsity_loss()
+        if synthetic_logits is not None:
+            aux_losses['synthetic_logits'] = synthetic_logits
         if graph_fusion_gate is not None:
             aux_losses['graph_fusion_gate_mean'] = graph_fusion_gate.detach().mean()
             aux_losses['graph_fusion_residual_weight'] = torch.sigmoid(
@@ -800,6 +850,7 @@ class SparseGCN(nn.Module):
         vq_dist_dict = {}
         graph_shift_dict = {}
         causal_score_dict = {}
+        synthetic_score_dict = {}
 
         for ws in valid_sizes:
             x_win = x[:, -ws:, :]  # (B, ws, C)
@@ -834,6 +885,9 @@ class SparseGCN(nn.Module):
             if self.use_causal_score and aux_losses.get('causal_score', None) is not None:
                 c_score = aux_losses['causal_score']
                 causal_score_dict[ws] = c_score[:, :ws] if ws < self.win_size else c_score
+            if self.use_synthetic_score and aux_losses.get('synthetic_logits', None) is not None:
+                s_score = torch.sigmoid(aux_losses['synthetic_logits'])
+                synthetic_score_dict[ws] = s_score[:, :ws] if ws < self.win_size else s_score
 
         # v11.1 FIX [Bug 2]: 自适应 VQ 距离归一化
         raw_vq_score = self._aggregate_vq_dist(vq_dist_dict, valid_sizes, B, L, x.device)
@@ -892,6 +946,16 @@ class SparseGCN(nn.Module):
                 pad_causal = torch.zeros(B, pad_len, device=score.device)
                 causal_score = torch.cat([pad_causal, causal_score], dim=1)
             score = score + self.causal_score_weight * causal_score
+
+        if self.use_synthetic_score and synthetic_score_dict:
+            synthetic_score = self._aggregate_vq_dist(synthetic_score_dict, valid_sizes, B, L, x.device)
+            synthetic_score = self._normalize_synthetic_score(synthetic_score)
+            synthetic_score = synthetic_score[:, -score.shape[1]:] if synthetic_score.shape[1] >= score.shape[1] else synthetic_score
+            if synthetic_score.shape[1] < score.shape[1]:
+                pad_len = score.shape[1] - synthetic_score.shape[1]
+                pad_synth = torch.zeros(B, pad_len, device=score.device)
+                synthetic_score = torch.cat([pad_synth, synthetic_score], dim=1)
+            score = score + self.synthetic_score_weight * synthetic_score
 
         # score 输出是 L_max（即 max(win_sizes)），按实际有效窗口截断
         L_eff = max(valid_sizes)

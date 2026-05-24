@@ -1,6 +1,6 @@
 # LaGraph Architecture Simplification Plan
 
-Date: 2026-05-24
+Date: 2026-05-25
 Branch: `codex/5070-env-migration`
 
 ## Goal
@@ -55,6 +55,8 @@ should not be treated as valid modules or ablations.
 | `causal-lag-score-strong` | on | on | on | removed | off | Stronger lagged mechanism score profile |
 | `causal-cf-gain` | on | on | on | removed | off | Counterfactual parent-gain score profile |
 | `causal-cf-hurt` | on | on | on | removed | off | Best current counterfactual causal candidate |
+| `synthetic-aux` | on | on | on | removed | off | Synthetic industrial perturbation auxiliary candidate |
+| `synthetic-aux-q75` | on | on | on | removed | off | Synthetic auxiliary plus q75 aggregation candidate |
 | `dynamic-temporal-regularized` | on | dynamic + residual gate + temporal graph regularization | on | removed | off | Rejected graph smoothness/locality regularization profile |
 | `dynamic-temporal-robust` | on | dynamic + residual gate | on | removed | off | Rejected 5% trimmed reconstruction loss profile |
 | `dynamic-temporal-robust-lite` | on | dynamic + residual gate | on | removed | off | Rejected 2% trimmed reconstruction loss profile |
@@ -269,6 +271,32 @@ and adjusted F1 is lower than `full`. It should be kept as a candidate and
 validated on additional datasets before being promoted to the paper's main
 architecture.
 
+## Score Aggregation and Synthetic Auxiliary Check
+
+A low-risk inference aggregation sweep and a synthetic industrial perturbation
+auxiliary objective were tested on MSL with seed 2021 and 15 epochs. The
+synthetic objective injects spike, level-shift, drift, stuck-sensor, dropout,
+scale-change, and temporal-shuffle perturbations during training and trains a
+small per-time anomaly head.
+
+| Profile / setting | Raw F1 | Adjusted F1 | Affiliation F1 | Decision |
+| --- | ---: | ---: | ---: | --- |
+| `full`, mean aggregation | 0.1109 | 0.8576 | 0.7006 | main baseline |
+| `full --score-aggregation q75` | 0.1097 | 0.8575 | 0.7018 | small positive, not enough |
+| `full --score-aggregation q80` | 0.1105 | 0.8576 | 0.6983 | reject |
+| `full --score-aggregation q90` | 0.1108 | 0.8578 | 0.7004 | reject |
+| `full --score-aggregation max` | 0.1225 | 0.7940 | 0.6955 | raw improves, event quality drops |
+| `full --score-aggregation center --score-center-width 5` | 0.1136 | 0.8574 | 0.7003 | reject |
+| `full --score-aggregation last` | 0.1064 | 0.8572 | 0.6933 | reject |
+| `synthetic-aux` | 0.1113 | 0.8576 | 0.7023 | current best candidate, still small |
+| `synthetic-aux-q75` | 0.1098 | 0.8577 | 0.7004 | reject |
+| `synthetic-aux --synthetic-score-weight 0.20` | 0.1113 | 0.8576 | 0.7023 | no gain over 0.10 |
+
+Interpretation: aggregation alone has limited headroom. The synthetic auxiliary
+profile gives the best MSL affiliation signal in this sweep, but the gain is
+only about 0.0017 over `full`. It should remain a candidate until multi-seed and
+SWaT checks confirm that the effect is not dataset-specific.
+
 ## Affiliation-Oriented Scoring Check
 
 Several affiliation-oriented inference variants were tested on MSL with
@@ -365,6 +393,7 @@ D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets swat.csv --arch-profile full --save-dir label/LaGraph_swat_15ep
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets MSL.csv --arch-profile dynamic-temporal-gated --seed 2021 --save-dir label/LaGraph_candidate_dynamic_temporal_gated_msl
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets swat.csv --arch-profile dynamic-temporal-gated --seed 2021 --num-workers 0 --prefetch-factor 2 --save-dir label/LaGraph_candidate_dynamic_temporal_gated_swat
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets MSL.csv --arch-profile synthetic-aux --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_synth_aux_msl
 ```
 
 ## Reporting Guidance

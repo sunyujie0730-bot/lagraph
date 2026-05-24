@@ -1,6 +1,6 @@
 # LaGraph Architecture
 
-Date: 2026-05-24
+Date: 2026-05-25
 Branch: `codex/5070-env-migration`
 Runtime target: RTX 5070 single GPU
 
@@ -56,9 +56,10 @@ Additional 2026-05-24 architecture candidates were tested but not promoted:
 `residual-dual-time`, `graph-shift`, `graph-shift-lite`, and
 `graph-shift-strong`. Lag-constrained causal branches were added as
 `causal-lag`, `causal-lag-score`, `causal-lag-score-strong`,
-`causal-cf-gain`, and `causal-cf-hurt`. These remain reproducibility profiles
-rather than main paper architecture until the gains are confirmed across more
-datasets and seeds.
+`causal-cf-gain`, and `causal-cf-hurt`. Inference-time score aggregation
+variants and the `synthetic-aux` self-supervised perturbation profile were also
+added. These remain reproducibility profiles rather than main paper
+architecture until the gains are confirmed across more datasets and seeds.
 
 ## System Flow
 
@@ -246,6 +247,8 @@ Important details:
 | `graph-shift` | on | fixed | on | reconstruction + graph-shift score | rejected structure-shift scoring candidate |
 | `causal-lag` | on | fixed | on | direct reconstruction | lagged mechanism branch, score off |
 | `causal-lag-score` | on | fixed | on | reconstruction + lagged mechanism score | first causal-score candidate |
+| `synthetic-aux` | on | fixed | on | reconstruction + synthetic-head score | industrial perturbation auxiliary candidate |
+| `synthetic-aux-q75` | on | fixed | on | q75 aggregation + synthetic-head score | rejected combination candidate |
 | `with-scorer` | on | fixed | on | old multi-scale scorer | old scoring ablation |
 | `no-vq` | on | fixed | off | old multi-scale scorer | VQ ablation |
 | `channel-only` | on | off | on | direct reconstruction | channel graph ablation |
@@ -298,6 +301,7 @@ MSL seed-2021, 15 epochs, current aligned code path:
 | `graph-shift-lite` | lower graph-shift weight | 0.1105 | 0.8576 | 0.6959 | reject |
 | `causal-lag-score` | lagged parent mechanism, detached backbone, score weight 0.05 | 0.1102 | 0.8574 | 0.6983 | reject as main; keep as causal prototype |
 | `causal-cf-hurt` | counterfactual parent-hurt score, weight 0.10, top-k 5 | 0.1109 | 0.7987 | 0.7024 | candidate; small affiliation gain only |
+| `synthetic-aux` | synthetic industrial perturbation auxiliary loss, score weight 0.10 | 0.1113 | 0.8576 | 0.7023 | candidate; small affiliation gain only |
 
 Interpretation: the issue with the dual graph is not just serial ordering. The
 unsupervised reconstruction objective gives no direct supervision for a fusion
@@ -311,6 +315,30 @@ discriminative enough to improve affiliation F1. The counterfactual
 parent-hurt score gives the first positive MSL affiliation signal, but the
 margin is small and adjusted F1 drops, so it should be treated as a candidate
 rather than the main reported architecture.
+
+## Score Aggregation and Synthetic Auxiliary Check
+
+MSL seed-2021, 15 epochs, current aligned code path:
+
+| Profile / setting | Raw F1 | Adjusted F1 | Affiliation F1 | Decision |
+| --- | ---: | ---: | ---: | --- |
+| `full`, mean aggregation | 0.1109 | 0.8576 | 0.7006 | main baseline |
+| `full --score-aggregation q75` | 0.1097 | 0.8575 | 0.7018 | small positive, not enough |
+| `full --score-aggregation q80` | 0.1105 | 0.8576 | 0.6983 | reject |
+| `full --score-aggregation q90` | 0.1108 | 0.8578 | 0.7004 | reject |
+| `full --score-aggregation max` | 0.1225 | 0.7940 | 0.6955 | raw improves, event quality drops |
+| `full --score-aggregation center --score-center-width 5` | 0.1136 | 0.8574 | 0.7003 | reject |
+| `full --score-aggregation last` | 0.1064 | 0.8572 | 0.6933 | reject |
+| `synthetic-aux` | 0.1113 | 0.8576 | 0.7023 | current best candidate, still small |
+| `synthetic-aux-q75` | 0.1098 | 0.8577 | 0.7004 | reject |
+| `synthetic-aux --synthetic-score-weight 0.20` | 0.1113 | 0.8576 | 0.7023 | no gain over 0.10 |
+
+Interpretation: changing the overlapping-window aggregation alone does not
+solve the event-level bottleneck. Conservative q75 aggregation gives a small
+affiliation gain, while max aggregation improves raw F1 but damages adjusted and
+affiliation metrics. The synthetic industrial perturbation auxiliary objective
+is the best current signal, but its margin is still too small to promote before
+multi-seed and SWaT validation.
 
 ## Causal Inference Status
 
@@ -454,6 +482,7 @@ ts_benchmark/baselines/self_impl/LaGraph/
 | `dynamic-temporal-gated` is dataset-dependent | improves SWaT but weakens MSL affiliation | keep as extension, not default |
 | Direct VQ score fusion is weak | VQ does not reliably improve ranking as a score | use VQ as training regularizer |
 | Post-processing hurt MSL affiliation | generic smoothing/segment shaping is unsafe | focus on representation and calibrated scoring |
+| Synthetic auxiliary gain is small | improves MSL affiliation by about 0.0017 only | keep as candidate; validate across seeds/datasets |
 | Available default benchmark set currently excludes SMD | all-dataset claims are limited | report exclusions and optionally run SMD separately |
 
-Last updated: 2026-05-24.
+Last updated: 2026-05-25.
