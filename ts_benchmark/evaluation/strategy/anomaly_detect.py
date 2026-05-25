@@ -131,6 +131,17 @@ class AnomalyDetect(Strategy):
             
             # ===== 步骤3: 推理预测 =====
             predict_labels, another = self.detect(test_data)
+            if hasattr(self.model, "export_root_cause_report"):
+                try:
+                    self.model.export_root_cause_report(
+                        series_name,
+                        test_data,
+                        test_label,
+                        predict_labels=predict_labels,
+                        scores=another,
+                    )
+                except Exception as e:
+                    print(f"[RCA WARN] Failed to export root-cause report for {series_name}: {e}")
             # 确保预测结果是字典格式（支持多异常率预测）
             if not isinstance(predict_labels, dict):
                 predict_labels = {"None": predict_labels}

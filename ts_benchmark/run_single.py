@@ -397,6 +397,11 @@ def main():
         default=None,
         help="Weight for temporal first-difference reconstruction loss",
     )
+    parser.add_argument(
+        "--export-rca",
+        action="store_true",
+        help="Export event-level root-cause rankings based on channel reconstruction contributions.",
+    )
     args = parser.parse_args()
 
     # 确定训练轮次
@@ -1118,6 +1123,7 @@ def main():
                     "warmup_epochs": warmup_epochs,
                     "dataloader_num_workers": dataloader_num_workers,
                     "dataloader_prefetch_factor": dataloader_prefetch_factor,
+                    "export_rca": args.export_rca,
                     **arch_switches,
                     **vq_hyper_params,
                     **score_hyper_params,

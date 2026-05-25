@@ -144,6 +144,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "prediction_fill_gap": 0,
     "prediction_min_len": 1,
     "prediction_dilate": 0,
+    "export_rca": False,
     # --- v11.4 P0-2: POT 阈值参数 ---
     "pot_risk": 1e-4,            # POT EVT 风险水平
     "pot_num_quantiles": 1000,   # POT 分位数数量
@@ -805,6 +806,8 @@ class LaGraph:
         self._train_raw = None
         self._train_anomaly_scores = None
         self._val_anomaly_scores = None
+        self._last_channel_scores = None
+        self._last_channel_names = None
 
         # ★ P0-2: POT 阈值估计器
         self._pot_estimator = POTThresholdEstimator(
@@ -2297,6 +2300,33 @@ class LaGraph:
         score, vq_score = self.model.multi_scale_forward(input_data)
         return score.cpu().numpy()
 
+    @torch.no_grad()
+    def _detect_forward_with_channels(self, input_data):
+        score, _ = self.model.multi_scale_forward(input_data)
+        raw_model = self._get_raw_model()
+        x_rec, _, _, _, _, _, _ = raw_model(input_data)
+        channel_err = F.l1_loss(x_rec, input_data, reduction="none")
+        if hasattr(raw_model, "_normalize_score_error"):
+            channel_err = raw_model._normalize_score_error(channel_err)
+        return score.cpu().numpy(), channel_err.cpu().numpy()
+
+    @staticmethod
+    def _add_window_channel_scores(channel_sums, point_counts, window_channels, start_index):
+        if window_channels is None or len(window_channels) == 0:
+            return
+        n_windows, win_size, _ = window_channels.shape
+        total_length = channel_sums.shape[0]
+        for offset in range(win_size):
+            point_start = start_index + offset
+            if point_start >= total_length:
+                break
+            n = min(n_windows, total_length - point_start)
+            if n <= 0:
+                continue
+            sl = slice(point_start, point_start + n)
+            channel_sums[sl] += window_channels[:n, offset, :]
+            point_counts[sl] += 1.0
+
     def detect_score(self, train: pd.DataFrame) -> np.ndarray:
         if not self.trained:
             raise RuntimeError("Model not trained yet. Call detect_fit first.")
@@ -2391,9 +2421,22 @@ class LaGraph:
         )
 
         test_window_list = []
+        export_rca = bool(getattr(self.config, "export_rca", False))
+        channel_sums = None
+        channel_counts = None
+        window_cursor = 0
+        if export_rca:
+            channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
+            channel_counts = np.zeros(total_length, dtype=np.float64)
+
         for i, (input_data, labels) in enumerate(test_loader):
             input_data = input_data.float().to(self.device)
-            cri = self._detect_forward(input_data)
+            if export_rca:
+                cri, channel_err = self._detect_forward_with_channels(input_data)
+                self._add_window_channel_scores(channel_sums, channel_counts, channel_err, window_cursor)
+                window_cursor += int(channel_err.shape[0])
+            else:
+                cri = self._detect_forward(input_data)
             test_window_list.append(cri)
             if (i + 1) % 10 == 0:
                 torch.cuda.empty_cache()
@@ -2401,6 +2444,18 @@ class LaGraph:
         if len(test_window_list) == 0:
             dummy = np.zeros(total_length, dtype=np.int32)
             return {r: dummy for r in self.config.anomaly_ratio}, np.zeros(total_length)
+
+        if export_rca and channel_sums is not None:
+            self._last_channel_scores = np.divide(
+                channel_sums,
+                channel_counts[:, None],
+                out=np.zeros_like(channel_sums),
+                where=channel_counts[:, None] > 0,
+            ).astype(np.float32)
+            self._last_channel_names = list(test_data.columns)
+        else:
+            self._last_channel_scores = None
+            self._last_channel_names = None
 
         test_windows = np.concatenate(test_window_list, axis=0)
         test_energy = self._aggregate_window_scores(test_windows, total_length)
@@ -2473,6 +2528,94 @@ class LaGraph:
     # ════════════════════════════════════════════════════════════════
     #  ★ P0-3: 评估报告系统（AUC-ROC / AUPR）
     # ════════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def _label_segments(mask):
+        mask = np.asarray(mask).astype(bool)
+        segments = []
+        in_segment = False
+        for idx, value in enumerate(mask):
+            if value and not in_segment:
+                start = idx
+                in_segment = True
+            elif in_segment and not value:
+                segments.append((start, idx))
+                in_segment = False
+        if in_segment:
+            segments.append((start, len(mask)))
+        return segments
+
+    @staticmethod
+    def _root_cause_group_name(feature_name):
+        if isinstance(feature_name, str) and len(feature_name) >= 2 and feature_name[0] == "P" and feature_name[1].isdigit():
+            return feature_name.split("_", 1)[0]
+        return feature_name
+
+    def export_root_cause_report(self, series_name, test_data, test_label, predict_labels=None, scores=None):
+        if not bool(getattr(self.config, "export_rca", False)):
+            return None
+        if self._last_channel_scores is None or self._last_channel_names is None:
+            return None
+
+        labels = test_label.to_numpy().reshape(-1).astype(int)
+        channel_scores = self._last_channel_scores[: len(labels)]
+        feature_names = list(self._last_channel_names)
+        events = []
+
+        for event_id, (start, end) in enumerate(self._label_segments(labels), start=1):
+            if end <= start:
+                continue
+            event_scores = channel_scores[start:end].mean(axis=0)
+            order = np.argsort(-event_scores)
+            channel_ranking = [
+                {
+                    "rank": int(rank + 1),
+                    "name": feature_names[idx],
+                    "score": float(event_scores[idx]),
+                }
+                for rank, idx in enumerate(order)
+            ]
+            group_scores = {}
+            for name, value in zip(feature_names, event_scores):
+                group = self._root_cause_group_name(name)
+                group_scores[group] = max(group_scores.get(group, float("-inf")), float(value))
+            group_ranking = [
+                {"rank": int(rank + 1), "name": name, "score": float(value)}
+                for rank, (name, value) in enumerate(
+                    sorted(group_scores.items(), key=lambda item: item[1], reverse=True)
+                )
+            ]
+            events.append(
+                {
+                    "event_id": event_id,
+                    "start": int(start),
+                    "end": int(end),
+                    "length": int(end - start),
+                    "top_channels": channel_ranking[:20],
+                    "channel_ranking": channel_ranking,
+                    "group_ranking": group_ranking,
+                }
+            )
+
+        from datetime import datetime
+        from ts_benchmark.common.constant import ROOT_PATH
+
+        safe_name = os.path.splitext(os.path.basename(str(series_name)))[0]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = os.path.join(ROOT_PATH, "result", "rca", safe_name)
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, f"{timestamp}_rca.json")
+        payload = {
+            "series_name": series_name,
+            "dataset_name": self.dataset_name,
+            "score_method": "mean channel-wise normalized reconstruction error over true anomaly event",
+            "feature_names": feature_names,
+            "events": events,
+        }
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+        print(f"  [RCA] Root-cause ranking -> {output_path}")
+        return output_path
 
     def evaluate(self, test_data: pd.DataFrame, test_labels: np.ndarray,
                  save_path: str = None) -> dict:
