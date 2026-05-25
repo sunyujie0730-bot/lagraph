@@ -264,6 +264,8 @@ Important details:
 | `loss-smoothl1` | on | fixed | on | direct reconstruction | SmoothL1 loss sensitivity candidate |
 | `loss-logcosh` | on | fixed | on | direct reconstruction | log-cosh loss sensitivity candidate |
 | `loss-mse-mae` | on | fixed | on | direct reconstruction | mixed MSE/MAE loss candidate |
+| `loss-mse-logcosh` | on | fixed | on | direct reconstruction | conservative MSE/log-cosh loss candidate |
+| `loss-mse-smoothl1` | on | fixed | on | direct reconstruction | conservative MSE/SmoothL1 loss candidate |
 | `loss-diff` | on | fixed | on | direct reconstruction | first-difference loss candidate |
 | `loss-smoothl1-diff` | on | fixed | on | direct reconstruction | SmoothL1 plus first-difference loss candidate |
 | `with-scorer` | on | fixed | on | old multi-scale scorer | old scoring ablation |
@@ -371,6 +373,8 @@ over the standard anomaly-ratio grid.
 | `loss-smoothl1` | MSL | 0.1090 | 0.8572 | 0.7052 | positive MSL-only candidate |
 | `loss-logcosh` | MSL | 0.1097 | 0.8573 | 0.7059 | best MSL affiliation candidate |
 | `loss-mse-mae` | MSL | 0.1114 | 0.8575 | 0.7017 | too small |
+| `loss-mse-logcosh` | MSL | 0.1111 | 0.8574 | 0.7004 | reject |
+| `loss-mse-smoothl1` | MSL | 0.1111 | 0.8575 | 0.7003 | reject |
 | `loss-diff` | MSL | 0.1104 | 0.8579 | 0.6994 | reject |
 | `loss-smoothl1-diff` | MSL | 0.1111 | 0.8574 | 0.6929 | reject |
 | `full` | SWaT | 0.3169 | 0.9361 | 0.8458 | MSE baseline |
@@ -385,6 +389,27 @@ dataset-sensitive rather than a general improvement. The default paper profile
 should therefore keep MSE. `loss-logcosh` and `loss-smoothl1` can be reported as
 loss sensitivity ablations or revisited for industrial datasets whose normal
 training data contain more outlier-like contamination.
+
+A conservative mixed objective was also tested after the first loss sweep:
+`0.9*MSE + 0.1*log_cosh` and `0.9*MSE + 0.1*SmoothL1`. Both were essentially
+tied with MSE on MSL but did not improve affiliation F1. This suggests that the
+MSL gain from pure robust losses requires a strong change in gradient shape,
+while weak robust regularization is not enough to alter event ranking.
+
+## Channel Score Aggregation Check
+
+The direct reconstruction score uses the mean of the top-k channel errors at
+each timestamp. MSL seed-2021, 15 epochs:
+
+| Setting | Raw F1 | Adjusted F1 | Affiliation F1 | Decision |
+| --- | ---: | ---: | ---: | --- |
+| default top-k | 0.1109 | 0.8576 | 0.7006 | keep |
+| `--score-topk-k 3` | 0.1085 | 0.8575 | 0.7005 | no gain |
+| `--score-topk-k 8` | 0.1108 | 0.8578 | 0.6972 | reject |
+
+Interpretation: the current MSL bottleneck is not resolved by simply narrowing
+or widening the number of contributing channels in the anomaly score. The
+default top-k setting remains the safest choice.
 
 ## Causal Inference Status
 

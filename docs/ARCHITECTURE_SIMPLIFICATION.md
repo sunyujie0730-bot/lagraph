@@ -60,6 +60,8 @@ should not be treated as valid modules or ablations.
 | `loss-smoothl1` | on | on | on | removed | off | SmoothL1 reconstruction loss candidate |
 | `loss-logcosh` | on | on | on | removed | off | log-cosh reconstruction loss candidate |
 | `loss-mse-mae` | on | on | on | removed | off | mixed MSE/MAE reconstruction loss candidate |
+| `loss-mse-logcosh` | on | on | on | removed | off | conservative MSE/log-cosh loss candidate |
+| `loss-mse-smoothl1` | on | on | on | removed | off | conservative MSE/SmoothL1 loss candidate |
 | `loss-diff` | on | on | on | removed | off | first-difference reconstruction loss candidate |
 | `loss-smoothl1-diff` | on | on | on | removed | off | SmoothL1 plus first-difference loss candidate |
 | `dynamic-temporal-regularized` | on | dynamic + residual gate + temporal graph regularization | on | removed | off | Rejected graph smoothness/locality regularization profile |
@@ -316,6 +318,8 @@ MSL and SWaT, seed 2021, 15 epochs, `num_workers=2`, `prefetch_factor=2`:
 | `loss-smoothl1` | MSL | 0.1090 | 0.8572 | 0.7052 | useful MSL candidate |
 | `loss-logcosh` | MSL | 0.1097 | 0.8573 | 0.7059 | best MSL affiliation candidate |
 | `loss-mse-mae` | MSL | 0.1114 | 0.8575 | 0.7017 | too small |
+| `loss-mse-logcosh` | MSL | 0.1111 | 0.8574 | 0.7004 | reject |
+| `loss-mse-smoothl1` | MSL | 0.1111 | 0.8575 | 0.7003 | reject |
 | `loss-diff` | MSL | 0.1104 | 0.8579 | 0.6994 | reject |
 | `loss-smoothl1-diff` | MSL | 0.1111 | 0.8574 | 0.6929 | reject |
 | `full` | SWaT | 0.3169 | 0.9361 | 0.8458 | MSE baseline |
@@ -328,6 +332,25 @@ should be kept as reproducibility profiles and loss-sensitivity ablations, not
 as the main compact architecture. The first-difference loss does not help MSL
 and should not be expanded further unless a new temporal-boundary hypothesis is
 introduced.
+
+After this sweep, two conservative mixed objectives were tested:
+`0.9*MSE + 0.1*log_cosh` and `0.9*MSE + 0.1*SmoothL1`. Both preserved raw and
+adjusted F1 but did not improve MSL affiliation F1. This rules out a simple
+weak-robust-loss compromise as the next main direction.
+
+## Channel Score Top-K Check
+
+MSL seed-2021, 15 epochs:
+
+| Setting | Raw F1 | Adjusted F1 | Affiliation F1 | Decision |
+| --- | ---: | ---: | ---: | --- |
+| default top-k | 0.1109 | 0.8576 | 0.7006 | keep |
+| `--score-topk-k 3` | 0.1085 | 0.8575 | 0.7005 | no gain |
+| `--score-topk-k 8` | 0.1108 | 0.8578 | 0.6972 | reject |
+
+Conclusion: the direct reconstruction score is not currently limited by a
+trivial choice of channel-count aggregation. Narrower top-k does not improve
+localized anomaly detection, and wider top-k dilutes affiliation F1.
 
 ## Affiliation-Oriented Scoring Check
 

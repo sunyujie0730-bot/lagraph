@@ -143,6 +143,8 @@ def main():
             "loss-smoothl1",
             "loss-logcosh",
             "loss-mse-mae",
+            "loss-mse-logcosh",
+            "loss-mse-smoothl1",
             "loss-diff",
             "loss-smoothl1-diff",
             "dynamic-temporal",
@@ -256,7 +258,16 @@ def main():
     )
     parser.add_argument(
         "--reconstruction-loss",
-        choices=["mse", "mae", "smooth_l1", "log_cosh", "charbonnier", "mse_mae"],
+        choices=[
+            "mse",
+            "mae",
+            "smooth_l1",
+            "log_cosh",
+            "charbonnier",
+            "mse_mae",
+            "mse_log_cosh",
+            "mse_smooth_l1",
+        ],
         default=None,
         help="Override the reconstruction training loss type",
     )
@@ -271,6 +282,12 @@ def main():
         type=float,
         default=None,
         help="MSE weight for reconstruction-loss=mse_mae",
+    )
+    parser.add_argument(
+        "--mse-robust-alpha",
+        type=float,
+        default=None,
+        help="MSE weight for reconstruction-loss=mse_log_cosh or mse_smooth_l1",
     )
     parser.add_argument(
         "--charbonnier-eps",
@@ -612,6 +629,23 @@ def main():
             "reconstruction_loss_type": "mse_mae",
             "mse_l1_alpha": 0.7,
         },
+        "loss-mse-logcosh": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "reconstruction_loss_type": "mse_log_cosh",
+            "mse_robust_alpha": 0.9,
+        },
+        "loss-mse-smoothl1": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "reconstruction_loss_type": "mse_smooth_l1",
+            "mse_robust_alpha": 0.9,
+            "smooth_l1_beta": 1.0,
+        },
         "loss-diff": {
             "use_channel_graph": True,
             "use_temporal_graph": True,
@@ -830,6 +864,8 @@ def main():
         score_hyper_params["smooth_l1_beta"] = max(float(args.smooth_l1_beta), 1e-6)
     if args.mse_l1_alpha is not None:
         score_hyper_params["mse_l1_alpha"] = min(max(float(args.mse_l1_alpha), 0.0), 1.0)
+    if args.mse_robust_alpha is not None:
+        score_hyper_params["mse_robust_alpha"] = min(max(float(args.mse_robust_alpha), 0.0), 1.0)
     if args.charbonnier_eps is not None:
         score_hyper_params["charbonnier_eps"] = max(float(args.charbonnier_eps), 1e-12)
     if args.lambda_temporal_diff_loss is not None:

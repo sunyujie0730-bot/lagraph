@@ -112,6 +112,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "reconstruction_loss_type": "mse",
     "smooth_l1_beta": 1.0,
     "mse_l1_alpha": 0.7,
+    "mse_robust_alpha": 0.9,
     "charbonnier_eps": 1e-3,
     "lambda_temporal_diff_loss": 0.0,
     "use_robust_reconstruction_loss": False,
@@ -974,6 +975,7 @@ class LaGraph:
                 "reconstruction_loss_type": getattr(self.config, "reconstruction_loss_type", None),
                 "smooth_l1_beta": getattr(self.config, "smooth_l1_beta", None),
                 "mse_l1_alpha": getattr(self.config, "mse_l1_alpha", None),
+                "mse_robust_alpha": getattr(self.config, "mse_robust_alpha", None),
                 "charbonnier_eps": getattr(self.config, "charbonnier_eps", None),
                 "lambda_temporal_diff_loss": getattr(self.config, "lambda_temporal_diff_loss", None),
                 "use_robust_reconstruction_loss": getattr(self.config, "use_robust_reconstruction_loss", None),
@@ -1047,10 +1049,23 @@ class LaGraph:
             alpha = float(getattr(self.config, "mse_l1_alpha", 0.7) or 0.7)
             alpha = min(max(alpha, 0.0), 1.0)
             elem_loss = alpha * diff.pow(2) + (1.0 - alpha) * diff.abs()
+        elif loss_type == "mse_log_cosh":
+            alpha = float(getattr(self.config, "mse_robust_alpha", 0.9) or 0.9)
+            alpha = min(max(alpha, 0.0), 1.0)
+            abs_diff = diff.abs()
+            robust_loss = abs_diff + F.softplus(-2.0 * abs_diff) - np.log(2.0)
+            elem_loss = alpha * diff.pow(2) + (1.0 - alpha) * robust_loss
+        elif loss_type == "mse_smooth_l1":
+            alpha = float(getattr(self.config, "mse_robust_alpha", 0.9) or 0.9)
+            alpha = min(max(alpha, 0.0), 1.0)
+            beta = float(getattr(self.config, "smooth_l1_beta", 1.0) or 1.0)
+            robust_loss = F.smooth_l1_loss(rec, target, reduction='none', beta=max(beta, 1e-6))
+            elem_loss = alpha * diff.pow(2) + (1.0 - alpha) * robust_loss
         else:
             raise ValueError(
                 f"Unsupported reconstruction_loss_type={loss_type!r}. "
-                "Choose from mse, mae, smooth_l1, log_cosh, charbonnier, mse_mae."
+                "Choose from mse, mae, smooth_l1, log_cosh, charbonnier, "
+                "mse_mae, mse_log_cosh, mse_smooth_l1."
             )
         sample_loss = elem_loss.mean(dim=(1, 2))
         if not getattr(self.config, "use_robust_reconstruction_loss", False):
@@ -1990,6 +2005,7 @@ class LaGraph:
                 "reconstruction_loss_type": getattr(self.config, "reconstruction_loss_type", None),
                 "smooth_l1_beta": getattr(self.config, "smooth_l1_beta", None),
                 "mse_l1_alpha": getattr(self.config, "mse_l1_alpha", None),
+                "mse_robust_alpha": getattr(self.config, "mse_robust_alpha", None),
                 "charbonnier_eps": getattr(self.config, "charbonnier_eps", None),
                 "lambda_temporal_diff_loss": getattr(self.config, "lambda_temporal_diff_loss", None),
                 "use_robust_reconstruction_loss": getattr(self.config, "use_robust_reconstruction_loss", None),
