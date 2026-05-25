@@ -1,0 +1,139 @@
+{
+  "series_name": "HAI_21_03_test5.csv",
+  "task": "subsystem_root_cause_ranking",
+  "time_index": "relative_to_test_segment",
+  "group_scope": [
+    "P1",
+    "P2",
+    "P3"
+  ],
+  "events": [
+    {
+      "event_id": 1,
+      "start": 1560,
+      "end": 1732,
+      "length": 172,
+      "root_groups": [
+        "P1",
+        "P2"
+      ],
+      "root_variables": []
+    },
+    {
+      "event_id": 2,
+      "start": 9603,
+      "end": 9861,
+      "length": 258,
+      "root_groups": [
+        "P1",
+        "P2"
+      ],
+      "root_variables": []
+    },
+    {
+      "event_id": 3,
+      "start": 18908,
+      "end": 19164,
+      "length": 256,
+      "root_groups": [
+        "P1",
+        "P2"
+      ],
+      "root_variables": []
+    },
+    {
+      "event_id": 4,
+      "start": 24900,
+      "end": 25020,
+      "length": 120,
+      "root_groups": [
+        "P1",
+        "P3"
+      ],
+      "root_variables": []
+    },
+    {
+      "event_id": 5,
+      "start": 28089,
+      "end": 28292,
+      "length": 203,
+      "root_groups": [
+        "P1",
+        "P2"
+      ],
+      "root_variables": []
+    },
+    {
+      "event_id": 6,
+      "start": 35523,
+      "end": 35676,
+      "length": 153,
+      "root_groups": [
+        "P2",
+        "P3"
+      ],
+      "root_variables": []
+    },
+    {
+      "event_id": 7,
+      "start": 44585,
+      "end": 44664,
+      "length": 79,
+      "root_groups": [
+        "P2"
+      ],
+      "root_variables": []
+    },
+    {
+      "event_id": 8,
+      "start": 51906,
+      "end": 51957,
+      "length": 51,
+      "root_groups": [
+        "P1"
+      ],
+      "root_variables": []
+    },
+    {
+      "event_id": 9,
+      "start": 54671,
+      "end": 54912,
+      "length": 241,
+      "root_groups": [
+        "P1"
+      ],
+      "root_variables": []
+    },
+    {
+      "event_id": 10,
+      "start": 83041,
+      "end": 83303,
+      "length": 262,
+      "root_groups": [
+        "P1"
+      ],
+      "root_variables": []
+    },
+    {
+      "event_id": 11,
+      "start": 85800,
+      "end": 85920,
+      "length": 120,
+      "root_groups": [
+        "P2",
+        "P3"
+      ],
+      "root_variables": []
+    },
+    {
+      "event_id": 12,
+      "start": 88259,
+      "end": 88521,
+      "length": 262,
+      "root_groups": [
+        "P1"
+      ],
+      "root_variables": []
+    }
+  ]
+}

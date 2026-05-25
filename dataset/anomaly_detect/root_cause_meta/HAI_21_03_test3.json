@@ -1,0 +1,95 @@
+{
+  "series_name": "HAI_21_03_test3.csv",
+  "task": "subsystem_root_cause_ranking",
+  "time_index": "relative_to_test_segment",
+  "group_scope": [
+    "P1",
+    "P2",
+    "P3"
+  ],
+  "events": [
+    {
+      "event_id": 1,
+      "start": 49866,
+      "end": 49998,
+      "length": 132,
+      "root_groups": [
+        "P1"
+      ],
+      "root_variables": []
+    },
+    {
+      "event_id": 2,
+      "start": 55260,
+      "end": 55681,
+      "length": 421,
+      "root_groups": [
+        "P1"
+      ],
+      "root_variables": []
+    },
+    {
+      "event_id": 3,
+      "start": 65468,
+      "end": 65657,
+      "length": 189,
+      "root_groups": [
+        "P1"
+      ],
+      "root_variables": []
+    },
+    {
+      "event_id": 4,
+      "start": 75182,
+      "end": 75288,
+      "length": 106,
+      "root_groups": [
+        "P2"
+      ],
+      "root_variables": []
+    },
+    {
+      "event_id": 5,
+      "start": 76980,
+      "end": 77064,
+      "length": 84,
+      "root_groups": [
+        "P2"
+      ],
+      "root_variables": []
+    },
+    {
+      "event_id": 6,
+      "start": 86111,
+      "end": 86349,
+      "length": 238,
+      "root_groups": [
+        "P1",
+        "P2"
+      ],
+      "root_variables": []
+    },
+    {
+      "event_id": 7,
+      "start": 93062,
+      "end": 93172,
+      "length": 110,
+      "root_groups": [
+        "P1",
+        "P2"
+      ],
+      "root_variables": []
+    },
+    {
+      "event_id": 8,
+      "start": 100381,
+      "end": 100636,
+      "length": 255,
+      "root_groups": [
+        "P1",
+        "P2"
+      ],
+      "root_variables": []
+    }
+  ]
+}

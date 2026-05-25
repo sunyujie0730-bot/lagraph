@@ -1,0 +1,66 @@
+{
+  "series_name": "HAI_21_03_test4.csv",
+  "task": "subsystem_root_cause_ranking",
+  "time_index": "relative_to_test_segment",
+  "group_scope": [
+    "P1",
+    "P2",
+    "P3"
+  ],
+  "events": [
+    {
+      "event_id": 1,
+      "start": 2583,
+      "end": 2837,
+      "length": 254,
+      "root_groups": [
+        "P1"
+      ],
+      "root_variables": []
+    },
+    {
+      "event_id": 2,
+      "start": 6300,
+      "end": 6562,
+      "length": 262,
+      "root_groups": [
+        "P1",
+        "P3"
+      ],
+      "root_variables": []
+    },
+    {
+      "event_id": 3,
+      "start": 14221,
+      "end": 14484,
+      "length": 263,
+      "root_groups": [
+        "P1",
+        "P3"
+      ],
+      "root_variables": []
+    },
+    {
+      "event_id": 4,
+      "start": 20702,
+      "end": 20960,
+      "length": 258,
+      "root_groups": [
+        "P1",
+        "P2"
+      ],
+      "root_variables": []
+    },
+    {
+      "event_id": 5,
+      "start": 31621,
+      "end": 31741,
+      "length": 120,
+      "root_groups": [
+        "P2",
+        "P3"
+      ],
+      "root_variables": []
+    }
+  ]
+}

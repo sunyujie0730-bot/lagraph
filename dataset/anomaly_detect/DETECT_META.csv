@@ -11,3 +11,7 @@ TE_MM_M2_d06.csv,7878,TE_multimode,small,other,False,,,,,,,5760,53,2,6,Multi-mod
 TE_MM_M2_d14.csv,14402,TE_multimode,large,other,False,,,,,,,5760,53,2,14,Multi-mode Tennessee Eastman,v1.0,mode_2_fault_14;normal_train_ratio=0.8
 TE_MM_M2_d21.csv,14402,TE_multimode,large,other,False,,,,,,,5760,53,2,21,Multi-mode Tennessee Eastman,v1.0,mode_2_fault_21;normal_train_ratio=0.8
 HAI_21_03_test1.csv,259202,HAI_21_03,large,other,False,,,,,,,216001,79,,,HAI,21.03,train=train1.csv.gz;test=test1.csv.gz;downsample=1
+HAI_21_03_test2.csv,334802,HAI_21_03,large,other,False,,,,,,,216001,79,,,HAI,21.03,train=train1.csv.gz;test=test2.csv.gz;downsample=1
+HAI_21_03_test3.csv,324002,HAI_21_03,large,other,False,,,,,,,216001,79,,,HAI,21.03,train=train1.csv.gz;test=test3.csv.gz;downsample=1
+HAI_21_03_test4.csv,255602,HAI_21_03,large,other,False,,,,,,,216001,79,,,HAI,21.03,train=train1.csv.gz;test=test4.csv.gz;downsample=1
+HAI_21_03_test5.csv,308402,HAI_21_03,large,other,False,,,,,,,216001,79,,,HAI,21.03,train=train1.csv.gz;test=test5.csv.gz;downsample=1

@@ -60,6 +60,7 @@ python scripts/evaluate_rca.py --rca result/rca/HAI_21_03_test1/<timestamp>_rca.
 ## HAI RCA Ground Truth
 
 For `HAI_21_03_test1.csv`, ground truth is built from `attack_P1`, `attack_P2`, and `attack_P3`.
+The same builder supports `test1.csv.gz` through `test5.csv.gz`.
 
 Current task level: subsystem-level RCA.
 
@@ -68,6 +69,31 @@ Current task level: subsystem-level RCA.
 - `attack_P3 = 1` means root group `P3`
 
 This is suitable for the first RCA experiment because HAI has explicit process-area attack labels.
+
+Current converted HAI files:
+
+- `HAI_21_03_test1.csv`: 5 attack events
+- `HAI_21_03_test2.csv`: 20 attack events
+- `HAI_21_03_test3.csv`: 8 attack events
+- `HAI_21_03_test4.csv`: 5 attack events
+- `HAI_21_03_test5.csv`: 12 attack events
+
+This gives 50 subsystem-level RCA events in total.
+
+## Baselines
+
+Subsystem-level RCA should not be reported without baselines. Current baselines:
+
+- random subsystem ranking
+- train-normal z-score deviation aggregated by subsystem
+
+Example commands:
+
+```powershell
+python scripts/evaluate_rca.py --rca result/rca/HAI_21_03_test2/<timestamp>_rca.json --scope group --baseline random
+python scripts/evaluate_hai_zscore_rca.py --test-file test2.csv.gz
+python scripts/summarize_hai_rca_results.py
+```
 
 ## TE RCA Ground Truth
 
