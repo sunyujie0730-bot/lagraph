@@ -38,7 +38,21 @@ Metrics:
 
 ## Current Implementation
 
-The first implemented RCA signal is channel-wise reconstruction contribution.
+The first implemented RCA signal is channel-wise reconstruction contribution. The current improved RCA signal adds a local counterfactual contrast term:
+
+```text
+score_i = event_error_i
+        + graph_weight * graph_propagated_error_i
+        + contrast_weight * max(event_error_i - pre_event_baseline_i, 0)
+```
+
+The current recommended HAI setting is:
+
+- `rca_contrast_window = 1000`
+- `rca_contrast_weight = 0.75`
+- `rca_graph_weight = 0.0`
+
+The graph propagation path is implemented and exported, but the first HAI test showed no stable subsystem-level ranking gain from graph propagation alone. It should be treated as an interpretable component to keep testing, not as the main current source of improvement.
 
 For each true anomaly event, LaGraph now exports:
 
@@ -48,13 +62,14 @@ For each true anomaly event, LaGraph now exports:
 Export command example:
 
 ```powershell
-python ts_benchmark/run_single.py --epochs 1 --datasets HAI_21_03_test1.csv --eval-config unfixed_detect_label_config.json --export-rca --num-workers 2 --prefetch-factor 2
+python ts_benchmark/run_single.py --epochs 1 --datasets HAI_21_03_test1.csv --eval-config unfixed_detect_label_config.json --export-rca --rca-contrast-window 1000 --rca-contrast-weight 0.75 --num-workers 2 --prefetch-factor 2
 ```
 
 RCA evaluation example:
 
 ```powershell
 python scripts/evaluate_rca.py --rca result/rca/HAI_21_03_test1/<timestamp>_rca.json --scope group
+python scripts/evaluate_rca.py --rca result/rca/HAI_21_03_test1/<timestamp>_rca.json --scope group --score-mode components --component-contrast-weight 0.75
 ```
 
 ## HAI RCA Ground Truth
@@ -90,10 +105,32 @@ Subsystem-level RCA should not be reported without baselines. Current baselines:
 Example commands:
 
 ```powershell
-python scripts/evaluate_rca.py --rca result/rca/HAI_21_03_test2/<timestamp>_rca.json --scope group --baseline random
+python scripts/evaluate_rca.py --rca result/rca/HAI_21_03_test2/<timestamp>_rca.json --scope group --baseline random --random-trials 1000
 python scripts/evaluate_hai_zscore_rca.py --test-file test2.csv.gz
 python scripts/summarize_hai_rca_results.py
 ```
+
+The random baseline should use multiple shuffled trials because HAI subsystem RCA has a small candidate space. A single random shuffle can look artificially strong on events with multiple true root groups.
+
+## Current HAI RCA Results
+
+The current 5-file HAI subsystem-level RCA evaluation covers 50 attack events.
+
+Mean metrics across `HAI_21_03_test1` through `HAI_21_03_test5`:
+
+| Method | MRR | Hit@1 | NDCG@3 | NDCG@5 |
+|---|---:|---:|---:|---:|
+| LaGraph-contrast | 0.9867 | 0.9733 | 0.9462 | 0.9717 |
+| LaGraph | 0.9867 | 0.9733 | 0.9275 | 0.9680 |
+| z-score | 0.9667 | 0.9433 | 0.9299 | 0.9554 |
+| random | 0.5924 | 0.3386 | 0.5759 | 0.6917 |
+
+Interpretation:
+
+- The local contrast term improves ranking quality mainly on multi-root events, especially NDCG@3.
+- It does not improve Hit@1 over the original LaGraph on average, but it keeps Hit@1 stable while improving ranking order.
+- Compared with z-score, LaGraph-contrast has higher average MRR, Hit@1, NDCG@3, and NDCG@5 on the current HAI subsystem RCA benchmark.
+- The gain is useful for paper framing, but it is not yet enough to claim strong variable-level causal root-cause localization.
 
 ## TE RCA Ground Truth
 
@@ -108,14 +145,14 @@ For strict RCA evaluation on TE, the next step is to build a fault-ID to affecte
 
 ## Current Limitations
 
-1. RCA ranking currently uses reconstruction contribution only.
-2. It does not yet use causal lag direction or graph propagation strength.
-3. HAI evaluation is currently subsystem-level, not exact actuator/sensor-level.
+1. RCA is currently validated at subsystem level, not exact sensor/actuator level.
+2. Graph-propagated attribution is implemented, but its current subsystem-level gain is weak.
+3. The current RCA evaluation uses true anomaly intervals; predicted-event RCA and delay analysis still need to be added.
 4. TE variable-level RCA requires a reliable fault-to-variable mapping.
 
 ## Next Steps
 
-1. Add graph influence into RCA score:
+1. Continue testing graph and lagged-causal influence in RCA score:
 
 ```text
 rca_i = reconstruction_contribution_i

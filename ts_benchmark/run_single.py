@@ -402,6 +402,30 @@ def main():
         action="store_true",
         help="Export event-level root-cause rankings based on channel reconstruction contributions.",
     )
+    parser.add_argument(
+        "--rca-graph-weight",
+        type=float,
+        default=None,
+        help="Weight for graph-propagated attribution in exported RCA rankings.",
+    )
+    parser.add_argument(
+        "--rca-graph-direction",
+        choices=["outgoing", "incoming", "both"],
+        default=None,
+        help="Direction used to propagate channel errors over the learned channel graph for RCA.",
+    )
+    parser.add_argument(
+        "--rca-contrast-window",
+        type=int,
+        default=None,
+        help="Number of points before each anomaly event used as the local RCA baseline.",
+    )
+    parser.add_argument(
+        "--rca-contrast-weight",
+        type=float,
+        default=None,
+        help="Weight for positive event-vs-local-baseline lift in exported RCA rankings.",
+    )
     args = parser.parse_args()
 
     # 确定训练轮次
@@ -1103,6 +1127,14 @@ def main():
         score_hyper_params["charbonnier_eps"] = max(float(args.charbonnier_eps), 1e-12)
     if args.lambda_temporal_diff_loss is not None:
         score_hyper_params["lambda_temporal_diff_loss"] = max(0.0, args.lambda_temporal_diff_loss)
+    if args.rca_graph_weight is not None:
+        score_hyper_params["rca_graph_weight"] = max(0.0, args.rca_graph_weight)
+    if args.rca_graph_direction is not None:
+        score_hyper_params["rca_graph_direction"] = args.rca_graph_direction
+    if args.rca_contrast_window is not None:
+        score_hyper_params["rca_contrast_window"] = max(0, args.rca_contrast_window)
+    if args.rca_contrast_weight is not None:
+        score_hyper_params["rca_contrast_weight"] = max(0.0, args.rca_contrast_weight)
     effective_switches = {
         **arch_switches,
         **vq_hyper_params,

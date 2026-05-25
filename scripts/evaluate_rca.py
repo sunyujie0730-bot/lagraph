@@ -22,8 +22,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--meta", type=Path, default=None, help="Root-cause metadata JSON. Defaults by series_name.")
     parser.add_argument("--scope", choices=["group", "channel"], default="group")
     parser.add_argument("--k", type=int, nargs="+", default=[1, 3, 5])
+    parser.add_argument(
+        "--score-mode",
+        choices=["exported", "components"],
+        default="exported",
+        help="Use exported ranking or recompute ranking from base/graph/contrast component scores.",
+    )
+    parser.add_argument("--component-graph-weight", type=float, default=0.0)
+    parser.add_argument("--component-contrast-weight", type=float, default=0.0)
     parser.add_argument("--baseline", choices=["none", "random"], default="none")
     parser.add_argument("--random-seed", type=int, default=2021)
+    parser.add_argument(
+        "--random-trials",
+        type=int,
+        default=1000,
+        help="Number of shuffled rankings to average for the random baseline.",
+    )
+    parser.add_argument(
+        "--random-candidates",
+        choices=["prediction", "meta"],
+        default="prediction",
+        help="Candidate set used by random baseline. 'prediction' uses the same ranked names exported by LaGraph.",
+    )
     parser.add_argument("--save-csv", type=Path, default=None)
     return parser.parse_args()
 
@@ -48,22 +68,70 @@ def match_meta_event(pred_event: dict, meta_events: list[dict]) -> dict | None:
     return best
 
 
+def root_cause_group_name(feature_name: str) -> str:
+    if isinstance(feature_name, str) and len(feature_name) >= 2 and feature_name[0] == "P" and feature_name[1].isdigit():
+        return feature_name.split("_", 1)[0]
+    return feature_name
+
+
 def ranking_names(pred_event: dict, scope: str) -> list[str]:
     key = "group_ranking" if scope == "group" else "channel_ranking"
     return [item["name"] for item in pred_event.get(key, [])]
 
 
-def baseline_ranking(meta: dict, scope: str, seed: int) -> list[str]:
-    if scope == "group":
-        names = list(meta.get("group_scope", []))
-    else:
-        names = sorted(
-            {
-                variable
-                for event in meta.get("events", [])
-                for variable in event.get("root_variables", [])
-            }
+def component_ranking_names(
+    pred_event: dict,
+    scope: str,
+    graph_weight: float,
+    contrast_weight: float,
+) -> list[str]:
+    channel_items = pred_event.get("channel_ranking", [])
+    if not channel_items:
+        return ranking_names(pred_event, scope)
+
+    if scope == "channel":
+        scored = []
+        for item in channel_items:
+            score = (
+                float(item.get("base_score", item.get("score", 0.0)))
+                + graph_weight * float(item.get("graph_score", 0.0))
+                + contrast_weight * float(item.get("contrast_score", 0.0))
+            )
+            scored.append((item["name"], score))
+        return [name for name, _ in sorted(scored, key=lambda item: item[1], reverse=True)]
+
+    group_scores = {}
+    for item in channel_items:
+        group = root_cause_group_name(item["name"])
+        score = (
+            float(item.get("base_score", item.get("score", 0.0)))
+            + graph_weight * float(item.get("graph_score", 0.0))
+            + contrast_weight * float(item.get("contrast_score", 0.0))
         )
+        group_scores[group] = max(group_scores.get(group, float("-inf")), score)
+    return [
+        name
+        for name, _ in sorted(group_scores.items(), key=lambda item: item[1], reverse=True)
+    ]
+
+
+def meta_candidates(meta: dict, scope: str) -> list[str]:
+    if scope == "group":
+        return list(meta.get("group_scope", []))
+    return sorted(
+        {
+            variable
+            for event in meta.get("events", [])
+            for variable in event.get("root_variables", [])
+        }
+    )
+
+
+def baseline_ranking(candidates: list[str], roots: set[str], seed: int) -> list[str]:
+    names = list(dict.fromkeys(candidates))
+    for root in sorted(roots):
+        if root not in names:
+            names.append(root)
     rng = random.Random(seed)
     rng.shuffle(names)
     return names
@@ -94,6 +162,11 @@ def metric_row(ranking: list[str], roots: set[str], k_values: list[int]) -> dict
     return row
 
 
+def mean_metric_row(rows: list[dict]) -> dict:
+    keys = rows[0].keys()
+    return {key: sum(row[key] for row in rows) / len(rows) for key in keys}
+
+
 def main() -> None:
     args = parse_args()
     rca = load_json(args.rca)
@@ -112,20 +185,41 @@ def main() -> None:
         roots = set(meta_event.get(root_key, []))
         if not roots:
             continue
-        if args.baseline == "random":
-            ranking = baseline_ranking(meta, args.scope, args.random_seed + int(pred_event.get("event_id", 0)))
+        if args.score_mode == "components":
+            exported_ranking = component_ranking_names(
+                pred_event,
+                args.scope,
+                args.component_graph_weight,
+                args.component_contrast_weight,
+            )
         else:
-            ranking = ranking_names(pred_event, args.scope)
+            exported_ranking = ranking_names(pred_event, args.scope)
+        if args.baseline == "random":
+            if args.random_candidates == "prediction":
+                candidates = exported_ranking
+            else:
+                candidates = meta_candidates(meta, args.scope)
+            trial_rows = []
+            for trial in range(args.random_trials):
+                seed = args.random_seed + int(pred_event.get("event_id", 0)) * args.random_trials + trial
+                ranking = baseline_ranking(candidates, roots, seed)
+                trial_rows.append(metric_row(ranking, roots, args.k))
+            metric_values = mean_metric_row(trial_rows)
+            top1 = f"random_mean_{args.random_trials}"
+        else:
+            ranking = exported_ranking
+            metric_values = metric_row(ranking, roots, args.k)
+            top1 = ranking[0] if ranking else ""
         row = {
             "series_name": rca.get("series_name"),
             "event_id": pred_event.get("event_id"),
             "event_start": pred_event.get("start"),
             "event_end": pred_event.get("end"),
             "roots": ",".join(sorted(roots)),
-            "top1": ranking[0] if ranking else "",
+            "top1": top1,
             "method": "random" if args.baseline == "random" else "lagraph",
         }
-        row.update(metric_row(ranking, roots, args.k))
+        row.update(metric_values)
         rows.append(row)
 
     if not rows:

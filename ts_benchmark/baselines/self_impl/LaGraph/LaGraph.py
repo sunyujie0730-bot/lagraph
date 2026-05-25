@@ -145,6 +145,10 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "prediction_min_len": 1,
     "prediction_dilate": 0,
     "export_rca": False,
+    "rca_graph_weight": 0.0,
+    "rca_graph_direction": "outgoing",
+    "rca_contrast_window": 0,
+    "rca_contrast_weight": 0.0,
     # --- v11.4 P0-2: POT 阈值参数 ---
     "pot_risk": 1e-4,            # POT EVT 风险水平
     "pot_num_quantiles": 1000,   # POT 分位数数量
@@ -807,6 +811,7 @@ class LaGraph:
         self._train_anomaly_scores = None
         self._val_anomaly_scores = None
         self._last_channel_scores = None
+        self._last_graph_channel_scores = None
         self._last_channel_names = None
 
         # ★ P0-2: POT 阈值估计器
@@ -2304,14 +2309,31 @@ class LaGraph:
     def _detect_forward_with_channels(self, input_data):
         score, _ = self.model.multi_scale_forward(input_data)
         raw_model = self._get_raw_model()
-        x_rec, _, _, _, _, _, _ = raw_model(input_data)
+        x_rec, A_adaptive, _, _, _, _, _ = raw_model(input_data)
         channel_err = F.l1_loss(x_rec, input_data, reduction="none")
         if hasattr(raw_model, "_normalize_score_error"):
             channel_err = raw_model._normalize_score_error(channel_err)
-        return score.cpu().numpy(), channel_err.cpu().numpy()
+        graph_err = self._graph_propagated_channel_error(channel_err, A_adaptive)
+        return score.cpu().numpy(), channel_err.cpu().numpy(), graph_err.cpu().numpy()
+
+    def _graph_propagated_channel_error(self, channel_err, A_adaptive):
+        weight = float(getattr(self.config, "rca_graph_weight", 0.0) or 0.0)
+        if weight <= 0.0 or A_adaptive is None:
+            return torch.zeros_like(channel_err)
+
+        A = A_adaptive.detach().clamp_min(0.0)
+        A = A / A.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+        direction = str(getattr(self.config, "rca_graph_direction", "outgoing") or "outgoing")
+        if direction == "incoming":
+            return torch.bmm(channel_err, A)
+        if direction == "both":
+            outgoing = torch.bmm(channel_err, A.transpose(1, 2))
+            incoming = torch.bmm(channel_err, A)
+            return 0.5 * (outgoing + incoming)
+        return torch.bmm(channel_err, A.transpose(1, 2))
 
     @staticmethod
-    def _add_window_channel_scores(channel_sums, point_counts, window_channels, start_index):
+    def _add_window_channel_scores(channel_sums, point_counts, window_channels, start_index, update_counts=True):
         if window_channels is None or len(window_channels) == 0:
             return
         n_windows, win_size, _ = window_channels.shape
@@ -2325,7 +2347,8 @@ class LaGraph:
                 continue
             sl = slice(point_start, point_start + n)
             channel_sums[sl] += window_channels[:n, offset, :]
-            point_counts[sl] += 1.0
+            if update_counts:
+                point_counts[sl] += 1.0
 
     def detect_score(self, train: pd.DataFrame) -> np.ndarray:
         if not self.trained:
@@ -2423,17 +2446,26 @@ class LaGraph:
         test_window_list = []
         export_rca = bool(getattr(self.config, "export_rca", False))
         channel_sums = None
+        graph_channel_sums = None
         channel_counts = None
         window_cursor = 0
         if export_rca:
             channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
+            graph_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             channel_counts = np.zeros(total_length, dtype=np.float64)
 
         for i, (input_data, labels) in enumerate(test_loader):
             input_data = input_data.float().to(self.device)
             if export_rca:
-                cri, channel_err = self._detect_forward_with_channels(input_data)
+                cri, channel_err, graph_channel_err = self._detect_forward_with_channels(input_data)
                 self._add_window_channel_scores(channel_sums, channel_counts, channel_err, window_cursor)
+                self._add_window_channel_scores(
+                    graph_channel_sums,
+                    channel_counts,
+                    graph_channel_err,
+                    window_cursor,
+                    update_counts=False,
+                )
                 window_cursor += int(channel_err.shape[0])
             else:
                 cri = self._detect_forward(input_data)
@@ -2452,9 +2484,16 @@ class LaGraph:
                 out=np.zeros_like(channel_sums),
                 where=channel_counts[:, None] > 0,
             ).astype(np.float32)
+            self._last_graph_channel_scores = np.divide(
+                graph_channel_sums,
+                channel_counts[:, None],
+                out=np.zeros_like(graph_channel_sums),
+                where=channel_counts[:, None] > 0,
+            ).astype(np.float32)
             self._last_channel_names = list(test_data.columns)
         else:
             self._last_channel_scores = None
+            self._last_graph_channel_scores = None
             self._last_channel_names = None
 
         test_windows = np.concatenate(test_window_list, axis=0)
@@ -2558,20 +2597,40 @@ class LaGraph:
             return None
 
         labels = test_label.to_numpy().reshape(-1).astype(int)
-        channel_scores = self._last_channel_scores[: len(labels)]
+        base_channel_scores = self._last_channel_scores[: len(labels)]
+        graph_channel_scores = self._last_graph_channel_scores
+        if graph_channel_scores is None:
+            graph_channel_scores = np.zeros_like(base_channel_scores)
+        else:
+            graph_channel_scores = graph_channel_scores[: len(labels)]
+        graph_weight = float(getattr(self.config, "rca_graph_weight", 0.0) or 0.0)
+        contrast_window = int(getattr(self.config, "rca_contrast_window", 0) or 0)
+        contrast_weight = float(getattr(self.config, "rca_contrast_weight", 0.0) or 0.0)
+        channel_scores = base_channel_scores + graph_weight * graph_channel_scores
         feature_names = list(self._last_channel_names)
         events = []
 
         for event_id, (start, end) in enumerate(self._label_segments(labels), start=1):
             if end <= start:
                 continue
-            event_scores = channel_scores[start:end].mean(axis=0)
+            event_raw_scores = channel_scores[start:end].mean(axis=0)
+            event_contrast_scores = np.zeros_like(event_raw_scores)
+            if contrast_window > 0 and contrast_weight > 0.0 and start > 0:
+                baseline_start = max(0, start - contrast_window)
+                baseline_scores = channel_scores[baseline_start:start].mean(axis=0)
+                event_contrast_scores = np.maximum(event_raw_scores - baseline_scores, 0.0)
+            event_scores = event_raw_scores + contrast_weight * event_contrast_scores
+            event_base_scores = base_channel_scores[start:end].mean(axis=0)
+            event_graph_scores = graph_channel_scores[start:end].mean(axis=0)
             order = np.argsort(-event_scores)
             channel_ranking = [
                 {
                     "rank": int(rank + 1),
                     "name": feature_names[idx],
                     "score": float(event_scores[idx]),
+                    "base_score": float(event_base_scores[idx]),
+                    "graph_score": float(event_graph_scores[idx]),
+                    "contrast_score": float(event_contrast_scores[idx]),
                 }
                 for rank, idx in enumerate(order)
             ]
@@ -2608,7 +2667,11 @@ class LaGraph:
         payload = {
             "series_name": series_name,
             "dataset_name": self.dataset_name,
-            "score_method": "mean channel-wise normalized reconstruction error over true anomaly event",
+            "score_method": "mean channel-wise normalized reconstruction error plus graph-propagated attribution over true anomaly event",
+            "rca_graph_weight": graph_weight,
+            "rca_graph_direction": str(getattr(self.config, "rca_graph_direction", "outgoing") or "outgoing"),
+            "rca_contrast_window": contrast_window,
+            "rca_contrast_weight": contrast_weight,
             "feature_names": feature_names,
             "events": events,
         }

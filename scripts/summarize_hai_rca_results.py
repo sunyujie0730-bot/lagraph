@@ -42,6 +42,7 @@ def main() -> None:
         dataset = dataset_dir.name
         for filename, method in [
             ("lagraph_group_eval.csv", "LaGraph"),
+            ("lagraph_contrast075_group_eval.csv", "LaGraph-contrast"),
             ("zscore_group_eval.csv", "z-score"),
             ("random_group_eval.csv", "random"),
             ("latest_group_eval.csv", "LaGraph"),
