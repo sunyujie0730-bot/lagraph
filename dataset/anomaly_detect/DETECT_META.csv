@@ -1,4 +1,13 @@
-file_name,length,dataset_name,size,freq,if_univariate,trend,seasonal,stationary,transition,shifting,correlation
-swat.csv,449919,Multi,large,other,False,,,,,,
-MSL.csv,132046,Multi,large,other,False,,,,,,
-SMD.csv,1416825,,large,other,False,,,,,,
+file_name,length,dataset_name,size,freq,if_univariate,trend,seasonal,stationary,transition,shifting,correlation,train_lens,n_features,mode,fault_id,source_dataset,source_version,pattern
+swat.csv,449919,Multi,large,other,False,,,,,,,,,,,,,
+MSL.csv,132046,Multi,large,other,False,,,,,,,,,,,,,
+SMD.csv,1416825,,large,other,False,,,,,,,,,,,,,
+TE_MM_M1_d01.csv,14402,TE_multimode,large,other,False,,,,,,,7201,53,1,1,Multi-mode Tennessee Eastman,v1.0,mode_1_fault_01
+TE_MM_M1_d06.csv,7913,TE_multimode,small,other,False,,,,,,,7201,53,1,6,Multi-mode Tennessee Eastman,v1.0,mode_1_fault_06
+TE_MM_M1_d14.csv,14402,TE_multimode,large,other,False,,,,,,,7201,53,1,14,Multi-mode Tennessee Eastman,v1.0,mode_1_fault_14
+TE_MM_M1_d21.csv,14402,TE_multimode,large,other,False,,,,,,,7201,53,1,21,Multi-mode Tennessee Eastman,v1.0,mode_1_fault_21
+TE_MM_M2_d01.csv,14402,TE_multimode,large,other,False,,,,,,,7201,53,2,1,Multi-mode Tennessee Eastman,v1.0,mode_2_fault_01
+TE_MM_M2_d06.csv,7878,TE_multimode,small,other,False,,,,,,,7201,53,2,6,Multi-mode Tennessee Eastman,v1.0,mode_2_fault_06
+TE_MM_M2_d14.csv,14402,TE_multimode,large,other,False,,,,,,,7201,53,2,14,Multi-mode Tennessee Eastman,v1.0,mode_2_fault_14
+TE_MM_M2_d21.csv,14402,TE_multimode,large,other,False,,,,,,,7201,53,2,21,Multi-mode Tennessee Eastman,v1.0,mode_2_fault_21
+HAI_21_03_test1.csv,259202,HAI_21_03,large,other,False,,,,,,,216001,79,,,HAI,21.03,train=train1.csv.gz;test=test1.csv.gz;downsample=1
