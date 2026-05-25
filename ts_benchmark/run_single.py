@@ -60,6 +60,14 @@ def _diagnose_cuda():
 
 
 EVAL_CONFIG = "all_detect_label_config.json"
+AVAILABLE_EVAL_CONFIGS = [
+    "all_detect_label_config.json",
+    "all_detect_score_config.json",
+    "fixed_detect_label_config.json",
+    "fixed_detect_score_config.json",
+    "unfixed_detect_label_config.json",
+    "unfixed_detect_score_config.json",
+]
 DEFAULT_SAVE_DIR = "label/LaGraph"
 FAST_EPOCHS = 3
 DEFAULT_EPOCHS = 10
@@ -83,6 +91,15 @@ def main():
         type=str,
         default=DEFAULT_SAVE_DIR,
         help=f"结果保存子目录 (default: {DEFAULT_SAVE_DIR})",
+    )
+    parser.add_argument(
+        "--eval-config",
+        choices=AVAILABLE_EVAL_CONFIGS,
+        default=EVAL_CONFIG,
+        help=(
+            "Evaluation config. Use unfixed_detect_label_config.json for datasets "
+            "with metadata train_lens, such as TE_MM_* and HAI_*."
+        ),
     )
     parser.add_argument(
         "--seed",
@@ -408,15 +425,23 @@ def main():
         "SMD.csv",        # 数据量过大，默认实验先排除；可用 --datasets SMD.csv 单独运行
         "SKAB_all.csv",   # 标签格式不兼容
     }
+    EXCLUDED_PREFIXES = (
+        "TE_MM_",          # 工业迁移数据集默认不混入常规实验；需要时用 --datasets 显式运行
+        "HAI_",
+    )
+
+    def _is_default_excluded(file_name: str) -> bool:
+        return file_name in EXCLUDED_FILES or file_name.startswith(EXCLUDED_PREFIXES)
+
     if args.datasets:
         data_config["data_name_list"] = args.datasets
     else:
         # 默认排除不适用的数据集
         data_src = LocalAnomalyDetectDataSource()
         all_files = data_src.dataset.metadata["file_name"].tolist()
-        filtered = [f for f in all_files if f not in EXCLUDED_FILES]
+        filtered = [f for f in all_files if not _is_default_excluded(f)]
         data_config["data_name_list"] = filtered
-        excluded = [f for f in all_files if f in EXCLUDED_FILES]
+        excluded = [f for f in all_files if _is_default_excluded(f)]
         if excluded:
             print(f"  Note: Excluded datasets: {excluded}")
 
@@ -1111,7 +1136,7 @@ def main():
     print(f"  [v10 架构] profile={args.arch_profile}, switches={effective_switches}")
     print()
 
-    with open(os.path.join(CONFIG_PATH, EVAL_CONFIG), "r") as f:
+    with open(os.path.join(CONFIG_PATH, args.eval_config), "r") as f:
         evaluation_config = json.load(f)["evaluation_config"]
     evaluation_config["strategy_args"]["seed"] = args.seed
 
@@ -1123,7 +1148,23 @@ def main():
     if args.datasets:
         matched = [f for f in matched if f in args.datasets]
     else:
-        matched = [f for f in matched if f not in EXCLUDED_FILES]
+        matched = [f for f in matched if not _is_default_excluded(f)]
+
+    strategy_name = evaluation_config["strategy_args"].get("strategy_name", "")
+    if strategy_name.startswith("unfixed"):
+        meta_by_name = data_src.dataset.metadata.set_index("file_name")
+        missing_train_lens = [
+            name
+            for name in matched
+            if "train_lens" not in meta_by_name.columns
+            or pd.isna(meta_by_name.loc[name].get("train_lens"))
+        ]
+        if missing_train_lens:
+            raise ValueError(
+                "The selected evaluation config requires train_lens metadata, "
+                f"but these datasets do not have it: {missing_train_lens}. "
+                "Use --eval-config all_detect_label_config.json or choose TE_MM_/HAI_ datasets."
+            )
 
     print()
     print("=" * 58)
@@ -1131,7 +1172,8 @@ def main():
     print("=" * 58)
     print(f"  epochs        : {train_epochs}")
     print(f"  save dir      : result/{args.save_dir}/")
-    print(f"  eval config   : {EVAL_CONFIG}")
+    print(f"  eval config   : {args.eval_config}")
+    print(f"  strategy      : {strategy_name}")
     print(f"  datasets found: {len(matched)}")
     for name in matched:
         row = data_src.dataset.metadata.set_index("file_name").loc[name]

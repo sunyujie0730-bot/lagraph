@@ -55,6 +55,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--modes", type=int, nargs="+", default=[1, 2])
     parser.add_argument("--faults", type=int, nargs="+", default=[1, 6, 14, 21])
     parser.add_argument("--feature-count", type=int, default=53)
+    parser.add_argument(
+        "--train-normal-ratio",
+        type=float,
+        default=0.8,
+        help=(
+            "Fraction of the normal d00 run used for training. The remaining normal "
+            "points stay in the test segment as label=0 before the fault segment."
+        ),
+    )
     parser.add_argument("--all", action="store_true", help="Convert all 6 modes and 28 faults.")
     return parser.parse_args()
 
@@ -117,7 +126,14 @@ def update_metadata(metadata_path: Path, rows: list[dict]) -> None:
     metadata.to_csv(metadata_path, index=False)
 
 
-def convert_one(raw_dir: Path, output_dir: Path, mode: int, fault: int, feature_count: int) -> dict:
+def convert_one(
+    raw_dir: Path,
+    output_dir: Path,
+    mode: int,
+    fault: int,
+    feature_count: int,
+    train_normal_ratio: float,
+) -> dict:
     normal = load_te_array(raw_dir, mode, 0)
     faulty = load_te_array(raw_dir, mode, fault)
     if normal.shape[1] < feature_count or faulty.shape[1] < feature_count:
@@ -137,6 +153,12 @@ def convert_one(raw_dir: Path, output_dir: Path, mode: int, fault: int, feature_
     )
     feature_names = [f"x{i:02d}" for i in range(feature_count)]
     long_frame = to_long_frame(values, labels, feature_names)
+    train_lens = int(normal.shape[0] * train_normal_ratio)
+    if train_lens <= 0 or train_lens >= normal.shape[0]:
+        raise ValueError(
+            "--train-normal-ratio must leave both a normal training segment and "
+            "a normal test prefix. Use a value in (0, 1), such as 0.8."
+        )
 
     file_name = f"TE_MM_M{mode}_d{fault:02d}.csv"
     output_path = output_dir / file_name
@@ -156,13 +178,13 @@ def convert_one(raw_dir: Path, output_dir: Path, mode: int, fault: int, feature_
         "transition": "",
         "shifting": "",
         "correlation": "",
-        "train_lens": int(normal.shape[0]),
+        "train_lens": int(train_lens),
         "n_features": int(feature_count),
         "mode": int(mode),
         "fault_id": int(fault),
         "source_dataset": "Multi-mode Tennessee Eastman",
         "source_version": "v1.0",
-        "pattern": f"mode_{mode}_fault_{fault:02d}",
+        "pattern": f"mode_{mode}_fault_{fault:02d};normal_train_ratio={train_normal_ratio:g}",
     }
 
 
@@ -181,7 +203,7 @@ def main() -> None:
     rows = []
     for mode in modes:
         for fault in faults:
-            row = convert_one(raw_dir, output_dir, mode, fault, args.feature_count)
+            row = convert_one(raw_dir, output_dir, mode, fault, args.feature_count, args.train_normal_ratio)
             rows.append(row)
             logging.info(
                 "Converted %s: length=%s, train=%s, features=%s",
