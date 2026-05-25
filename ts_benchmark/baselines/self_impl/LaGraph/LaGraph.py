@@ -122,6 +122,12 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "use_score_channel_normalization": False,
     "score_channel_norm_mode": "robust_z",
     "score_channel_norm_eps": 1e-6,
+    "use_state_aware_fusion": False,
+    "state_aware_num_states": 4,
+    "state_aware_graph_gate_init": 0.6,
+    "state_aware_residual_init": 0.15,
+    "lambda_state_balance": 0.0,
+    "lambda_state_confidence": 0.0,
     # --- RTX 5070 single-GPU training path ---
     "dataloader_num_workers": 2,
     "dataloader_prefetch_factor": 2,
@@ -989,6 +995,12 @@ class LaGraph:
                 "use_score_channel_normalization": getattr(self.config, "use_score_channel_normalization", None),
                 "score_channel_norm_mode": getattr(self.config, "score_channel_norm_mode", None),
                 "score_channel_norm_eps": getattr(self.config, "score_channel_norm_eps", None),
+                "use_state_aware_fusion": getattr(self.config, "use_state_aware_fusion", None),
+                "state_aware_num_states": getattr(self.config, "state_aware_num_states", None),
+                "state_aware_graph_gate_init": getattr(self.config, "state_aware_graph_gate_init", None),
+                "state_aware_residual_init": getattr(self.config, "state_aware_residual_init", None),
+                "lambda_state_balance": getattr(self.config, "lambda_state_balance", None),
+                "lambda_state_confidence": getattr(self.config, "lambda_state_confidence", None),
                 "use_vq_bypass": getattr(self.config, "use_vq_bypass", None),
                 "dynamic_temporal_residual_init": getattr(self.config, "dynamic_temporal_residual_init", None),
                 "dynamic_temporal_topk": getattr(self.config, "dynamic_temporal_topk", None),
@@ -1118,6 +1130,12 @@ class LaGraph:
             loss = loss + lambda_causal * aux_losses['causal_mechanism_loss']
         if lambda_causal_sparse > 0 and 'causal_sparse_loss' in aux_losses:
             loss = loss + lambda_causal_sparse * aux_losses['causal_sparse_loss']
+        lambda_state_balance = getattr(self.config, "lambda_state_balance", 0.0)
+        lambda_state_confidence = getattr(self.config, "lambda_state_confidence", 0.0)
+        if lambda_state_balance > 0 and 'state_balance_loss' in aux_losses:
+            loss = loss + lambda_state_balance * aux_losses['state_balance_loss']
+        if lambda_state_confidence > 0 and 'state_confidence_loss' in aux_losses:
+            loss = loss + lambda_state_confidence * aux_losses['state_confidence_loss']
         return loss
 
     @torch.no_grad()
@@ -1602,6 +1620,10 @@ class LaGraph:
             use_score_channel_normalization=getattr(self.config, "use_score_channel_normalization", False),
             score_channel_norm_mode=getattr(self.config, "score_channel_norm_mode", "robust_z"),
             score_channel_norm_eps=getattr(self.config, "score_channel_norm_eps", 1e-6),
+            use_state_aware_fusion=getattr(self.config, "use_state_aware_fusion", False),
+            state_aware_num_states=getattr(self.config, "state_aware_num_states", 4),
+            state_aware_graph_gate_init=getattr(self.config, "state_aware_graph_gate_init", 0.6),
+            state_aware_residual_init=getattr(self.config, "state_aware_residual_init", 0.15),
         )
         self.model.to(self.device)
 
@@ -1836,6 +1858,10 @@ class LaGraph:
             use_score_channel_normalization=getattr(self.config, "use_score_channel_normalization", False),
             score_channel_norm_mode=getattr(self.config, "score_channel_norm_mode", "robust_z"),
             score_channel_norm_eps=getattr(self.config, "score_channel_norm_eps", 1e-6),
+            use_state_aware_fusion=getattr(self.config, "use_state_aware_fusion", False),
+            state_aware_num_states=getattr(self.config, "state_aware_num_states", 4),
+            state_aware_graph_gate_init=getattr(self.config, "state_aware_graph_gate_init", 0.6),
+            state_aware_residual_init=getattr(self.config, "state_aware_residual_init", 0.15),
         )
         self.model.to(self.device)
 
@@ -2022,6 +2048,12 @@ class LaGraph:
                 "use_score_channel_normalization": getattr(self.config, "use_score_channel_normalization", None),
                 "score_channel_norm_mode": getattr(self.config, "score_channel_norm_mode", None),
                 "score_channel_norm_eps": getattr(self.config, "score_channel_norm_eps", None),
+                "use_state_aware_fusion": getattr(self.config, "use_state_aware_fusion", None),
+                "state_aware_num_states": getattr(self.config, "state_aware_num_states", None),
+                "state_aware_graph_gate_init": getattr(self.config, "state_aware_graph_gate_init", None),
+                "state_aware_residual_init": getattr(self.config, "state_aware_residual_init", None),
+                "lambda_state_balance": getattr(self.config, "lambda_state_balance", None),
+                "lambda_state_confidence": getattr(self.config, "lambda_state_confidence", None),
                 "dataloader_num_workers": getattr(self.config, "dataloader_num_workers", None),
                 "dataloader_prefetch_factor": getattr(self.config, "dataloader_prefetch_factor", None),
                 "use_channel_graph": getattr(self.config, "use_channel_graph", None),

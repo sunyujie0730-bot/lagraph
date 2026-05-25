@@ -300,6 +300,87 @@ class LaggedCausalMechanism(nn.Module):
         return self._sparse_parent_weights().abs().mean()
 
 
+class StateAwareGraphFusion(nn.Module):
+    """
+    Operating-state-conditioned dual-graph fusion.
+
+    The module estimates a soft operating state from window statistics, then
+    uses state-specific gates to decide how much parallel channel-graph and
+    temporal-graph information should correct the stable serial graph path.
+    """
+
+    def __init__(
+        self,
+        channel,
+        num_states=4,
+        dropout=0.1,
+        graph_gate_init=0.6,
+        residual_init=0.15,
+    ):
+        super().__init__()
+        self.channel = int(channel)
+        self.num_states = max(2, int(num_states))
+
+        hidden = max(32, min(128, self.channel * 2))
+        self.state_encoder = nn.Sequential(
+            nn.Linear(self.channel * 4, hidden),
+            nn.LayerNorm(hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden, self.num_states),
+        )
+
+        graph_gate_init = min(max(float(graph_gate_init), 1e-3), 1.0 - 1e-3)
+        residual_init = min(max(float(residual_init), 1e-3), 1.0 - 1e-3)
+        gate_logit = float(np.log(graph_gate_init / (1.0 - graph_gate_init)))
+        residual_logit = float(np.log(residual_init / (1.0 - residual_init)))
+        self.state_graph_gate_logits = nn.Parameter(
+            torch.full((self.num_states, 1), gate_logit),
+        )
+        self.residual_logit = nn.Parameter(torch.tensor(residual_logit))
+
+    @staticmethod
+    def _safe_std(x):
+        if x.shape[1] <= 1:
+            return torch.zeros_like(x.mean(dim=1))
+        return x.std(dim=1, unbiased=False)
+
+    def _state_features(self, x):
+        mean = x.mean(dim=1)
+        std = self._safe_std(x)
+        slope = x[:, -1, :] - x[:, 0, :]
+        energy = x.abs().mean(dim=1)
+        return torch.cat([mean, std, slope, energy], dim=-1)
+
+    def forward(self, resid, resid_channel, resid_temporal, resid_serial=None):
+        state_logits = self.state_encoder(self._state_features(resid))
+        state_probs = F.softmax(state_logits, dim=-1)
+        state_gate = torch.sigmoid(state_probs @ self.state_graph_gate_logits)
+        state_gate = state_gate.view(resid.shape[0], 1, 1)
+
+        parallel_feat = state_gate * resid_channel + (1.0 - state_gate) * resid_temporal
+        residual_weight = torch.sigmoid(self.residual_logit)
+        if resid_serial is None:
+            fused = parallel_feat
+        else:
+            fused = resid_serial + residual_weight * (parallel_feat - resid_serial)
+
+        return fused, {
+            "state_probs": state_probs,
+            "state_gate": state_gate,
+            "state_residual_weight": residual_weight,
+        }
+
+    def balance_loss(self, state_probs):
+        mean_probs = state_probs.mean(dim=0).clamp_min(1e-8)
+        return (mean_probs * (mean_probs.log() + np.log(self.num_states))).sum()
+
+    def confidence_loss(self, state_probs):
+        probs = state_probs.clamp_min(1e-8)
+        entropy = -(probs * probs.log()).sum(dim=-1).mean()
+        return entropy / max(np.log(self.num_states), 1e-8)
+
+
 class SparseGCN(nn.Module):
     """
     SparseLaGraph v11.2 — 极简双图协同异常检测模型
@@ -365,6 +446,10 @@ class SparseGCN(nn.Module):
                  use_score_channel_normalization=False,
                  score_channel_norm_mode="robust_z",
                  score_channel_norm_eps=1e-6,
+                 use_state_aware_fusion=False,
+                 state_aware_num_states=4,
+                 state_aware_graph_gate_init=0.6,
+                 state_aware_residual_init=0.15,
                  **kwargs):
         super(SparseGCN, self).__init__()
 
@@ -407,6 +492,10 @@ class SparseGCN(nn.Module):
         self.use_score_channel_normalization = use_score_channel_normalization
         self.score_channel_norm_mode = score_channel_norm_mode
         self.score_channel_norm_eps = score_channel_norm_eps
+        self.use_state_aware_fusion = use_state_aware_fusion
+        self.state_aware_num_states = int(state_aware_num_states)
+        self.state_aware_graph_gate_init = float(state_aware_graph_gate_init)
+        self.state_aware_residual_init = float(state_aware_residual_init)
         self.register_buffer(
             'score_channel_center',
             torch.zeros(1, 1, channel),
@@ -565,6 +654,17 @@ class SparseGCN(nn.Module):
         else:
             self.lagged_causal_graph = None
 
+        if use_state_aware_fusion:
+            self.state_aware_fusion = StateAwareGraphFusion(
+                channel=c_out,
+                num_states=state_aware_num_states,
+                dropout=dropout,
+                graph_gate_init=state_aware_graph_gate_init,
+                residual_init=state_aware_residual_init,
+            )
+        else:
+            self.state_aware_fusion = None
+
         # ★ 保持与原有 forward 返回格式兼容
         if use_synthetic_anomaly_head:
             hidden = max(32, d_model // 2)
@@ -601,6 +701,7 @@ class SparseGCN(nn.Module):
         self._set_trainable(self.graph_fusion_time_gate, self.use_parallel_graph_fusion)
         if self.graph_fusion_residual_logit is not None:
             self.graph_fusion_residual_logit.requires_grad = self.use_parallel_graph_fusion
+        self._set_trainable(self.state_aware_fusion, self.use_state_aware_fusion)
         self._set_trainable(self.lagged_causal_graph, self.use_lagged_causal_graph)
         self._set_trainable(self.synthetic_anomaly_head, self.use_synthetic_anomaly_head)
         self._set_trainable(self.vq_bottleneck, self.use_vq_bypass)
@@ -723,6 +824,7 @@ class SparseGCN(nn.Module):
         # 步骤 1: 序列分解
         resid, trend = self.decomp(x)
         graph_fusion_gate = None
+        state_aware_info = None
         causal_score = None
         causal_mechanism_loss = None
 
@@ -744,7 +846,16 @@ class SparseGCN(nn.Module):
             A_adaptive = torch.eye(C, device=x.device).unsqueeze(0).expand(B, C, C)
 
         # 步骤 3: 简化时序图
-        if self.use_parallel_graph_fusion and self.use_channel_graph and self.use_temporal_graph:
+        if self.use_state_aware_fusion and self.use_channel_graph and self.use_temporal_graph:
+            resid_serial, A_temp = self.temporal_graph(resid_adapted, A_proximity=A_adaptive)
+            resid_temporal_base, _ = self.temporal_graph(resid, A_proximity=A_adaptive)
+            stage1_feat, state_aware_info = self.state_aware_fusion(
+                resid,
+                resid_adapted,
+                resid_temporal_base,
+                resid_serial=resid_serial,
+            )
+        elif self.use_parallel_graph_fusion and self.use_channel_graph and self.use_temporal_graph:
             if self.graph_fusion_strategy == "residual_serial":
                 resid_serial, A_temp = self.temporal_graph(resid_adapted, A_proximity=A_adaptive)
                 resid_temp, _ = self.temporal_graph(resid, A_proximity=A_adaptive)
@@ -812,6 +923,12 @@ class SparseGCN(nn.Module):
             aux_losses['graph_fusion_residual_weight'] = torch.sigmoid(
                 self.graph_fusion_residual_logit.detach()
             )
+        if state_aware_info is not None:
+            state_probs = state_aware_info["state_probs"]
+            aux_losses['state_gate_mean'] = state_aware_info["state_gate"].detach().mean()
+            aux_losses['state_residual_weight'] = state_aware_info["state_residual_weight"].detach()
+            aux_losses['state_balance_loss'] = self.state_aware_fusion.balance_loss(state_probs)
+            aux_losses['state_confidence_loss'] = self.state_aware_fusion.confidence_loss(state_probs)
         if self.use_temporal_graph_regularization and A_temp is not None:
             aux_losses['temporal_graph_smooth_loss'] = (
                 A_temp[:, 1:, :] - A_temp[:, :-1, :]

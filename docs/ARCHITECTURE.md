@@ -51,6 +51,13 @@ residual gate. It improves raw F1 and SWaT affiliation F1, but it is not a
 uniform replacement for `full` because MSL affiliation F1 and SWaT adjusted F1
 can drop.
 
+The newest research candidate is `state-aware`. It keeps the stable serial
+`full` path, estimates a latent operating state from each input window, and uses
+state-specific gates to decide how strongly a parallel channel/temporal graph
+fusion should correct the serial representation. This profile is intended to
+support the industrial multi-condition generalization narrative. It has passed
+smoke tests but does not yet have full 15-epoch benchmark results.
+
 Additional 2026-05-24 architecture candidates were tested but not promoted:
 `parallel-dual`, `parallel-dual-time`, `residual-dual`,
 `residual-dual-time`, `graph-shift`, `graph-shift-lite`, and
@@ -252,6 +259,9 @@ Important details:
 | `full` | on | fixed | on | direct reconstruction | main method |
 | `dynamic-temporal` | on | dynamic | on | direct reconstruction | ungated dynamic temporal ablation |
 | `dynamic-temporal-gated` | on | dynamic + residual gate | on | direct reconstruction | strongest adaptive-temporal candidate |
+| `state-aware` | on | fixed + state-aware correction | on | direct reconstruction | newest industrial multi-condition candidate |
+| `state-aware-dynamic` | on | dynamic + state-aware correction | on | direct reconstruction | dynamic state-aware candidate |
+| `state-aware-causal` | on | fixed + state-aware correction | on | reconstruction + counterfactual lagged score | RCA-oriented candidate |
 | `parallel-dual` | on | fixed, parallel branch | on | direct reconstruction | rejected dual-graph fusion candidate |
 | `parallel-dual-time` | on | fixed, time-gated parallel branch | on | direct reconstruction | rejected dual-graph fusion candidate |
 | `residual-dual` | on | fixed, residual parallel correction | on | direct reconstruction | rejected conservative fusion candidate |

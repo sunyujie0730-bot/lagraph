@@ -125,6 +125,9 @@ def main():
             "graph-only",
             "channel-only",
             "temporal-only",
+            "state-aware",
+            "state-aware-dynamic",
+            "state-aware-causal",
             "parallel-dual",
             "parallel-dual-time",
             "parallel-dual-dynamic",
@@ -271,6 +274,36 @@ def main():
         type=float,
         default=None,
         help="Override the temporal graph learning-rate scale",
+    )
+    parser.add_argument(
+        "--state-aware-num-states",
+        type=int,
+        default=None,
+        help="Override number of latent operating states for state-aware graph fusion",
+    )
+    parser.add_argument(
+        "--state-aware-graph-gate-init",
+        type=float,
+        default=None,
+        help="Initial channel-graph weight for state-aware graph fusion",
+    )
+    parser.add_argument(
+        "--state-aware-residual-init",
+        type=float,
+        default=None,
+        help="Initial residual strength for state-aware correction over the serial graph path",
+    )
+    parser.add_argument(
+        "--lambda-state-balance",
+        type=float,
+        default=None,
+        help="Weight for using latent operating states across a batch",
+    )
+    parser.add_argument(
+        "--lambda-state-confidence",
+        type=float,
+        default=None,
+        help="Weight for low-entropy state assignments in state-aware profiles",
     )
     parser.add_argument(
         "--causal-score-weight",
@@ -489,6 +522,54 @@ def main():
             "use_temporal_graph": True,
             "use_vq_bypass": True,
             "use_multi_scale_scorer": False,
+        },
+        "state-aware": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "use_state_aware_fusion": True,
+            "state_aware_num_states": 4,
+            "state_aware_graph_gate_init": 0.6,
+            "state_aware_residual_init": 0.15,
+            "lambda_state_balance": 0.001,
+            "lambda_state_confidence": 0.001,
+        },
+        "state-aware-dynamic": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_dynamic_temporal_graph": True,
+            "dynamic_temporal_residual_init": 0.1,
+            "temporal_graph_lr_scale": 1.0,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "use_state_aware_fusion": True,
+            "state_aware_num_states": 4,
+            "state_aware_graph_gate_init": 0.6,
+            "state_aware_residual_init": 0.15,
+            "lambda_state_balance": 0.001,
+            "lambda_state_confidence": 0.001,
+        },
+        "state-aware-causal": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "use_state_aware_fusion": True,
+            "state_aware_num_states": 4,
+            "state_aware_graph_gate_init": 0.6,
+            "state_aware_residual_init": 0.15,
+            "lambda_state_balance": 0.001,
+            "lambda_state_confidence": 0.001,
+            "use_lagged_causal_graph": True,
+            "causal_lags": [1, 2, 4],
+            "causal_topk": 5,
+            "lambda_causal_mechanism": 0.05,
+            "lambda_causal_sparse": 0.001,
+            "use_causal_score": True,
+            "causal_score_mode": "cf_parent_hurt",
+            "causal_score_tail": "upper",
+            "causal_score_weight": 0.05,
         },
         "parallel-dual": {
             "use_channel_graph": True,
@@ -956,6 +1037,20 @@ def main():
         score_hyper_params["dynamic_temporal_topk"] = max(1, args.dynamic_temporal_topk)
     if args.temporal_graph_lr_scale is not None:
         score_hyper_params["temporal_graph_lr_scale"] = max(0.0, args.temporal_graph_lr_scale)
+    if args.state_aware_num_states is not None:
+        score_hyper_params["state_aware_num_states"] = max(2, args.state_aware_num_states)
+    if args.state_aware_graph_gate_init is not None:
+        score_hyper_params["state_aware_graph_gate_init"] = min(
+            max(float(args.state_aware_graph_gate_init), 1e-3), 1.0 - 1e-3
+        )
+    if args.state_aware_residual_init is not None:
+        score_hyper_params["state_aware_residual_init"] = min(
+            max(float(args.state_aware_residual_init), 1e-3), 1.0 - 1e-3
+        )
+    if args.lambda_state_balance is not None:
+        score_hyper_params["lambda_state_balance"] = max(0.0, args.lambda_state_balance)
+    if args.lambda_state_confidence is not None:
+        score_hyper_params["lambda_state_confidence"] = max(0.0, args.lambda_state_confidence)
     if args.causal_score_weight is not None:
         score_hyper_params["causal_score_weight"] = max(0.0, args.causal_score_weight)
     if args.lambda_causal_mechanism is not None:

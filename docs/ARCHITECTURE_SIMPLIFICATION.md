@@ -42,6 +42,9 @@ should not be treated as valid modules or ablations.
 | `full` | on | on | on | removed | off | Main compact architecture |
 | `dynamic-temporal` | on | dynamic | on | removed | off | Candidate architecture with content-adaptive temporal graph |
 | `dynamic-temporal-gated` | on | dynamic + residual gate | on | removed | off | Current main candidate for dual-graph narrative |
+| `state-aware` | on | state-aware correction | on | removed | off | New operating-state graph-fusion candidate |
+| `state-aware-dynamic` | on | dynamic + state-aware correction | on | removed | off | Dynamic operating-state graph-fusion candidate |
+| `state-aware-causal` | on | state-aware correction | on | removed | off | RCA-oriented state-aware candidate |
 | `dynamic-temporal-gated-vqscore` | on | dynamic + residual gate | on | removed | off | Rejected direct VQ-score fusion profile |
 | `parallel-dual` | on | fixed parallel branch | on | removed | off | Rejected dual-graph fusion profile |
 | `parallel-dual-time` | on | fixed time-gated parallel branch | on | removed | off | Rejected dual-graph fusion profile |
