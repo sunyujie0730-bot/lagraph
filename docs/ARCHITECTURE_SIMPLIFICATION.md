@@ -57,6 +57,10 @@ should not be treated as valid modules or ablations.
 | `causal-cf-hurt` | on | on | on | removed | off | Best current counterfactual causal candidate |
 | `synthetic-aux` | on | on | on | removed | off | Synthetic industrial perturbation auxiliary candidate |
 | `synthetic-aux-q75` | on | on | on | removed | off | Synthetic auxiliary plus q75 aggregation candidate |
+| `full-event-affinity-lite` | on | on | on | removed | off | Rejected event-coverage post-processing profile |
+| `full-event-affinity` | on | on | on | removed | off | Stronger event-coverage post-processing profile |
+| `full-event-affinity-strong` | on | on | on | removed | off | Aggressive event-coverage post-processing profile |
+| `full-event-persistence` | on | on | on | removed | off | Rejected sustained-event score amplification profile |
 | `loss-smoothl1` | on | on | on | removed | off | SmoothL1 reconstruction loss candidate |
 | `loss-logcosh` | on | on | on | removed | off | log-cosh reconstruction loss candidate |
 | `loss-mse-mae` | on | on | on | removed | off | mixed MSE/MAE reconstruction loss candidate |
@@ -371,6 +375,29 @@ post-processing and naive score expansion. The current best path remains
 `dynamic-temporal-gated`. Future affiliation improvements should target the
 learned representation or threshold calibration, not generic smoothing,
 dilation, or wider top-k scoring.
+
+## Full-Profile Event-Affiliation Check
+
+After the direct `full` profile became the stable baseline, additional
+seed-2021 MSL experiments tested whether point-wise precision can be sacrificed
+for better affiliation F1. These attempts used score smoothing, gap filling,
+minimum segment length, dilation, and a score-level event-persistence amplifier
+that boosts sustained high-score regions before thresholding.
+
+| Profile / setting | Raw F1 | Adjusted F1 | Affiliation F1 | Decision |
+| --- | ---: | ---: | ---: | --- |
+| `full` | 0.1109 | 0.8576 | 0.7006 | main baseline |
+| `loss-logcosh` | 0.1097 | 0.8573 | 0.7059 | best MSL affiliation candidate |
+| `full-event-affinity-lite` | 0.1106 | 0.6991 | 0.6804 | reject |
+| smoothing + gap fill + min length | 0.1123 | 0.6639 | 0.6876 | reject |
+| `full-event-persistence` | 0.1104 | 0.8586 | 0.6956 | reject |
+| `loss-logcosh` + event persistence | 0.1091 | 0.8598 | 0.6970 | reject |
+
+Conclusion: simply expanding or smoothing predicted events does not create a
+defensible affiliation gain. It tends to increase event coverage but damages
+affiliation precision. The only positive MSL affiliation signal in this search
+is `loss-logcosh`, so the paper's affiliation-oriented variant should be framed
+as a training-objective sensitivity result, not as a post-processing trick.
 
 ## Affiliation Optimization Attempts
 

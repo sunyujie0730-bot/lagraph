@@ -140,6 +140,10 @@ def main():
             "causal-cf-hurt",
             "synthetic-aux",
             "synthetic-aux-q75",
+            "full-event-affinity-lite",
+            "full-event-affinity",
+            "full-event-affinity-strong",
+            "full-event-persistence",
             "loss-smoothl1",
             "loss-logcosh",
             "loss-mse-mae",
@@ -207,6 +211,48 @@ def main():
         type=int,
         default=None,
         help="Number of central offsets used when --score-aggregation=center",
+    )
+    parser.add_argument(
+        "--score-smoothing-window",
+        type=int,
+        default=None,
+        help="Odd-size score smoothing window used before thresholding",
+    )
+    parser.add_argument(
+        "--score-smoothing-method",
+        choices=["mean", "max"],
+        default=None,
+        help="Score smoothing method used before thresholding",
+    )
+    parser.add_argument(
+        "--prediction-fill-gap",
+        type=int,
+        default=None,
+        help="Fill predicted normal gaps up to this length between anomaly segments",
+    )
+    parser.add_argument(
+        "--prediction-min-len",
+        type=int,
+        default=None,
+        help="Remove predicted anomaly segments shorter than this length",
+    )
+    parser.add_argument(
+        "--prediction-dilate",
+        type=int,
+        default=None,
+        help="Dilate predicted anomaly segments by this many points on both sides",
+    )
+    parser.add_argument(
+        "--event-persistence-window",
+        type=int,
+        default=None,
+        help="Window for event-persistence score amplification",
+    )
+    parser.add_argument(
+        "--event-persistence-weight",
+        type=float,
+        default=None,
+        help="Weight for event-persistence score amplification",
     )
     parser.add_argument(
         "--dynamic-temporal-residual-init",
@@ -606,6 +652,52 @@ def main():
             "synthetic_score_weight": 0.10,
             "score_aggregation": "q75",
         },
+        "full-event-affinity-lite": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "score_smoothing_window": 3,
+            "score_smoothing_method": "mean",
+            "prediction_fill_gap": 2,
+            "prediction_min_len": 1,
+            "prediction_dilate": 1,
+        },
+        "full-event-affinity": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "score_smoothing_window": 5,
+            "score_smoothing_method": "mean",
+            "prediction_fill_gap": 6,
+            "prediction_min_len": 2,
+            "prediction_dilate": 2,
+        },
+        "full-event-affinity-strong": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "score_smoothing_window": 7,
+            "score_smoothing_method": "max",
+            "prediction_fill_gap": 10,
+            "prediction_min_len": 2,
+            "prediction_dilate": 4,
+        },
+        "full-event-persistence": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "use_event_persistence_score": True,
+            "event_persistence_window": 9,
+            "event_persistence_weight": 0.5,
+            "score_smoothing_window": 1,
+            "prediction_fill_gap": 0,
+            "prediction_min_len": 1,
+            "prediction_dilate": 0,
+        },
         "loss-smoothl1": {
             "use_channel_graph": True,
             "use_temporal_graph": True,
@@ -842,6 +934,22 @@ def main():
         )
     if args.score_center_width is not None:
         score_hyper_params["score_center_width"] = max(1, args.score_center_width)
+    if args.score_smoothing_window is not None:
+        score_hyper_params["score_smoothing_window"] = max(1, args.score_smoothing_window)
+    if args.score_smoothing_method is not None:
+        score_hyper_params["score_smoothing_method"] = args.score_smoothing_method
+    if args.prediction_fill_gap is not None:
+        score_hyper_params["prediction_fill_gap"] = max(0, args.prediction_fill_gap)
+    if args.prediction_min_len is not None:
+        score_hyper_params["prediction_min_len"] = max(1, args.prediction_min_len)
+    if args.prediction_dilate is not None:
+        score_hyper_params["prediction_dilate"] = max(0, args.prediction_dilate)
+    if args.event_persistence_window is not None:
+        score_hyper_params["use_event_persistence_score"] = True
+        score_hyper_params["event_persistence_window"] = max(1, args.event_persistence_window)
+    if args.event_persistence_weight is not None:
+        score_hyper_params["use_event_persistence_score"] = True
+        score_hyper_params["event_persistence_weight"] = max(0.0, args.event_persistence_weight)
     if args.dynamic_temporal_residual_init is not None:
         score_hyper_params["dynamic_temporal_residual_init"] = max(0.0, args.dynamic_temporal_residual_init)
     if args.dynamic_temporal_topk is not None:

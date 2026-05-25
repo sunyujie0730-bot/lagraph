@@ -131,6 +131,10 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "score_center_width": 1,
     "score_smoothing_window": 1,
     "score_smoothing_method": "mean",
+    "use_event_persistence_score": False,
+    "event_persistence_window": 9,
+    "event_persistence_weight": 0.5,
+    "event_persistence_eps": 1e-6,
     "prediction_fill_gap": 0,
     "prediction_min_len": 1,
     "prediction_dilate": 0,
@@ -993,6 +997,9 @@ class LaGraph:
                 "temporal_graph_lr_scale": getattr(self.config, "temporal_graph_lr_scale", None),
                 "score_smoothing_window": getattr(self.config, "score_smoothing_window", None),
                 "score_smoothing_method": getattr(self.config, "score_smoothing_method", None),
+                "use_event_persistence_score": getattr(self.config, "use_event_persistence_score", None),
+                "event_persistence_window": getattr(self.config, "event_persistence_window", None),
+                "event_persistence_weight": getattr(self.config, "event_persistence_weight", None),
                 "prediction_fill_gap": getattr(self.config, "prediction_fill_gap", None),
                 "prediction_min_len": getattr(self.config, "prediction_min_len", None),
                 "prediction_dilate": getattr(self.config, "prediction_dilate", None),
@@ -2036,6 +2043,9 @@ class LaGraph:
                 "synthetic_score_weight": getattr(self.config, "synthetic_score_weight", None),
                 "score_smoothing_window": getattr(self.config, "score_smoothing_window", None),
                 "score_smoothing_method": getattr(self.config, "score_smoothing_method", None),
+                "use_event_persistence_score": getattr(self.config, "use_event_persistence_score", None),
+                "event_persistence_window": getattr(self.config, "event_persistence_window", None),
+                "event_persistence_weight": getattr(self.config, "event_persistence_weight", None),
                 "prediction_fill_gap": getattr(self.config, "prediction_fill_gap", None),
                 "prediction_min_len": getattr(self.config, "prediction_min_len", None),
                 "prediction_dilate": getattr(self.config, "prediction_dilate", None),
@@ -2188,6 +2198,32 @@ class LaGraph:
             smoothed = np.convolve(padded, kernel, mode="valid")
         return smoothed.astype(np.float32)
 
+    def _apply_event_persistence_score(self, scores: np.ndarray) -> np.ndarray:
+        if not getattr(self.config, "use_event_persistence_score", False):
+            return scores.astype(np.float32, copy=False)
+
+        scores64 = scores.astype(np.float64, copy=False)
+        window = int(getattr(self.config, "event_persistence_window", 9) or 9)
+        weight = float(getattr(self.config, "event_persistence_weight", 0.5) or 0.5)
+        eps = float(getattr(self.config, "event_persistence_eps", 1e-6) or 1e-6)
+        if window <= 1 or weight <= 0:
+            return scores64.astype(np.float32)
+        if window % 2 == 0:
+            window += 1
+
+        median = np.median(scores64)
+        mad = np.median(np.abs(scores64 - median))
+        robust_scale = max(1.4826 * mad, float(np.std(scores64)), eps)
+        positive = np.maximum((scores64 - median) / robust_scale, 0.0)
+
+        pad = window // 2
+        padded = np.pad(positive, (pad, pad), mode="edge")
+        kernel = np.ones(window, dtype=np.float64) / float(window)
+        support = np.convolve(padded, kernel, mode="valid")
+        support = support / (support + 1.0)
+
+        return (scores64 * (1.0 + weight * support)).astype(np.float32)
+
     @staticmethod
     def _binary_segments(pred: np.ndarray, value: int):
         n = len(pred)
@@ -2279,6 +2315,7 @@ class LaGraph:
         window_scores = np.concatenate(window_scores_list, axis=0)
 
         point_scores = self._aggregate_window_scores(window_scores, total_length)
+        point_scores = self._apply_event_persistence_score(point_scores)
         point_scores = self._smooth_scores_for_detection(point_scores)
 
         return point_scores, point_scores
@@ -2335,6 +2372,7 @@ class LaGraph:
 
         test_windows = np.concatenate(test_window_list, axis=0)
         test_energy = self._aggregate_window_scores(test_windows, total_length)
+        test_energy = self._apply_event_persistence_score(test_energy)
         test_energy = self._smooth_scores_for_detection(test_energy)
 
         # === 步骤 2：阈值选取（★ P0-2: 优先使用 POT 阈值）===

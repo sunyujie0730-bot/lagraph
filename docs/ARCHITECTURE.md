@@ -261,6 +261,10 @@ Important details:
 | `causal-lag-score` | on | fixed | on | reconstruction + lagged mechanism score | first causal-score candidate |
 | `synthetic-aux` | on | fixed | on | reconstruction + synthetic-head score | industrial perturbation auxiliary candidate |
 | `synthetic-aux-q75` | on | fixed | on | q75 aggregation + synthetic-head score | rejected combination candidate |
+| `full-event-affinity-lite` | on | fixed | on | smoothed reconstruction + segment shaping | rejected event-coverage candidate |
+| `full-event-affinity` | on | fixed | on | stronger segment shaping | reproducibility candidate |
+| `full-event-affinity-strong` | on | fixed | on | aggressive segment shaping | reproducibility candidate |
+| `full-event-persistence` | on | fixed | on | event-persistence score amplification | rejected sustained-event scoring candidate |
 | `loss-smoothl1` | on | fixed | on | direct reconstruction | SmoothL1 loss sensitivity candidate |
 | `loss-logcosh` | on | fixed | on | direct reconstruction | log-cosh loss sensitivity candidate |
 | `loss-mse-mae` | on | fixed | on | direct reconstruction | mixed MSE/MAE loss candidate |
@@ -410,6 +414,35 @@ each timestamp. MSL seed-2021, 15 epochs:
 Interpretation: the current MSL bottleneck is not resolved by simply narrowing
 or widening the number of contributing channels in the anomaly score. The
 default top-k setting remains the safest choice.
+
+## Event-Affiliation Search
+
+A separate search tested whether point-wise precision can be sacrificed for
+better affiliation F1. These variants add event-continuity priors at inference:
+score smoothing, gap filling, minimum segment length, dilation, and a
+score-level event-persistence amplifier that boosts sustained high-score
+regions before thresholding.
+
+MSL seed-2021, 15 epochs:
+
+| Profile / setting | Raw F1 | Adjusted F1 | Affiliation F1 | Decision |
+| --- | ---: | ---: | ---: | --- |
+| `full` | 0.1109 | 0.8576 | 0.7006 | main baseline |
+| `loss-logcosh` | 0.1097 | 0.8573 | 0.7059 | best MSL affiliation candidate |
+| `full-event-affinity-lite` | 0.1106 | 0.6991 | 0.6804 | reject |
+| smoothing + gap fill + min length | 0.1123 | 0.6639 | 0.6876 | reject |
+| `full-event-persistence` | 0.1104 | 0.8586 | 0.6956 | reject |
+| `loss-logcosh` + event persistence | 0.1091 | 0.8598 | 0.6970 | reject |
+
+Interpretation: affiliation F1 can be improved on MSL, but not by naively
+expanding or smoothing predicted segments. Segment shaping increases event
+coverage at the cost of too many poorly placed positives, so affiliation
+precision drops faster than recall improves. The only positive affiliation
+signal in this sweep comes from the reconstruction objective itself
+(`log_cosh`), which changes how normal reconstruction is learned rather than
+how labels are post-processed. For paper writing, this supports a stricter
+claim: affiliation-oriented gains should come from representation or training
+objective design, not from threshold-time segment inflation.
 
 ## Causal Inference Status
 
