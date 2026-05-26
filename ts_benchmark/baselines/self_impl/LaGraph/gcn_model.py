@@ -446,6 +446,9 @@ class SparseGCN(nn.Module):
                  use_score_channel_normalization=False,
                  score_channel_norm_mode="robust_z",
                  score_channel_norm_eps=1e-6,
+                 use_channel_corr_prior=False,
+                 channel_corr_prior_weight=0.0,
+                 lambda_channel_prior_align=0.0,
                  use_state_aware_fusion=False,
                  state_aware_num_states=4,
                  state_aware_graph_gate_init=0.6,
@@ -492,6 +495,9 @@ class SparseGCN(nn.Module):
         self.use_score_channel_normalization = use_score_channel_normalization
         self.score_channel_norm_mode = score_channel_norm_mode
         self.score_channel_norm_eps = score_channel_norm_eps
+        self.use_channel_corr_prior = bool(use_channel_corr_prior)
+        self.channel_corr_prior_weight = float(channel_corr_prior_weight)
+        self.lambda_channel_prior_align = float(lambda_channel_prior_align)
         self.use_state_aware_fusion = use_state_aware_fusion
         self.state_aware_num_states = int(state_aware_num_states)
         self.state_aware_graph_gate_init = float(state_aware_graph_gate_init)
@@ -547,6 +553,8 @@ class SparseGCN(nn.Module):
         self.channel_graph = ChannelAdaptiveGraph(
             num_nodes=enc_in, topk=topk,
             sparse_topk=sparse_topk, dropout=dropout,
+            use_static_prior=self.use_channel_corr_prior,
+            static_prior_weight=self.channel_corr_prior_weight,
         )
 
         # === 简化时序图 ===
@@ -728,6 +736,11 @@ class SparseGCN(nn.Module):
         if not self.use_channel_graph:
             return
         self.channel_graph.set_warmup_progress(alpha)
+
+    def set_channel_static_prior(self, prior):
+        if not self.use_channel_graph or not hasattr(self.channel_graph, "set_static_prior"):
+            return
+        self.channel_graph.set_static_prior(prior)
 
     def set_score_channel_stats(self, center, scale):
         center = torch.as_tensor(center, dtype=self.score_channel_center.dtype)
@@ -911,6 +924,12 @@ class SparseGCN(nn.Module):
         aux_losses['sparse_loss'] = self.get_sparse_loss()
         aux_losses['vq_loss'] = vq_loss_val
         aux_losses['vq_dist'] = vq_dist  # (B, L) — 用于增强异常评分
+        if (
+            self.use_channel_corr_prior
+            and self.lambda_channel_prior_align > 0
+            and hasattr(self.channel_graph, "get_prior_align_loss")
+        ):
+            aux_losses['channel_prior_align_loss'] = self.channel_graph.get_prior_align_loss()
         if causal_score is not None:
             aux_losses['causal_score'] = causal_score
         if causal_mechanism_loss is not None:

@@ -122,6 +122,10 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "use_score_channel_normalization": False,
     "score_channel_norm_mode": "robust_z",
     "score_channel_norm_eps": 1e-6,
+    "use_channel_corr_prior": False,
+    "channel_corr_prior_weight": 0.0,
+    "channel_corr_prior_topk": 5,
+    "lambda_channel_prior_align": 0.0,
     "use_state_aware_fusion": False,
     "state_aware_num_states": 4,
     "state_aware_graph_gate_init": 0.6,
@@ -1004,6 +1008,10 @@ class LaGraph:
                 "use_score_channel_normalization": getattr(self.config, "use_score_channel_normalization", None),
                 "score_channel_norm_mode": getattr(self.config, "score_channel_norm_mode", None),
                 "score_channel_norm_eps": getattr(self.config, "score_channel_norm_eps", None),
+                "use_channel_corr_prior": getattr(self.config, "use_channel_corr_prior", None),
+                "channel_corr_prior_weight": getattr(self.config, "channel_corr_prior_weight", None),
+                "channel_corr_prior_topk": getattr(self.config, "channel_corr_prior_topk", None),
+                "lambda_channel_prior_align": getattr(self.config, "lambda_channel_prior_align", None),
                 "use_state_aware_fusion": getattr(self.config, "use_state_aware_fusion", None),
                 "state_aware_num_states": getattr(self.config, "state_aware_num_states", None),
                 "state_aware_graph_gate_init": getattr(self.config, "state_aware_graph_gate_init", None),
@@ -1123,10 +1131,37 @@ class LaGraph:
         target_diff = target[:, 1:, :] - target[:, :-1, :]
         return loss + weight * F.mse_loss(rec_diff, target_diff)
 
+    @staticmethod
+    def _build_channel_corr_prior(train_df: pd.DataFrame, topk: int = 5) -> np.ndarray:
+        values = np.asarray(train_df.values, dtype=np.float32)
+        corr = np.corrcoef(values, rowvar=False)
+        corr = np.nan_to_num(np.abs(corr), nan=0.0, posinf=0.0, neginf=0.0)
+        np.fill_diagonal(corr, 0.0)
+        n_channels = corr.shape[0]
+        topk = int(topk or 0)
+        if topk > 0 and topk < n_channels:
+            keep = np.zeros_like(corr, dtype=bool)
+            idx = np.argpartition(-corr, kth=topk - 1, axis=1)[:, :topk]
+            rows = np.arange(n_channels)[:, None]
+            keep[rows, idx] = True
+            corr = np.where(keep, corr, 0.0)
+        row_sum = corr.sum(axis=1, keepdims=True)
+        empty = row_sum.squeeze(-1) <= 1e-8
+        corr = np.divide(corr, row_sum, out=np.zeros_like(corr), where=row_sum > 1e-8)
+        if np.any(empty):
+            corr[empty, :] = 1.0 / max(1, n_channels - 1)
+            empty_rows = np.where(empty)[0]
+            corr[empty_rows, empty_rows] = 0.0
+            corr[empty, :] = corr[empty, :] / corr[empty, :].sum(axis=1, keepdims=True).clip(min=1e-8)
+        return corr.astype(np.float32)
+
 
     def _add_temporal_graph_regularization(self, loss, aux_losses):
         if not aux_losses:
             return loss
+        lambda_channel_prior = getattr(self.config, "lambda_channel_prior_align", 0.0)
+        if lambda_channel_prior > 0 and 'channel_prior_align_loss' in aux_losses:
+            loss = loss + lambda_channel_prior * aux_losses['channel_prior_align_loss']
         lambda_smooth = getattr(self.config, "lambda_temporal_graph_smooth", 0.0)
         lambda_locality = getattr(self.config, "lambda_temporal_graph_locality", 0.0)
         if lambda_smooth > 0 and 'temporal_graph_smooth_loss' in aux_losses:
@@ -1629,12 +1664,27 @@ class LaGraph:
             use_score_channel_normalization=getattr(self.config, "use_score_channel_normalization", False),
             score_channel_norm_mode=getattr(self.config, "score_channel_norm_mode", "robust_z"),
             score_channel_norm_eps=getattr(self.config, "score_channel_norm_eps", 1e-6),
+            use_channel_corr_prior=getattr(self.config, "use_channel_corr_prior", False),
+            channel_corr_prior_weight=getattr(self.config, "channel_corr_prior_weight", 0.0),
+            lambda_channel_prior_align=getattr(self.config, "lambda_channel_prior_align", 0.0),
             use_state_aware_fusion=getattr(self.config, "use_state_aware_fusion", False),
             state_aware_num_states=getattr(self.config, "state_aware_num_states", 4),
             state_aware_graph_gate_init=getattr(self.config, "state_aware_graph_gate_init", 0.6),
             state_aware_residual_init=getattr(self.config, "state_aware_residual_init", 0.15),
         )
         self.model.to(self.device)
+
+        if getattr(self.config, "use_channel_corr_prior", False):
+            prior = self._build_channel_corr_prior(
+                train_df,
+                topk=getattr(self.config, "channel_corr_prior_topk", 5),
+            )
+            self.model.set_channel_static_prior(prior)
+            print(
+                f"  [ChannelPrior] normal correlation prior set "
+                f"(topk={getattr(self.config, 'channel_corr_prior_topk', 5)}, "
+                f"weight={getattr(self.config, 'channel_corr_prior_weight', 0.0)})"
+            )
 
         total_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         train_steps = len(self.train_loader)

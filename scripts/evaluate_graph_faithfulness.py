@@ -59,6 +59,7 @@ class EventResult:
     baseline_score: float
     baseline_recon_error: float
     top_channels: str
+    neighbor_source: str
     graph_neighbors: str
     random_channels: str
     non_neighbors: str
@@ -98,9 +99,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--window-samples", type=int, default=16)
     parser.add_argument("--top-k", type=int, default=3)
     parser.add_argument("--neighbor-k", type=int, default=3)
+    parser.add_argument(
+        "--neighbor-source",
+        choices=["learned", "correlation", "group"],
+        default="learned",
+        help=(
+            "Source used to select explanation neighbors. 'learned' uses the model channel graph, "
+            "'correlation' uses absolute normal-training correlation, and 'group' uses same-subsystem variables."
+        ),
+    )
     parser.add_argument("--random-trials", type=int, default=10)
     parser.add_argument("--mask-mode", choices=["baseline", "zero"], default="baseline")
-    parser.add_argument("--arch-profile", choices=["full", "channel-only", "temporal-only", "reconstruction"], default="full")
+    parser.add_argument(
+        "--arch-profile",
+        choices=["full", "prior-guided-graph", "channel-only", "temporal-only", "reconstruction"],
+        default="full",
+    )
     parser.add_argument("--save-csv", type=Path, default=PROJECT_ROOT / "result" / "analysis" / "graph_faithfulness.csv")
     return parser.parse_args()
 
@@ -147,6 +161,17 @@ def arch_switches(profile: str) -> dict:
             "use_temporal_graph": True,
             "use_vq_bypass": True,
             "use_multi_scale_scorer": False,
+        }
+    if profile == "prior-guided-graph":
+        return {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "use_channel_corr_prior": True,
+            "channel_corr_prior_weight": 0.30,
+            "channel_corr_prior_topk": 5,
+            "lambda_channel_prior_align": 0.01,
         }
     if profile == "channel-only":
         return {
@@ -298,6 +323,26 @@ def graph_neighbors(adjacency: np.ndarray | None, top_channels: list[int], k: in
     return selected, mean_support
 
 
+def correlation_graph(train_scaled: pd.DataFrame) -> np.ndarray:
+    values = train_scaled.to_numpy(dtype=np.float32)
+    corr = np.corrcoef(values, rowvar=False)
+    corr = np.nan_to_num(np.abs(corr), nan=0.0, posinf=0.0, neginf=0.0)
+    np.fill_diagonal(corr, 0.0)
+    return corr.astype(np.float32)
+
+
+def group_neighbors(feature_names: list[str], top_channels: list[int], k: int) -> tuple[list[int], float]:
+    if not top_channels:
+        return [], 0.0
+    top_groups = {root_group_name(feature_names[i]) for i in top_channels}
+    candidates = [
+        i
+        for i, name in enumerate(feature_names)
+        if i not in set(top_channels) and root_group_name(name) in top_groups
+    ]
+    return candidates[:k], 1.0 if candidates else 0.0
+
+
 def mean_masked_result(
     model: LaGraph,
     windows: np.ndarray,
@@ -343,6 +388,12 @@ def evaluate_events(args: argparse.Namespace) -> pd.DataFrame:
         columns=test_data.columns,
         index=test_data.index,
     )
+    scaled_train = pd.DataFrame(
+        model.scaler.transform(train_data.values),
+        columns=train_data.columns,
+        index=train_data.index,
+    )
+    corr_graph = correlation_graph(scaled_train) if args.neighbor_source == "correlation" else None
     train_baseline = model.scaler.transform(train_data.values).mean(axis=0).astype(np.float32)
     feature_names = list(test_data.columns)
     rng = random.Random(args.seed)
@@ -368,7 +419,12 @@ def evaluate_events(args: argparse.Namespace) -> pd.DataFrame:
         channel_error = base["channel_error"]
         n_channels = len(channel_error)
         top_channels = [int(i) for i in np.argsort(-channel_error)[: args.top_k]]
-        neighbors, neighbor_support = graph_neighbors(base["adjacency"], top_channels, args.neighbor_k, n_channels)
+        if args.neighbor_source == "group":
+            neighbors, neighbor_support = group_neighbors(feature_names, top_channels, args.neighbor_k)
+        elif args.neighbor_source == "correlation":
+            neighbors, neighbor_support = graph_neighbors(corr_graph, top_channels, args.neighbor_k, n_channels)
+        else:
+            neighbors, neighbor_support = graph_neighbors(base["adjacency"], top_channels, args.neighbor_k, n_channels)
         excluded = set(top_channels) | set(neighbors)
         non_neighbors = [i for i in range(n_channels) if i not in excluded]
         random_candidates = [i for i in range(n_channels) if i not in set(top_channels)]
@@ -415,6 +471,7 @@ def evaluate_events(args: argparse.Namespace) -> pd.DataFrame:
                 baseline_score=base_score,
                 baseline_recon_error=base_err,
                 top_channels=channel_names(feature_names, top_channels),
+                neighbor_source=args.neighbor_source,
                 graph_neighbors=channel_names(feature_names, neighbors),
                 random_channels=channel_names(feature_names, random_sets[0]),
                 non_neighbors=channel_names(feature_names, non_neighbor_sets[0]),

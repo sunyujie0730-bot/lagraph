@@ -100,10 +100,15 @@ class ChannelAdaptiveGraph(nn.Module):
     """
 
     def __init__(self, num_nodes, topk=5,
-                 sparse_topk=None, dropout=0.1):
+                 sparse_topk=None, dropout=0.1,
+                 use_static_prior=False,
+                 static_prior_weight=0.0):
         super(ChannelAdaptiveGraph, self).__init__()
         self.num_nodes = num_nodes
         self.nodedim = topk
+        self.use_static_prior = bool(use_static_prior)
+        self.static_prior_weight = float(static_prior_weight)
+        self.register_buffer("static_prior", torch.eye(num_nodes, dtype=torch.float32), persistent=False)
 
         # === 先验图嵌入（学习性结构）===
         self.nodevec1 = nn.Parameter(torch.randn(num_nodes, topk) * 0.1)
@@ -143,12 +148,24 @@ class ChannelAdaptiveGraph(nn.Module):
         # === L1 正则缓存 ===
         self._l1_penalty = torch.tensor(0.0)
         self._warmup_alpha = 0.0
+        self._prior_align_loss = torch.tensor(0.0)
 
     def set_warmup_progress(self, alpha: float):
         self._warmup_alpha = alpha
 
     def get_l1_penalty(self) -> torch.Tensor:
         return self._l1_penalty * self._warmup_alpha
+
+    def set_static_prior(self, prior):
+        prior = torch.as_tensor(prior, dtype=self.static_prior.dtype)
+        if prior.shape != self.static_prior.shape:
+            raise ValueError(f"static prior shape mismatch: {prior.shape} != {self.static_prior.shape}")
+        prior = prior.clamp_min(0.0)
+        prior = prior / prior.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+        self.static_prior.copy_(prior.to(self.static_prior.device))
+
+    def get_prior_align_loss(self) -> torch.Tensor:
+        return self._prior_align_loss
 
     def forward(self, x):
         """
@@ -185,6 +202,14 @@ class ChannelAdaptiveGraph(nn.Module):
         A_sym_logit = (A_logit + A_logit.transpose(-2, -1)) / 2.0
         A_sym = F.softmax(A_sym_logit, dim=-1)
         A_sym = torch.nan_to_num(A_sym, nan=0.0, posinf=0.0, neginf=0.0)
+        if self.use_static_prior and self.static_prior_weight > 0.0:
+            prior = self.static_prior.to(device=A_sym.device, dtype=A_sym.dtype)
+            prior = prior.unsqueeze(0).expand(B, -1, -1)
+            prior_weight = min(max(self.static_prior_weight, 0.0), 1.0)
+            self._prior_align_loss = F.mse_loss(A_sym, prior)
+            A_sym = (1.0 - prior_weight) * A_sym + prior_weight * prior
+        else:
+            self._prior_align_loss = A_sym.new_tensor(0.0)
 
         # ---- 6. Top-k 稀疏化 ----
         if self.effective_topk < C:

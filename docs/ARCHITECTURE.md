@@ -99,6 +99,12 @@ fusion should correct the serial representation. This profile is intended to
 support the industrial multi-condition generalization narrative. It has passed
 smoke tests but does not yet have full 15-epoch benchmark results.
 
+The newest reviewer-driven candidate is `prior-guided-graph`. It keeps the
+`full` backbone but constrains the learned channel graph with a normal-state
+correlation prior computed from the training prefix. This is not a metric trick:
+it directly answers the reviewer question of whether the channel graph is a
+faithful explanatory structure or an unconstrained attention-like module.
+
 Additional 2026-05-24 architecture candidates were tested but not promoted:
 `parallel-dual`, `parallel-dual-time`, `residual-dual`,
 `residual-dual-time`, `graph-shift`, `graph-shift-lite`, and
@@ -300,6 +306,7 @@ Important details:
 | `full` | on | fixed | on | direct reconstruction | main method |
 | `dynamic-temporal` | on | dynamic | on | direct reconstruction | ungated dynamic temporal ablation |
 | `dynamic-temporal-gated` | on | dynamic + residual gate | on | direct reconstruction | strongest adaptive-temporal candidate |
+| `prior-guided-graph` | normal-correlation-guided | fixed | on | direct reconstruction | graph-faithfulness candidate |
 | `state-aware` | on | fixed + state-aware correction | on | direct reconstruction | newest industrial multi-condition candidate |
 | `state-aware-dynamic` | on | dynamic + state-aware correction | on | direct reconstruction | dynamic state-aware candidate |
 | `state-aware-causal` | on | fixed + state-aware correction | on | reconstruction + counterfactual lagged score | RCA-oriented candidate |
@@ -389,6 +396,40 @@ discriminative enough to improve affiliation F1. The counterfactual
 parent-hurt score gives the first positive MSL affiliation signal, but the
 margin is small and adjusted F1 drops, so it should be treated as a candidate
 rather than the main reported architecture.
+
+## Graph Faithfulness Check
+
+A reviewer-facing masking protocol was added in
+`scripts/evaluate_graph_faithfulness.py`. It tests whether explanation-aligned
+channels actually affect model behavior:
+
+```text
+mask top RCA channels / graph neighbors / random channels / non-neighbors
+then measure anomaly-score and reconstruction-error change.
+```
+
+HAI_21_03_test1, 5 epochs, five metadata events:
+
+| Neighbor source | Top-vs-random score margin | Neighbor-vs-random score margin | Interpretation |
+| --- | ---: | ---: | --- |
+| learned graph in `full` | 11.3826 | -0.0077 | top RCA is faithful; learned graph neighbors are not reliably better than random |
+| normal correlation graph | 11.3826 | 0.2094 | normal-state dependency prior has faithful explanatory signal |
+| same subsystem group | 11.3826 | -0.0477 | subsystem membership alone is not enough |
+| `prior-guided-graph` learned graph | 11.3813 | 0.3793 | prior-guided learning improves graph-neighbor faithfulness |
+
+Initial detection check on HAI_21_03_test1, 5 epochs:
+
+| Profile | Threshold | Raw F1 | Adjusted F1 | Affiliation F1 |
+| --- | --- | ---: | ---: | ---: |
+| `full` | POT | 0.2333 | 0.3733 | 0.9582 |
+| `prior-guided-graph` | POT | 0.2292 | 0.3714 | 0.9975 |
+| `full` | 1.0% | 0.1589 | 0.1881 | 0.8296 |
+| `prior-guided-graph` | 1.0% | 0.1841 | 0.2166 | 0.8846 |
+
+Interpretation: the original channel graph should not be claimed as a faithful
+explanation graph. The stronger architecture direction is to make the graph
+normal-dependency-prior guided, then validate it with masking faithfulness,
+RCA, and detection trade-off evidence.
 
 ## Score Aggregation and Synthetic Auxiliary Check
 
