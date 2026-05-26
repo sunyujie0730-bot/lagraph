@@ -112,6 +112,12 @@ def parse_args() -> argparse.Namespace:
         help="Override hard normal-prior mixing weight for channel-prior profiles",
     )
     parser.add_argument(
+        "--channel-prior-bias",
+        type=float,
+        default=None,
+        help="Override normal-prior logit bias for channel-prior profiles",
+    )
+    parser.add_argument(
         "--channel-prior-topk",
         type=int,
         default=None,
@@ -134,6 +140,8 @@ def parse_args() -> argparse.Namespace:
             "full",
             "prior-guided-graph",
             "structure-consistent",
+            "structure-biased",
+            "mechanism-graph",
             "channel-only",
             "temporal-only",
             "reconstruction",
@@ -209,6 +217,28 @@ def arch_switches(profile: str) -> dict:
             "channel_corr_prior_topk": 5,
             "lambda_channel_prior_align": 0.001,
         }
+    if profile == "structure-biased":
+        return {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "use_channel_corr_prior": True,
+            "channel_corr_prior_weight": 0.0,
+            "channel_corr_prior_bias": 0.5,
+            "channel_corr_prior_topk": 5,
+            "lambda_channel_prior_align": 0.0,
+        }
+    if profile == "mechanism-graph":
+        return {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "lambda_channel_mechanism": 0.02,
+            "use_channel_mechanism_score": True,
+            "channel_mechanism_score_weight": 0.05,
+        }
     if profile == "channel-only":
         return {
             "use_channel_graph": True,
@@ -239,6 +269,9 @@ def build_model(args: argparse.Namespace, n_features: int) -> LaGraph:
             switches["use_channel_corr_prior"] = True
     if args.channel_prior_weight is not None:
         switches["channel_corr_prior_weight"] = min(max(float(args.channel_prior_weight), 0.0), 1.0)
+        switches["use_channel_corr_prior"] = True
+    if args.channel_prior_bias is not None:
+        switches["channel_corr_prior_bias"] = max(0.0, float(args.channel_prior_bias))
         switches["use_channel_corr_prior"] = True
     if args.channel_prior_topk is not None:
         switches["channel_corr_prior_topk"] = max(1, args.channel_prior_topk)

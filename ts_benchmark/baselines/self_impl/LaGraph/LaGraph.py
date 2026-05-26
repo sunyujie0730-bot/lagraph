@@ -124,8 +124,13 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "score_channel_norm_eps": 1e-6,
     "use_channel_corr_prior": False,
     "channel_corr_prior_weight": 0.0,
+    "channel_corr_prior_bias": 0.0,
     "channel_corr_prior_topk": 5,
     "lambda_channel_prior_align": 0.0,
+    "lambda_channel_mechanism": 0.0,
+    "use_channel_mechanism_score": False,
+    "channel_mechanism_score_weight": 0.1,
+    "channel_mechanism_score_eps": 1e-6,
     "use_state_aware_fusion": False,
     "state_aware_num_states": 4,
     "state_aware_graph_gate_init": 0.6,
@@ -1010,8 +1015,12 @@ class LaGraph:
                 "score_channel_norm_eps": getattr(self.config, "score_channel_norm_eps", None),
                 "use_channel_corr_prior": getattr(self.config, "use_channel_corr_prior", None),
                 "channel_corr_prior_weight": getattr(self.config, "channel_corr_prior_weight", None),
+                "channel_corr_prior_bias": getattr(self.config, "channel_corr_prior_bias", None),
                 "channel_corr_prior_topk": getattr(self.config, "channel_corr_prior_topk", None),
                 "lambda_channel_prior_align": getattr(self.config, "lambda_channel_prior_align", None),
+                "lambda_channel_mechanism": getattr(self.config, "lambda_channel_mechanism", None),
+                "use_channel_mechanism_score": getattr(self.config, "use_channel_mechanism_score", None),
+                "channel_mechanism_score_weight": getattr(self.config, "channel_mechanism_score_weight", None),
                 "use_state_aware_fusion": getattr(self.config, "use_state_aware_fusion", None),
                 "state_aware_num_states": getattr(self.config, "state_aware_num_states", None),
                 "state_aware_graph_gate_init": getattr(self.config, "state_aware_graph_gate_init", None),
@@ -1162,6 +1171,9 @@ class LaGraph:
         lambda_channel_prior = getattr(self.config, "lambda_channel_prior_align", 0.0)
         if lambda_channel_prior > 0 and 'channel_prior_align_loss' in aux_losses:
             loss = loss + lambda_channel_prior * aux_losses['channel_prior_align_loss']
+        lambda_channel_mechanism = getattr(self.config, "lambda_channel_mechanism", 0.0)
+        if lambda_channel_mechanism > 0 and 'channel_mechanism_loss' in aux_losses:
+            loss = loss + lambda_channel_mechanism * aux_losses['channel_mechanism_loss']
         lambda_smooth = getattr(self.config, "lambda_temporal_graph_smooth", 0.0)
         lambda_locality = getattr(self.config, "lambda_temporal_graph_locality", 0.0)
         if lambda_smooth > 0 and 'temporal_graph_smooth_loss' in aux_losses:
@@ -1433,6 +1445,56 @@ class LaGraph:
 
     # ======================== 训练（单卡）=======================
     @torch.no_grad()
+    def _fit_channel_mechanism_score_stats(self, train_data: pd.DataFrame):
+        if train_data is None or self.model is None:
+            return
+        raw_model = self._get_raw_model()
+        if not hasattr(raw_model, "set_channel_mechanism_score_stats"):
+            return
+
+        print("\n  [ChannelMechanism] Fitting normal mechanism-violation score statistics...")
+        if self.early_stopping is not None and self.early_stopping.check_point is not None:
+            raw_model.load_state_dict(self.early_stopping.check_point)
+        self.model.to(self.device)
+        self.model.eval()
+
+        scaled_data = pd.DataFrame(
+            self.scaler.transform(train_data.values),
+            columns=train_data.columns, index=train_data.index,
+        )
+        loader = anomaly_detection_data_provider(
+            scaled_data,
+            batch_size=min(self.config.batch_size, 64),
+            win_size=self.config.win_size,
+            step=1,
+            mode="test",
+            num_workers=0,
+        )
+
+        scores = []
+        for input_data, _ in loader:
+            input_data = input_data.float().to(self.device)
+            _, _, _, _, _, aux_losses, _ = self.model(input_data)
+            mechanism_score = aux_losses.get("channel_mechanism_score") if aux_losses else None
+            if mechanism_score is not None:
+                scores.append(mechanism_score.detach().cpu().numpy().reshape(-1))
+
+        if not scores:
+            return
+
+        scores = np.concatenate(scores, axis=0)
+        score_center = float(np.median(scores))
+        q25 = float(np.percentile(scores, 25))
+        q75 = float(np.percentile(scores, 75))
+        eps = float(getattr(self.config, "channel_mechanism_score_eps", 1e-6) or 1e-6)
+        score_scale = max(q75 - q25, float(np.std(scores)), abs(score_center), eps)
+        raw_model.set_channel_mechanism_score_stats(score_center, score_scale)
+        print(
+            "  [ChannelMechanism] score median="
+            f"{score_center:.6f}, scale={score_scale:.6f}"
+        )
+
+    @torch.no_grad()
     def _fit_synthetic_score_stats(self, train_data: pd.DataFrame):
         if train_data is None or self.model is None:
             return
@@ -1562,6 +1624,9 @@ class LaGraph:
         if getattr(self.config, "use_causal_score", False):
             self._fit_causal_score_stats(self._train_raw)
 
+        if getattr(self.config, "use_channel_mechanism_score", False):
+            self._fit_channel_mechanism_score_stats(self._train_raw)
+
         if getattr(self.config, "use_synthetic_score", False):
             self._fit_synthetic_score_stats(self._train_raw)
 
@@ -1666,7 +1731,12 @@ class LaGraph:
             score_channel_norm_eps=getattr(self.config, "score_channel_norm_eps", 1e-6),
             use_channel_corr_prior=getattr(self.config, "use_channel_corr_prior", False),
             channel_corr_prior_weight=getattr(self.config, "channel_corr_prior_weight", 0.0),
+            channel_corr_prior_bias=getattr(self.config, "channel_corr_prior_bias", 0.0),
             lambda_channel_prior_align=getattr(self.config, "lambda_channel_prior_align", 0.0),
+            lambda_channel_mechanism=getattr(self.config, "lambda_channel_mechanism", 0.0),
+            use_channel_mechanism_score=getattr(self.config, "use_channel_mechanism_score", False),
+            channel_mechanism_score_weight=getattr(self.config, "channel_mechanism_score_weight", 0.1),
+            channel_mechanism_score_eps=getattr(self.config, "channel_mechanism_score_eps", 1e-6),
             use_state_aware_fusion=getattr(self.config, "use_state_aware_fusion", False),
             state_aware_num_states=getattr(self.config, "state_aware_num_states", 4),
             state_aware_graph_gate_init=getattr(self.config, "state_aware_graph_gate_init", 0.6),
@@ -1683,7 +1753,8 @@ class LaGraph:
             print(
                 f"  [ChannelPrior] normal correlation prior set "
                 f"(topk={getattr(self.config, 'channel_corr_prior_topk', 5)}, "
-                f"weight={getattr(self.config, 'channel_corr_prior_weight', 0.0)})"
+                f"weight={getattr(self.config, 'channel_corr_prior_weight', 0.0)}, "
+                f"bias={getattr(self.config, 'channel_corr_prior_bias', 0.0)})"
             )
 
         total_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
@@ -1917,6 +1988,10 @@ class LaGraph:
             use_score_channel_normalization=getattr(self.config, "use_score_channel_normalization", False),
             score_channel_norm_mode=getattr(self.config, "score_channel_norm_mode", "robust_z"),
             score_channel_norm_eps=getattr(self.config, "score_channel_norm_eps", 1e-6),
+            lambda_channel_mechanism=getattr(self.config, "lambda_channel_mechanism", 0.0),
+            use_channel_mechanism_score=getattr(self.config, "use_channel_mechanism_score", False),
+            channel_mechanism_score_weight=getattr(self.config, "channel_mechanism_score_weight", 0.1),
+            channel_mechanism_score_eps=getattr(self.config, "channel_mechanism_score_eps", 1e-6),
             use_state_aware_fusion=getattr(self.config, "use_state_aware_fusion", False),
             state_aware_num_states=getattr(self.config, "state_aware_num_states", 4),
             state_aware_graph_gate_init=getattr(self.config, "state_aware_graph_gate_init", 0.6),

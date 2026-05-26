@@ -448,7 +448,12 @@ class SparseGCN(nn.Module):
                  score_channel_norm_eps=1e-6,
                  use_channel_corr_prior=False,
                  channel_corr_prior_weight=0.0,
+                 channel_corr_prior_bias=0.0,
                  lambda_channel_prior_align=0.0,
+                 lambda_channel_mechanism=0.0,
+                 use_channel_mechanism_score=False,
+                 channel_mechanism_score_weight=0.1,
+                 channel_mechanism_score_eps=1e-6,
                  use_state_aware_fusion=False,
                  state_aware_num_states=4,
                  state_aware_graph_gate_init=0.6,
@@ -497,7 +502,12 @@ class SparseGCN(nn.Module):
         self.score_channel_norm_eps = score_channel_norm_eps
         self.use_channel_corr_prior = bool(use_channel_corr_prior)
         self.channel_corr_prior_weight = float(channel_corr_prior_weight)
+        self.channel_corr_prior_bias = float(channel_corr_prior_bias)
         self.lambda_channel_prior_align = float(lambda_channel_prior_align)
+        self.lambda_channel_mechanism = float(lambda_channel_mechanism)
+        self.use_channel_mechanism_score = bool(use_channel_mechanism_score)
+        self.channel_mechanism_score_weight = float(channel_mechanism_score_weight)
+        self.channel_mechanism_score_eps = float(channel_mechanism_score_eps)
         self.use_state_aware_fusion = use_state_aware_fusion
         self.state_aware_num_states = int(state_aware_num_states)
         self.state_aware_graph_gate_init = float(state_aware_graph_gate_init)
@@ -537,6 +547,16 @@ class SparseGCN(nn.Module):
             torch.ones(1),
             persistent=False,
         )
+        self.register_buffer(
+            'channel_mechanism_score_center',
+            torch.zeros(1),
+            persistent=False,
+        )
+        self.register_buffer(
+            'channel_mechanism_score_scale',
+            torch.ones(1),
+            persistent=False,
+        )
 
         # === 自适应通道图 ===
         self.register_buffer(
@@ -555,6 +575,7 @@ class SparseGCN(nn.Module):
             sparse_topk=sparse_topk, dropout=dropout,
             use_static_prior=self.use_channel_corr_prior,
             static_prior_weight=self.channel_corr_prior_weight,
+            static_prior_bias=self.channel_corr_prior_bias,
         )
 
         # === 简化时序图 ===
@@ -793,6 +814,44 @@ class SparseGCN(nn.Module):
             return (center - causal_score).clamp_min(0.0) / scale.clamp_min(self.causal_score_eps)
         return (causal_score - center).clamp_min(0.0) / scale.clamp_min(self.causal_score_eps)
 
+    def set_channel_mechanism_score_stats(self, score_center, score_scale):
+        self.channel_mechanism_score_center.copy_(
+            torch.as_tensor(
+                [score_center],
+                dtype=self.channel_mechanism_score_center.dtype,
+                device=self.channel_mechanism_score_center.device,
+            )
+        )
+        self.channel_mechanism_score_scale.copy_(
+            torch.as_tensor(
+                [score_scale],
+                dtype=self.channel_mechanism_score_scale.dtype,
+                device=self.channel_mechanism_score_scale.device,
+            ).clamp_min(self.channel_mechanism_score_eps)
+        )
+
+    def _normalize_channel_mechanism_score(self, mechanism_score):
+        center = self.channel_mechanism_score_center.to(
+            device=mechanism_score.device, dtype=mechanism_score.dtype,
+        )
+        scale = self.channel_mechanism_score_scale.to(
+            device=mechanism_score.device, dtype=mechanism_score.dtype,
+        )
+        return (mechanism_score - center).clamp_min(0.0) / scale.clamp_min(self.channel_mechanism_score_eps)
+
+    def _channel_mechanism(self, resid, A_adaptive):
+        _, _, C = resid.shape
+        eye = torch.eye(C, device=resid.device, dtype=resid.dtype).unsqueeze(0)
+        A_mech = A_adaptive.to(dtype=resid.dtype) * (1.0 - eye)
+        col_sum = A_mech.sum(dim=1, keepdim=True).clamp_min(1e-8)
+        A_mech = A_mech / col_sum
+        pred = torch.bmm(resid, A_mech)
+        err = torch.abs(resid - pred)
+        k = min(max(1, self.score_topk_k or self.multi_scale_scorer.topk_k), C)
+        score = err.topk(k=k, dim=-1, largest=True, sorted=False)[0].mean(dim=-1)
+        loss = F.smooth_l1_loss(pred, resid)
+        return pred, score, loss
+
     def set_synthetic_score_stats(self, score_center, score_scale):
         self.synthetic_score_center.copy_(
             torch.as_tensor([score_center], dtype=self.synthetic_score_center.dtype, device=self.synthetic_score_center.device)
@@ -840,6 +899,8 @@ class SparseGCN(nn.Module):
         state_aware_info = None
         causal_score = None
         causal_mechanism_loss = None
+        channel_mechanism_score = None
+        channel_mechanism_loss = None
 
         if self.use_lagged_causal_graph and self.lagged_causal_graph is not None:
             causal_input = resid.detach() if self.causal_detach_backbone else resid
@@ -857,6 +918,13 @@ class SparseGCN(nn.Module):
         else:
             resid_adapted = resid
             A_adaptive = torch.eye(C, device=x.device).unsqueeze(0).expand(B, C, C)
+
+        if self.use_channel_graph and (
+            self.use_channel_mechanism_score or self.lambda_channel_mechanism > 0
+        ):
+            _, channel_mechanism_score, channel_mechanism_loss = self._channel_mechanism(
+                resid, A_adaptive,
+            )
 
         # 步骤 3: 简化时序图
         if self.use_state_aware_fusion and self.use_channel_graph and self.use_temporal_graph:
@@ -935,6 +1003,10 @@ class SparseGCN(nn.Module):
         if causal_mechanism_loss is not None:
             aux_losses['causal_mechanism_loss'] = causal_mechanism_loss
             aux_losses['causal_sparse_loss'] = self.lagged_causal_graph.get_sparsity_loss()
+        if channel_mechanism_score is not None:
+            aux_losses['channel_mechanism_score'] = channel_mechanism_score
+        if channel_mechanism_loss is not None:
+            aux_losses['channel_mechanism_loss'] = channel_mechanism_loss
         if synthetic_logits is not None:
             aux_losses['synthetic_logits'] = synthetic_logits
         if graph_fusion_gate is not None:
@@ -986,6 +1058,7 @@ class SparseGCN(nn.Module):
         vq_dist_dict = {}
         graph_shift_dict = {}
         causal_score_dict = {}
+        channel_mechanism_score_dict = {}
         synthetic_score_dict = {}
 
         for ws in valid_sizes:
@@ -1021,6 +1094,9 @@ class SparseGCN(nn.Module):
             if self.use_causal_score and aux_losses.get('causal_score', None) is not None:
                 c_score = aux_losses['causal_score']
                 causal_score_dict[ws] = c_score[:, :ws] if ws < self.win_size else c_score
+            if self.use_channel_mechanism_score and aux_losses.get('channel_mechanism_score', None) is not None:
+                m_score = aux_losses['channel_mechanism_score']
+                channel_mechanism_score_dict[ws] = m_score[:, :ws] if ws < self.win_size else m_score
             if self.use_synthetic_score and aux_losses.get('synthetic_logits', None) is not None:
                 s_score = torch.sigmoid(aux_losses['synthetic_logits'])
                 synthetic_score_dict[ws] = s_score[:, :ws] if ws < self.win_size else s_score
@@ -1082,6 +1158,18 @@ class SparseGCN(nn.Module):
                 pad_causal = torch.zeros(B, pad_len, device=score.device)
                 causal_score = torch.cat([pad_causal, causal_score], dim=1)
             score = score + self.causal_score_weight * causal_score
+
+        if self.use_channel_mechanism_score and channel_mechanism_score_dict:
+            mechanism_score = self._aggregate_vq_dist(
+                channel_mechanism_score_dict, valid_sizes, B, L, x.device,
+            )
+            mechanism_score = self._normalize_channel_mechanism_score(mechanism_score)
+            mechanism_score = mechanism_score[:, -score.shape[1]:] if mechanism_score.shape[1] >= score.shape[1] else mechanism_score
+            if mechanism_score.shape[1] < score.shape[1]:
+                pad_len = score.shape[1] - mechanism_score.shape[1]
+                pad_mech = torch.zeros(B, pad_len, device=score.device)
+                mechanism_score = torch.cat([pad_mech, mechanism_score], dim=1)
+            score = score + self.channel_mechanism_score_weight * mechanism_score
 
         if self.use_synthetic_score and synthetic_score_dict:
             synthetic_score = self._aggregate_vq_dist(synthetic_score_dict, valid_sizes, B, L, x.device)

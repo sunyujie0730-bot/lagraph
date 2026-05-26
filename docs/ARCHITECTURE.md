@@ -99,16 +99,20 @@ fusion should correct the serial representation. This profile is intended to
 support the industrial multi-condition generalization narrative. It has passed
 smoke tests but does not yet have full 15-epoch benchmark results.
 
-The reviewer-driven graph candidates now separate two hypotheses.
+The reviewer-driven graph candidates now separate three hypotheses.
 `prior-guided-graph` hard-mixes a normal-state correlation prior into the
 learned channel graph. It improves graph-neighbor faithfulness, but early HAI
 tests show that the hard prior can damage detection on distribution-shifted
 events. It is therefore a stress-test candidate rather than the main method.
 `structure-consistent` keeps the `full` forward backbone unchanged and uses the
-normal-state graph only as a weak alignment loss. This is the preferred
-paper-level hypothesis because it asks a narrower and more defensible question:
-can a normal-structure consistency constraint make the learned graph more
-faithful without replacing the adaptive graph used for detection?
+normal-state graph only as a weak alignment loss. It was tested as a conservative
+explanation candidate, but the learned-neighbor faithfulness margin did not
+change under stronger alignment weights. The current paper-level candidate is
+`mechanism-graph`: the channel graph must predict each variable from its
+non-self graph neighbors, and anomaly scoring includes the resulting mechanism
+violation. This creates a stronger story than graph regularization alone:
+industrial anomalies are treated as violations of normal inter-variable
+mechanisms, not merely as large point-wise reconstruction errors.
 
 Additional 2026-05-24 architecture candidates were tested but not promoted:
 `parallel-dual`, `parallel-dual-time`, `residual-dual`,
@@ -124,58 +128,66 @@ architecture until the gains are confirmed across more datasets and seeds.
 
 ```mermaid
 flowchart TD
-    accTitle: Structure-Consistent LaGraph Architecture
-    accDescr: Current reviewer-facing LaGraph candidate with a normal-state dependency prior, adaptive channel graph, reconstruction anomaly scoring, and graph-faithful RCA from the same learned structure.
+    accTitle: Mechanism-Graph LaGraph Architecture
+    accDescr: Current reviewer-facing LaGraph candidate where the channel graph must model normal inter-variable mechanisms and anomaly scoring combines reconstruction error with mechanism violation.
 
     normal["Normal training prefix<br/>X_train"]
-    prior["Normal dependency prior G0<br/>top-k correlation graph"]
     input["Input window<br/>(B, L, C)"]
     decomp["MoE decomposition<br/>residual + trend"]
     channel["ChannelAdaptiveGraph<br/>adaptive graph Gt"]
-    align["Weak structure consistency<br/>D(Gt, G0)"]
+    mech["Neighbor mechanism<br/>predict X_i from graph neighbors"]
+    mechscore["Mechanism violation score<br/>top-k |X - X_hat_graph|"]
     temporal["SimplifiedTemporalGraph<br/>stable L x L temporal graph"]
     vq["Dual-path VQ<br/>training-side regularization"]
     proj["Projection + residual shortcut"]
     encoder["EncoderStack<br/>dynamic temporal scales"]
     recon["Reconstruction<br/>(B, L, C)"]
-    score["Direct reconstruction score<br/>top-k channel L1 error"]
+    reconscore["Reconstruction score<br/>top-k channel L1 error"]
+    score["Unified anomaly score<br/>reconstruction + mechanism violation"]
     threshold["Percentile/POT thresholding"]
     output["Predicted anomaly labels"]
-    rca["Graph-faithful RCA<br/>local error + local contrast + graph support"]
-    faith["Faithfulness evidence<br/>Top-K masking > random masking"]
+    rca["Mechanism-aware RCA<br/>local residual + mechanism violation + graph support"]
+    faith["Reviewer evidence<br/>masking faithfulness + RCA Hit@K"]
 
-    normal --> prior
     input --> decomp
     decomp --> channel
-    prior -.-> align
-    channel -.-> align
+    normal -.->|"normal score calibration"| mechscore
+    channel --> mech
+    decomp --> mech
+    mech --> mechscore
     channel --> temporal
     temporal --> vq
     vq --> proj
     proj --> encoder
     encoder --> recon
-    recon --> score
+    recon --> reconscore
+    reconscore --> score
+    mechscore --> score
     score --> threshold
     threshold --> output
     channel --> rca
     recon --> rca
+    mechscore --> rca
     rca --> faith
 
     classDef core fill:#e8f1ff,stroke:#2563eb,stroke-width:1px,color:#111827
     classDef score_cls fill:#eef8ee,stroke:#16a34a,stroke-width:1px,color:#111827
-    classDef prior_cls fill:#fff7ed,stroke:#ea580c,stroke-width:1px,color:#111827
+    classDef mech_cls fill:#fff7ed,stroke:#ea580c,stroke-width:1px,color:#111827
     classDef eval_cls fill:#f5f3ff,stroke:#7c3aed,stroke-width:1px,color:#111827
     class input,decomp,channel,temporal,vq,proj,encoder,recon core
-    class score,threshold,output score_cls
-    class normal,prior,align prior_cls
+    class reconscore,score,threshold,output score_cls
+    class normal,mech,mechscore mech_cls
     class rca,faith eval_cls
 ```
 
-The key design decision is that `G0` does not replace the adaptive graph. In
-`structure-consistent`, `channel_corr_prior_weight=0.0`, so the forward graph is
-still `Gt`. The normal graph only contributes a weak alignment loss
-`lambda_channel_prior_align=0.001`. This preserves the detection path while
-making the learned graph testable as an explanatory structure.
+The key design decision is that the graph is no longer only a feature
+transformation. In `mechanism-graph`, the adaptive channel graph defines a
+self-excluded neighbor mechanism: each variable should be predictable from its
+graph neighbors during normal operation. The mechanism residual is trained on
+normal windows and calibrated on normal scores, then fused with reconstruction
+error at inference. This makes the graph scientifically testable: if the graph
+is meaningful, masking graph-supported mechanism channels should affect the
+anomaly score more than random masking.
 
 ## Module Details
 
@@ -333,7 +345,8 @@ Important details:
 | `dynamic-temporal` | on | dynamic | on | direct reconstruction | ungated dynamic temporal ablation |
 | `dynamic-temporal-gated` | on | dynamic + residual gate | on | direct reconstruction | strongest adaptive-temporal candidate |
 | `prior-guided-graph` | normal-correlation-guided | fixed | on | direct reconstruction | graph-faithfulness candidate |
-| `structure-consistent` | adaptive + weak normal-prior loss | fixed | on | direct reconstruction | preferred graph-faithfulness candidate |
+| `structure-consistent` | adaptive + weak normal-prior loss | fixed | on | direct reconstruction | conservative graph-alignment candidate |
+| `mechanism-graph` | adaptive graph as neighbor mechanism | fixed | on | reconstruction + mechanism violation | current paper-level candidate |
 | `state-aware` | on | fixed + state-aware correction | on | direct reconstruction | newest industrial multi-condition candidate |
 | `state-aware-dynamic` | on | dynamic + state-aware correction | on | direct reconstruction | dynamic state-aware candidate |
 | `state-aware-causal` | on | fixed + state-aware correction | on | reconstruction + counterfactual lagged score | RCA-oriented candidate |
@@ -628,23 +641,23 @@ the current dependency graph is already a causal graph
 
 ## Practical Next Step
 
-Do not spend more experiments on generic dual-graph fusion or disconnected RCA
-branches. The immediate architecture question is narrower and more defensible:
-can a weak normal-structure consistency constraint improve graph faithfulness
-without damaging the stable `full` detection path?
+Do not spend more experiments on generic dual-graph fusion, disconnected RCA
+branches, or weak graph-alignment losses. The immediate architecture question is
+stronger and more defensible: can the channel graph act as a normal operational
+mechanism whose violation improves anomaly detection and root-cause evidence?
 
 ```text
-G0 = top-k normal dependency graph from the normal training prefix
 Gt = adaptive channel graph learned from each input window
-loss = reconstruction_loss + sparse_loss + lambda * D(Gt, G0)
-RCA = local residual evidence + local contrast + graph support from Gt
+X_hat_mech_i = f(X_neighbors(i; Gt))
+loss = reconstruction_loss + sparse_loss + lambda * mechanism_loss
+score = reconstruction_error + alpha * normalized_mechanism_violation
+RCA = local residual evidence + mechanism violation + graph support
 ```
 
-This avoids claiming that the graph is a causal graph before we have causal
-identifiability evidence. The paper-level claim is structural and testable:
-normal dependency structure regularizes the learned graph, and the resulting
-graph should pass masking-based faithfulness tests. Lagged causal mechanisms
-remain a later extension after this structure-consistency claim is validated.
+This avoids claiming full causality before identifiability evidence exists, but
+it gives the graph an operational meaning that a reviewer can test. The main
+claim becomes mechanism-aware anomaly detection and diagnosis, not another
+attention-like graph module.
 
 ## Commands
 
@@ -659,6 +672,13 @@ Structure-consistent candidate:
 ```powershell
 $env:PYTHONIOENCODING='utf-8'
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 5 --datasets HAI_21_03_test1.csv HAI_21_03_test2.csv --arch-profile structure-consistent --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_structure_consistent_hai_5ep
+```
+
+Mechanism-graph candidate:
+
+```powershell
+$env:PYTHONIOENCODING='utf-8'
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 5 --datasets HAI_21_03_test1.csv HAI_21_03_test2.csv --arch-profile mechanism-graph --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_mechanism_graph_hai_5ep
 ```
 
 Graph faithfulness check:

@@ -142,6 +142,8 @@ def main():
             "graph-only",
             "prior-guided-graph",
             "structure-consistent",
+            "structure-biased",
+            "mechanism-graph",
             "channel-only",
             "temporal-only",
             "state-aware",
@@ -307,6 +309,12 @@ def main():
         help="Override hard normal-prior mixing weight for channel-prior profiles",
     )
     parser.add_argument(
+        "--channel-prior-bias",
+        type=float,
+        default=None,
+        help="Override normal-prior logit bias for channel-prior profiles",
+    )
+    parser.add_argument(
         "--channel-prior-topk",
         type=int,
         default=None,
@@ -353,6 +361,18 @@ def main():
         type=float,
         default=None,
         help="Override lagged causal mechanism loss weight",
+    )
+    parser.add_argument(
+        "--lambda-channel-mechanism",
+        type=float,
+        default=None,
+        help="Override channel-neighbor mechanism reconstruction loss weight",
+    )
+    parser.add_argument(
+        "--channel-mechanism-score-weight",
+        type=float,
+        default=None,
+        help="Override channel mechanism-violation score fusion weight",
     )
     parser.add_argument(
         "--causal-topk",
@@ -610,6 +630,26 @@ def main():
             "channel_corr_prior_weight": 0.0,
             "channel_corr_prior_topk": 5,
             "lambda_channel_prior_align": 0.001,
+        },
+        "structure-biased": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "use_channel_corr_prior": True,
+            "channel_corr_prior_weight": 0.0,
+            "channel_corr_prior_bias": 0.5,
+            "channel_corr_prior_topk": 5,
+            "lambda_channel_prior_align": 0.0,
+        },
+        "mechanism-graph": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "lambda_channel_mechanism": 0.02,
+            "use_channel_mechanism_score": True,
+            "channel_mechanism_score_weight": 0.05,
         },
         "channel-only": {
             "use_channel_graph": True,
@@ -1146,6 +1186,9 @@ def main():
             max(float(args.channel_prior_weight), 0.0), 1.0
         )
         score_hyper_params["use_channel_corr_prior"] = True
+    if args.channel_prior_bias is not None:
+        score_hyper_params["channel_corr_prior_bias"] = max(0.0, float(args.channel_prior_bias))
+        score_hyper_params["use_channel_corr_prior"] = True
     if args.channel_prior_topk is not None:
         score_hyper_params["channel_corr_prior_topk"] = max(1, args.channel_prior_topk)
         score_hyper_params["use_channel_corr_prior"] = True
@@ -1167,6 +1210,13 @@ def main():
         score_hyper_params["causal_score_weight"] = max(0.0, args.causal_score_weight)
     if args.lambda_causal_mechanism is not None:
         score_hyper_params["lambda_causal_mechanism"] = max(0.0, args.lambda_causal_mechanism)
+    if args.lambda_channel_mechanism is not None:
+        score_hyper_params["lambda_channel_mechanism"] = max(0.0, args.lambda_channel_mechanism)
+    if args.channel_mechanism_score_weight is not None:
+        score_hyper_params["channel_mechanism_score_weight"] = max(
+            0.0, args.channel_mechanism_score_weight,
+        )
+        score_hyper_params["use_channel_mechanism_score"] = True
     if args.causal_topk is not None:
         score_hyper_params["causal_topk"] = max(1, args.causal_topk)
     if args.lambda_synthetic_anomaly is not None:
