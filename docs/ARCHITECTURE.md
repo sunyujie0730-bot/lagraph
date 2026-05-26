@@ -17,10 +17,10 @@ because recent experiments did not support them as reliable contributors.
 
 The strongest current paper direction is:
 
-- efficient dual-graph representation learning;
-- interpretable channel and temporal dependency structures;
-- VQ-regularized normal-pattern representation;
+- a compact reconstruction backbone with channel-structure support;
+- hierarchical RCA and local counterfactual attribution;
 - transparent negative ablations showing why unused modules were removed;
+- efficiency and auditability as explicit paper objectives;
 - optional future extension toward explicit causal structure learning.
 
 Large metric gains are still possible, but they are unlikely to come from adding
@@ -28,6 +28,38 @@ more generic blocks. The best remaining opportunities are causal/structural grap
 learning and score calibration. Until those are implemented and validated, the
 paper should emphasize interpretability, efficiency, and stability rather than
 claiming a universal metric lead.
+
+## Paper-Level Trade-Off Policy
+
+The current system should not be optimized as a detector-only leaderboard model.
+If the method cannot become SOTA on every dataset and metric, the paper should
+make an explicit trade: accept a small detection-performance gap only when it
+buys a measurable diagnosis or deployment advantage.
+
+Acceptable trade-offs:
+
+| Trade-off | Acceptable only if | Reviewer risk |
+| --- | --- | --- |
+| Slightly lower raw F1 | Affiliation F1, RCA ranking, or delay improves under a fixed protocol | hiding weak point-wise detection |
+| Slightly lower adjusted F1 | Predicted-event RCA coverage and delay remain competitive | threshold or segment tuning |
+| Extra graph module | The learned structure is visualizable and improves RCA or robustness | module stacking |
+| Removing a module | Runtime/parameter count drops and detection/RCA does not collapse | underpowered architecture |
+| Dataset-specific sensitivity | Reported as sensitivity, not promoted as a universal default | cherry-picking |
+
+Non-acceptable trade-offs:
+
+- large raw F1 or adjusted F1 degradation with only a tiny affiliation gain;
+- post-processing that inflates event coverage but weakens RCA or precision;
+- a graph or causal module that cannot be explained in one figure;
+- any setting chosen only because it is best on the test labels.
+
+Practical paper stance:
+
+```text
+LaGraph is not positioned as a universal SOTA detector. It is positioned as a
+compact industrial anomaly diagnosis framework that balances detection,
+hierarchical RCA, interpretability, and single-GPU efficiency.
+```
 
 ## Main Profile
 

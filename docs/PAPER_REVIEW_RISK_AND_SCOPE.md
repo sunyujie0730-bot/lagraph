@@ -24,6 +24,34 @@ A universal SOTA detector with fully causal root-cause inference.
 
 The second claim is not supported by the current evidence.
 
+## Strategic Trade-Off
+
+The project should not hide weaker detector-only results. If LaGraph is not
+SOTA on every raw detection metric, the paper can still be defensible only by
+making the trade-off explicit:
+
+```text
+small detection-performance gap -> stronger diagnosis, interpretability,
+generalization discipline, or efficiency.
+```
+
+This trade-off is acceptable only when it is measured. A module should not enter
+the main method because it sounds causal, adaptive, or graph-based. It must
+improve at least one paper-level outcome:
+
+| Paper-level outcome | Required evidence |
+| --- | --- |
+| Interpretability | graph/RCA output can be visualized and matches subsystem evidence |
+| Generalization | same setting works across datasets/seeds or failures are reported |
+| Efficiency | parameter count/runtime/memory improves without detection collapse |
+| RCA quality | true-event and predicted-event RCA improve over simple baselines |
+| Event-level utility | Affiliation F1 or delay improves without hiding raw F1 |
+
+The safest thesis is therefore diagnosis-first, not detector-first. Detection
+remains necessary, but the main novelty should be judged by whether the system
+helps explain and localize industrial anomaly events under a transparent
+protocol.
+
 ## Reviewer First Questions
 
 | Reviewer question | Current risk | Required answer |
