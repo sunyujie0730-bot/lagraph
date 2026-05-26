@@ -235,6 +235,29 @@ Interpretation:
 - HAI group labels are coarse, which makes Hit@3 easy. MRR, Hit@1, NDCG@3, and
   predicted-event matched rate are the more meaningful metrics.
 
+## Mechanism Faithfulness Smoke Check
+
+A lightweight 2026-05-26 counterfactual masking check was run on
+`HAI_21_03_test1` with `mechanism-graph`, 3 epochs, a 30k-row training prefix,
+three anomaly events, eight event windows, and five random trials. This is not a
+final paper table; it is a feasibility check for whether mechanism explanations
+change model behavior.
+
+| Ranking source | Top-vs-random score margin | Neighbor-vs-random score margin | Top-vs-random recon margin | Top-vs-random mechanism margin | Interpretation |
+| --- | ---: | ---: | ---: | ---: | --- |
+| mechanism ranking | 12.4830 | 0.0381 | 3.5358 | 0.5889 | mechanism-ranked channels are behaviorally faithful |
+| reconstruction ranking | 14.7191 | -0.0208 | 4.1201 | 0.5812 | residual-ranked channels are also faithful |
+
+Interpretation:
+
+- masking the top-ranked channels changes the anomaly score far more than
+  masking random channels, so the top explanations are not merely decorative;
+- mechanism-ranked channels also change the mechanism residual itself, which is
+  the first direct evidence that the mechanism branch has behavioral meaning;
+- learned graph neighbors remain unstable and should not be overclaimed as
+  faithful causal parents yet. They require stronger edge-level evidence before
+  becoming a main contribution.
+
 ## Module Details
 
 ### MoE Decomposition

@@ -58,6 +58,8 @@ class EventResult:
     root_groups: str
     baseline_score: float
     baseline_recon_error: float
+    baseline_mechanism_error: float
+    ranking_source: str
     top_channels: str
     neighbor_source: str
     graph_neighbors: str
@@ -71,11 +73,17 @@ class EventResult:
     neighbor_delta_recon_error: float
     random_delta_recon_error: float
     non_neighbor_delta_recon_error: float
+    top_delta_mechanism_error: float
+    neighbor_delta_mechanism_error: float
+    random_delta_mechanism_error: float
+    non_neighbor_delta_mechanism_error: float
     graph_neighbor_support: float
     top_vs_random_score_margin: float
     neighbor_vs_random_score_margin: float
     top_vs_random_recon_margin: float
     neighbor_vs_random_recon_margin: float
+    top_vs_random_mechanism_margin: float
+    neighbor_vs_random_mechanism_margin: float
 
 
 def parse_args() -> argparse.Namespace:
@@ -99,6 +107,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--window-samples", type=int, default=16)
     parser.add_argument("--top-k", type=int, default=3)
     parser.add_argument("--neighbor-k", type=int, default=3)
+    parser.add_argument(
+        "--ranking-source",
+        choices=["reconstruction", "mechanism", "combined"],
+        default="reconstruction",
+        help="Channel evidence used to choose top-RCA channels before masking.",
+    )
     parser.add_argument(
         "--channel-prior-align",
         type=float,
@@ -339,13 +353,19 @@ def forward_event(
     raw_model = model._get_raw_model()
     device = model.device
     x = torch.as_tensor(windows, dtype=torch.float32, device=device)
-    rec, adj, _, _, _, _, _ = raw_model(x)
+    rec, adj, _, _, _, aux_losses, _ = raw_model(x)
     scores, _ = raw_model.multi_scale_forward(x)
     channel_err = torch.abs(rec - x)
     if hasattr(raw_model, "_normalize_score_error"):
         channel_err = raw_model._normalize_score_error(channel_err)
+    mechanism_err = aux_losses.get("channel_mechanism_error") if aux_losses else None
+    if mechanism_err is None:
+        mechanism_err = torch.zeros_like(channel_err)
+    elif hasattr(raw_model, "_normalize_channel_mechanism_score"):
+        mechanism_err = raw_model._normalize_channel_mechanism_score(mechanism_err)
 
     event_channel_err = []
+    event_mechanism_err = []
     event_scores = []
     for i, win_start in enumerate(window_starts):
         local_start = max(0, event_start - win_start)
@@ -353,6 +373,7 @@ def forward_event(
         if local_end <= local_start:
             continue
         event_channel_err.append(channel_err[i, local_start:local_end].mean(dim=0).detach().cpu().numpy())
+        event_mechanism_err.append(mechanism_err[i, local_start:local_end].mean(dim=0).detach().cpu().numpy())
         local_scores = scores[i, local_start:local_end]
         event_scores.append(float(local_scores.mean().detach().cpu().item()))
 
@@ -366,7 +387,9 @@ def forward_event(
     return {
         "score": float(np.mean(event_scores)),
         "recon_error": float(np.mean([row.mean() for row in event_channel_err])),
+        "mechanism_error": float(np.mean([row.mean() for row in event_mechanism_err])),
         "channel_error": np.mean(np.stack(event_channel_err, axis=0), axis=0),
+        "mechanism_channel_error": np.mean(np.stack(event_mechanism_err, axis=0), axis=0),
         "adjacency": adj_mean,
     }
 
@@ -432,15 +455,17 @@ def mean_masked_result(
     event_start: int,
     event_end: int,
     window_starts: list[int],
-) -> tuple[float, float]:
+) -> tuple[float, float, float]:
     scores = []
     errors = []
+    mechanism_errors = []
     for channel_idx in channel_sets:
         masked = mask_windows(windows, channel_idx, baseline, mode)
         result = forward_event(model, masked, event_start, event_end, window_starts)
         scores.append(result["score"])
         errors.append(result["recon_error"])
-    return float(np.mean(scores)), float(np.mean(errors))
+        mechanism_errors.append(result["mechanism_error"])
+    return float(np.mean(scores)), float(np.mean(errors)), float(np.mean(mechanism_errors))
 
 
 def evaluate_events(args: argparse.Namespace) -> pd.DataFrame:
@@ -497,8 +522,15 @@ def evaluate_events(args: argparse.Namespace) -> pd.DataFrame:
 
         base = forward_event(model, windows, start, end, starts)
         channel_error = base["channel_error"]
+        mechanism_channel_error = base["mechanism_channel_error"]
+        if args.ranking_source == "mechanism":
+            rank_error = mechanism_channel_error
+        elif args.ranking_source == "combined":
+            rank_error = channel_error + mechanism_channel_error
+        else:
+            rank_error = channel_error
         n_channels = len(channel_error)
-        top_channels = [int(i) for i in np.argsort(-channel_error)[: args.top_k]]
+        top_channels = [int(i) for i in np.argsort(-rank_error)[: args.top_k]]
         if args.neighbor_source == "group":
             neighbors, neighbor_support = group_neighbors(feature_names, top_channels, args.neighbor_k)
         elif args.neighbor_source == "correlation":
@@ -517,21 +549,22 @@ def evaluate_events(args: argparse.Namespace) -> pd.DataFrame:
             for _ in range(max(1, args.random_trials))
         ]
 
-        top_score, top_err = mean_masked_result(
+        top_score, top_err, top_mech = mean_masked_result(
             model, windows, [top_channels], train_baseline, args.mask_mode, start, end, starts
         )
-        neighbor_score, neighbor_err = mean_masked_result(
+        neighbor_score, neighbor_err, neighbor_mech = mean_masked_result(
             model, windows, [neighbors], train_baseline, args.mask_mode, start, end, starts
         )
-        random_score, random_err = mean_masked_result(
+        random_score, random_err, random_mech = mean_masked_result(
             model, windows, random_sets, train_baseline, args.mask_mode, start, end, starts
         )
-        non_score, non_err = mean_masked_result(
+        non_score, non_err, non_mech = mean_masked_result(
             model, windows, non_neighbor_sets, train_baseline, args.mask_mode, start, end, starts
         )
 
         base_score = base["score"]
         base_err = base["recon_error"]
+        base_mech = base["mechanism_error"]
         top_delta_score = abs(top_score - base_score)
         neighbor_delta_score = abs(neighbor_score - base_score)
         random_delta_score = abs(random_score - base_score)
@@ -540,6 +573,10 @@ def evaluate_events(args: argparse.Namespace) -> pd.DataFrame:
         neighbor_delta_err = abs(neighbor_err - base_err)
         random_delta_err = abs(random_err - base_err)
         non_delta_err = abs(non_err - base_err)
+        top_delta_mech = abs(top_mech - base_mech)
+        neighbor_delta_mech = abs(neighbor_mech - base_mech)
+        random_delta_mech = abs(random_mech - base_mech)
+        non_delta_mech = abs(non_mech - base_mech)
 
         rows.append(
             EventResult(
@@ -550,6 +587,8 @@ def evaluate_events(args: argparse.Namespace) -> pd.DataFrame:
                 root_groups=",".join(event.get("root_groups", [])),
                 baseline_score=base_score,
                 baseline_recon_error=base_err,
+                baseline_mechanism_error=base_mech,
+                ranking_source=args.ranking_source,
                 top_channels=channel_names(feature_names, top_channels),
                 neighbor_source=args.neighbor_source,
                 graph_neighbors=channel_names(feature_names, neighbors),
@@ -563,11 +602,17 @@ def evaluate_events(args: argparse.Namespace) -> pd.DataFrame:
                 neighbor_delta_recon_error=neighbor_delta_err,
                 random_delta_recon_error=random_delta_err,
                 non_neighbor_delta_recon_error=non_delta_err,
+                top_delta_mechanism_error=top_delta_mech,
+                neighbor_delta_mechanism_error=neighbor_delta_mech,
+                random_delta_mechanism_error=random_delta_mech,
+                non_neighbor_delta_mechanism_error=non_delta_mech,
                 graph_neighbor_support=neighbor_support,
                 top_vs_random_score_margin=top_delta_score - random_delta_score,
                 neighbor_vs_random_score_margin=neighbor_delta_score - random_delta_score,
                 top_vs_random_recon_margin=top_delta_err - random_delta_err,
                 neighbor_vs_random_recon_margin=neighbor_delta_err - random_delta_err,
+                top_vs_random_mechanism_margin=top_delta_mech - random_delta_mech,
+                neighbor_vs_random_mechanism_margin=neighbor_delta_mech - random_delta_mech,
             )
         )
         print(
@@ -589,10 +634,16 @@ def evaluate_events(args: argparse.Namespace) -> pd.DataFrame:
         "neighbor_delta_recon_error",
         "random_delta_recon_error",
         "non_neighbor_delta_recon_error",
+        "top_delta_mechanism_error",
+        "neighbor_delta_mechanism_error",
+        "random_delta_mechanism_error",
+        "non_neighbor_delta_mechanism_error",
         "top_vs_random_score_margin",
         "neighbor_vs_random_score_margin",
         "top_vs_random_recon_margin",
         "neighbor_vs_random_recon_margin",
+        "top_vs_random_mechanism_margin",
+        "neighbor_vs_random_mechanism_margin",
     ]
     summary = df[summary_cols].mean().to_frame("mean").T
     summary.insert(0, "series_name", "MEAN")
