@@ -100,6 +100,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top-k", type=int, default=3)
     parser.add_argument("--neighbor-k", type=int, default=3)
     parser.add_argument(
+        "--channel-prior-align",
+        type=float,
+        default=None,
+        help="Override normal-structure alignment loss weight for channel-prior profiles",
+    )
+    parser.add_argument(
+        "--channel-prior-weight",
+        type=float,
+        default=None,
+        help="Override hard normal-prior mixing weight for channel-prior profiles",
+    )
+    parser.add_argument(
+        "--channel-prior-topk",
+        type=int,
+        default=None,
+        help="Override top-k edges retained in the normal channel correlation prior",
+    )
+    parser.add_argument(
         "--neighbor-source",
         choices=["learned", "correlation", "group"],
         default="learned",
@@ -214,6 +232,17 @@ def arch_switches(profile: str) -> dict:
 
 
 def build_model(args: argparse.Namespace, n_features: int) -> LaGraph:
+    switches = arch_switches(args.arch_profile)
+    if args.channel_prior_align is not None:
+        switches["lambda_channel_prior_align"] = max(0.0, args.channel_prior_align)
+        if args.channel_prior_align > 0:
+            switches["use_channel_corr_prior"] = True
+    if args.channel_prior_weight is not None:
+        switches["channel_corr_prior_weight"] = min(max(float(args.channel_prior_weight), 0.0), 1.0)
+        switches["use_channel_corr_prior"] = True
+    if args.channel_prior_topk is not None:
+        switches["channel_corr_prior_topk"] = max(1, args.channel_prior_topk)
+        switches["use_channel_corr_prior"] = True
     kwargs = {
         "num_epochs": args.epochs,
         "n_gpus": 1,
@@ -224,7 +253,7 @@ def build_model(args: argparse.Namespace, n_features: int) -> LaGraph:
         "dataset_name": Path(args.dataset).stem,
         "input_c": n_features,
         "output_c": n_features,
-        **arch_switches(args.arch_profile),
+        **switches,
     }
     return LaGraph(**kwargs)
 

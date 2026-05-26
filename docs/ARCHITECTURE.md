@@ -669,6 +669,14 @@ D:\Anaconda3\envs\lagraph5070\python.exe scripts/evaluate_graph_faithfulness.py 
 D:\Anaconda3\envs\lagraph5070\python.exe scripts/evaluate_graph_faithfulness.py --dataset HAI_21_03_test2.csv --arch-profile structure-consistent --epochs 5 --event-limit 5 --window-samples 16 --random-trials 10 --num-workers 2 --prefetch-factor 2 --save-csv D:\la_v12\result\analysis\graph_faithfulness_HAI_test2_structure_consistent.csv
 ```
 
+Structure-consistency strength sweep:
+
+```powershell
+$env:PYTHONIOENCODING='utf-8'
+D:\Anaconda3\envs\lagraph5070\python.exe scripts/evaluate_graph_faithfulness.py --dataset HAI_21_03_test1.csv --arch-profile structure-consistent --channel-prior-align 0.01 --epochs 5 --event-limit 5 --window-samples 16 --random-trials 10 --num-workers 2 --prefetch-factor 2 --save-csv D:\la_v12\result\analysis\graph_faithfulness_HAI_test1_structure_consistent_lam01.csv
+D:\Anaconda3\envs\lagraph5070\python.exe scripts/evaluate_graph_faithfulness.py --dataset HAI_21_03_test1.csv --arch-profile structure-consistent --channel-prior-align 0.05 --epochs 5 --event-limit 5 --window-samples 16 --random-trials 10 --num-workers 2 --prefetch-factor 2 --save-csv D:\la_v12\result\analysis\graph_faithfulness_HAI_test1_structure_consistent_lam05.csv
+```
+
 Adaptive temporal candidate:
 
 ```powershell

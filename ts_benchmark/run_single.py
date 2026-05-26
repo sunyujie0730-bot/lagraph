@@ -295,6 +295,24 @@ def main():
         help="Override the temporal graph learning-rate scale",
     )
     parser.add_argument(
+        "--channel-prior-align",
+        type=float,
+        default=None,
+        help="Override normal-structure alignment loss weight for channel-prior profiles",
+    )
+    parser.add_argument(
+        "--channel-prior-weight",
+        type=float,
+        default=None,
+        help="Override hard normal-prior mixing weight for channel-prior profiles",
+    )
+    parser.add_argument(
+        "--channel-prior-topk",
+        type=int,
+        default=None,
+        help="Override top-k edges retained in the normal channel correlation prior",
+    )
+    parser.add_argument(
         "--state-aware-num-states",
         type=int,
         default=None,
@@ -1119,6 +1137,18 @@ def main():
         score_hyper_params["dynamic_temporal_topk"] = max(1, args.dynamic_temporal_topk)
     if args.temporal_graph_lr_scale is not None:
         score_hyper_params["temporal_graph_lr_scale"] = max(0.0, args.temporal_graph_lr_scale)
+    if args.channel_prior_align is not None:
+        score_hyper_params["lambda_channel_prior_align"] = max(0.0, args.channel_prior_align)
+        if args.channel_prior_align > 0:
+            score_hyper_params["use_channel_corr_prior"] = True
+    if args.channel_prior_weight is not None:
+        score_hyper_params["channel_corr_prior_weight"] = min(
+            max(float(args.channel_prior_weight), 0.0), 1.0
+        )
+        score_hyper_params["use_channel_corr_prior"] = True
+    if args.channel_prior_topk is not None:
+        score_hyper_params["channel_corr_prior_topk"] = max(1, args.channel_prior_topk)
+        score_hyper_params["use_channel_corr_prior"] = True
     if args.state_aware_num_states is not None:
         score_hyper_params["state_aware_num_states"] = max(2, args.state_aware_num_states)
     if args.state_aware_graph_gate_init is not None:
