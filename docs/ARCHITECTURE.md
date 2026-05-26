@@ -249,6 +249,7 @@ behavior.
 | HAI test1, reconstruction ranking | 14.7191 | -0.0208 | 4.1201 | 0.5812 | residual-ranked channels are also faithful |
 | HAI test1-test3 mean, mechanism ranking | 35.7070 | -0.2019 | 10.7920 | 0.8769 | top mechanism evidence is stable; learned graph neighbors are not |
 | HAI test2, mechanism ranking + correlation neighbors | 56.5092 | 2.9019 | 17.3657 | 1.0194 | normal-correlation neighbors are more faithful than learned neighbors on this case |
+| HAI test2, `mechanism-prior-graph` + learned neighbors | 56.4720 | 2.9277 | 17.3187 | 1.0160 | weak normal-prior bias makes learned neighbors behaviorally faithful in this smoke check |
 
 Interpretation:
 
@@ -261,7 +262,11 @@ Interpretation:
 - normal-correlation neighbors can be more faithful than learned graph
   neighbors, so the next architecture problem is edge faithfulness: learned
   graph edges should be constrained or trained to preserve the functional
-  neighbor evidence already visible in the normal dependency prior.
+  neighbor evidence already visible in the normal dependency prior;
+- `mechanism-prior-graph` is the first candidate that improves learned-neighbor
+  faithfulness without replacing the learned graph by a post-hoc correlation
+  graph. It uses normal correlation only as weak logit bias plus weak alignment
+  loss, while retaining the adaptive mechanism graph.
 
 ## Module Details
 
@@ -421,6 +426,7 @@ Important details:
 | `prior-guided-graph` | normal-correlation-guided | fixed | on | direct reconstruction | graph-faithfulness candidate |
 | `structure-consistent` | adaptive + weak normal-prior loss | fixed | on | direct reconstruction | conservative graph-alignment candidate |
 | `mechanism-graph` | adaptive graph as neighbor mechanism | fixed | on | reconstruction + mechanism violation | current paper-level candidate |
+| `mechanism-prior-graph` | adaptive mechanism graph with weak normal-prior bias | fixed | on | reconstruction + mechanism violation | edge-faithfulness candidate |
 | `state-aware` | on | fixed + state-aware correction | on | direct reconstruction | newest industrial multi-condition candidate |
 | `state-aware-dynamic` | on | dynamic + state-aware correction | on | direct reconstruction | dynamic state-aware candidate |
 | `state-aware-causal` | on | fixed + state-aware correction | on | reconstruction + counterfactual lagged score | RCA-oriented candidate |
@@ -761,6 +767,13 @@ Mechanism-graph candidate:
 ```powershell
 $env:PYTHONIOENCODING='utf-8'
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 5 --datasets HAI_21_03_test1.csv HAI_21_03_test2.csv --arch-profile mechanism-graph --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_mechanism_graph_hai_5ep
+```
+
+Mechanism-prior edge-faithfulness candidate:
+
+```powershell
+$env:PYTHONIOENCODING='utf-8'
+D:\Anaconda3\envs\lagraph5070\python.exe scripts/evaluate_graph_faithfulness.py --dataset HAI_21_03_test2.csv --arch-profile mechanism-prior-graph --epochs 3 --train-limit 30000 --event-limit 3 --window-samples 8 --random-trials 5 --ranking-source mechanism --neighbor-source learned --num-workers 2 --prefetch-factor 2 --save-csv D:\la_v12\result\analysis\faithfulness_mechanism_prior_HAI_test2_mechrank_learned_3ep.csv
 ```
 
 Mechanism-aware RCA export:
