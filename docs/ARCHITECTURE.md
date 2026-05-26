@@ -1,6 +1,6 @@
 # LaGraph Architecture
 
-Date: 2026-05-25
+Date: 2026-05-26
 Branch: `codex/5070-env-migration`
 Runtime target: RTX 5070 single GPU
 
@@ -112,7 +112,11 @@ change under stronger alignment weights. The current paper-level candidate is
 non-self graph neighbors, and anomaly scoring includes the resulting mechanism
 violation. This creates a stronger story than graph regularization alone:
 industrial anomalies are treated as violations of normal inter-variable
-mechanisms, not merely as large point-wise reconstruction errors.
+mechanisms, not merely as large point-wise reconstruction errors. The
+2026-05-26 HAI RCA ablation shows that this mechanism branch is useful as an
+interpretable explanation component, but it does not yet outperform base
+residual attribution as a standalone ranking signal. Therefore the paper claim
+should be mechanism-aware diagnosis, not mechanism-only SOTA RCA.
 
 Additional 2026-05-24 architecture candidates were tested but not promoted:
 `parallel-dual`, `parallel-dual-time`, `residual-dual`,
@@ -190,6 +194,46 @@ RCA, so each ranked variable contains `base_score`, `graph_score`, and
 `mechanism_score`. This makes the graph scientifically testable: if the graph
 is meaningful, masking graph-supported mechanism channels should affect the
 anomaly score more than random masking.
+
+## RCA Ablation Evidence
+
+The 2026-05-26 group-level HAI study evaluates five files
+(`HAI_21_03_test1` to `HAI_21_03_test5`) using exported mechanism-graph RCA
+reports. The evaluation separates true-event RCA from predicted-event RCA and
+compares four attribution variants:
+
+| Variant | Definition | Reviewer interpretation |
+| --- | --- | --- |
+| `exported` | ranking stored by the model export | deployed RCA output |
+| `base_only` | channel reconstruction residual only | strongest residual-attribution baseline |
+| `mechanism_only` | graph-neighbor mechanism violation only | tests whether the graph mechanism has independent signal |
+| `base_plus_mechanism` | residual plus mechanism violation | mechanism-aware RCA |
+| `random` | shuffled candidate ranking | sanity baseline |
+
+Cross-file means:
+
+| Event source | Variant | Matched | MRR | Hit@1 | Hit@3 | NDCG@3 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| True event | `exported` | - | 0.9817 | 0.9633 | 1.0000 | 0.9296 |
+| True event | `base_only` | - | 0.9817 | 0.9633 | 1.0000 | 0.9225 |
+| True event | `mechanism_only` | - | 0.9197 | 0.8667 | 0.9700 | 0.8488 |
+| True event | `random` | - | 0.5915 | 0.3371 | 0.8398 | 0.5757 |
+| Predicted event, key `1.0` | `exported` | 0.9400 | 0.8942 | 0.8533 | 0.9300 | 0.8435 |
+| Predicted event, key `1.0` | `base_only` | 0.9400 | 0.8942 | 0.8533 | 0.9300 | 0.8435 |
+| Predicted event, key `1.0` | `mechanism_only` | 0.9400 | 0.8414 | 0.7683 | 0.9300 | 0.7911 |
+| Predicted event, key `1.0` | `random` | 0.9400 | 0.5615 | 0.3232 | 0.7960 | 0.5459 |
+
+Interpretation:
+
+- predicted-event RCA is substantially above random when the `1.0` prediction
+  key is used, so the diagnosis pipeline is not purely oracle-event dependent;
+- `mechanism_only` is also above random, which supports the existence of
+  mechanism-level signal;
+- `base_only` still dominates the group-level ranking, so the current mechanism
+  branch should be framed as an interpretable explanation layer rather than as
+  the main source of RCA accuracy;
+- HAI group labels are coarse, which makes Hit@3 easy. MRR, Hit@1, NDCG@3, and
+  predicted-event matched rate are the more meaningful metrics.
 
 ## Module Details
 
@@ -644,9 +688,10 @@ the current dependency graph is already a causal graph
 ## Practical Next Step
 
 Do not spend more experiments on generic dual-graph fusion, disconnected RCA
-branches, or weak graph-alignment losses. The immediate architecture question is
-stronger and more defensible: can the channel graph act as a normal operational
-mechanism whose violation improves anomaly detection and root-cause evidence?
+branches, or weak graph-alignment losses. The immediate architecture question
+has been partially answered: the channel graph can provide a measurable
+mechanism-violation explanation, but current HAI group-level labels do not show
+that this mechanism term improves RCA beyond reconstruction residuals.
 
 ```text
 Gt = adaptive channel graph learned from each input window
@@ -657,9 +702,16 @@ RCA = local residual evidence + mechanism violation + graph support
 ```
 
 This avoids claiming full causality before identifiability evidence exists, but
-it gives the graph an operational meaning that a reviewer can test. The main
-claim becomes mechanism-aware anomaly detection and diagnosis, not another
-attention-like graph module.
+it gives the graph an operational meaning that a reviewer can test. The next
+research step should therefore be one of:
+
+- improve the mechanism branch so it changes rankings where base residuals fail;
+- evaluate on finer RCA datasets where variable-level causes are available;
+- keep detection unchanged and strengthen faithfulness evidence with masking or
+  counterfactual intervention tests.
+
+The main claim remains mechanism-aware anomaly detection and diagnosis, not
+another attention-like graph module.
 
 ## Commands
 
@@ -694,6 +746,12 @@ Mechanism-aware RCA evaluation:
 
 ```powershell
 D:\Anaconda3\envs\lagraph5070\python.exe scripts/evaluate_rca.py --rca D:\la_v12\result\rca\HAI_21_03_test1\<timestamp>_rca.json --scope group --save-csv D:\la_v12\result\rca\mechanism_rca_eval.csv
+```
+
+RCA component ablation over five HAI files:
+
+```powershell
+D:\Anaconda3\envs\lagraph5070\python.exe scripts/run_rca_ablation.py --rca D:\la_v12\result\rca\HAI_21_03_test1\<timestamp>_rca.json D:\la_v12\result\rca\HAI_21_03_test2\<timestamp>_rca.json D:\la_v12\result\rca\HAI_21_03_test3\<timestamp>_rca.json D:\la_v12\result\rca\HAI_21_03_test4\<timestamp>_rca.json D:\la_v12\result\rca\HAI_21_03_test5\<timestamp>_rca.json --scope group --event-source both --prediction-key pot 0.5 1.0 --random-trials 1000 --out-dir D:\la_v12\result\rca\ablation_mechanism_hai5
 ```
 
 Implementation note: RCA export aligns all-detect labels to the dataset
