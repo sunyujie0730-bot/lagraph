@@ -124,12 +124,15 @@ architecture until the gains are confirmed across more datasets and seeds.
 
 ```mermaid
 flowchart TD
-    accTitle: LaGraph Main Architecture
-    accDescr: Current LaGraph full profile from input windows to anomaly scores.
+    accTitle: Structure-Consistent LaGraph Architecture
+    accDescr: Current reviewer-facing LaGraph candidate with a normal-state dependency prior, adaptive channel graph, reconstruction anomaly scoring, and graph-faithful RCA from the same learned structure.
 
+    normal["Normal training prefix<br/>X_train"]
+    prior["Normal dependency prior G0<br/>top-k correlation graph"]
     input["Input window<br/>(B, L, C)"]
     decomp["MoE decomposition<br/>residual + trend"]
-    channel["ChannelAdaptiveGraph<br/>C x C dependency graph"]
+    channel["ChannelAdaptiveGraph<br/>adaptive graph Gt"]
+    align["Weak structure consistency<br/>D(Gt, G0)"]
     temporal["SimplifiedTemporalGraph<br/>stable L x L temporal graph"]
     vq["Dual-path VQ<br/>training-side regularization"]
     proj["Projection + residual shortcut"]
@@ -138,9 +141,14 @@ flowchart TD
     score["Direct reconstruction score<br/>top-k channel L1 error"]
     threshold["Percentile/POT thresholding"]
     output["Predicted anomaly labels"]
+    rca["Graph-faithful RCA<br/>local error + local contrast + graph support"]
+    faith["Faithfulness evidence<br/>Top-K masking > random masking"]
 
+    normal --> prior
     input --> decomp
     decomp --> channel
+    prior -.-> align
+    channel -.-> align
     channel --> temporal
     temporal --> vq
     vq --> proj
@@ -149,12 +157,25 @@ flowchart TD
     recon --> score
     score --> threshold
     threshold --> output
+    channel --> rca
+    recon --> rca
+    rca --> faith
 
     classDef core fill:#e8f1ff,stroke:#2563eb,stroke-width:1px,color:#111827
     classDef score_cls fill:#eef8ee,stroke:#16a34a,stroke-width:1px,color:#111827
+    classDef prior_cls fill:#fff7ed,stroke:#ea580c,stroke-width:1px,color:#111827
+    classDef eval_cls fill:#f5f3ff,stroke:#7c3aed,stroke-width:1px,color:#111827
     class input,decomp,channel,temporal,vq,proj,encoder,recon core
     class score,threshold,output score_cls
+    class normal,prior,align prior_cls
+    class rca,faith eval_cls
 ```
+
+The key design decision is that `G0` does not replace the adaptive graph. In
+`structure-consistent`, `channel_corr_prior_weight=0.0`, so the forward graph is
+still `Gt`. The normal graph only contributes a weak alignment loss
+`lambda_channel_prior_align=0.001`. This preserves the detection path while
+making the learned graph testable as an explanatory structure.
 
 ## Module Details
 
@@ -607,24 +628,23 @@ the current dependency graph is already a causal graph
 
 ## Practical Next Step
 
-Do not spend more experiments on generic dual-graph fusion. The higher-priority
-architecture direction remains a lagged causal/structural graph on top of the
-stable `full` profile, but the first prototype should be treated as negative
-evidence rather than a final causal module:
+Do not spend more experiments on generic dual-graph fusion or disconnected RCA
+branches. The immediate architecture question is narrower and more defensible:
+can a weak normal-structure consistency constraint improve graph faithfulness
+without damaging the stable `full` detection path?
 
 ```text
-parents_i(t) = sparse set of X_j(t-k), k > 0
-mechanism_i = f_i(parents_i(t))
-score = reconstruction_error + mechanism_violation
+G0 = top-k normal dependency graph from the normal training prefix
+Gt = adaptive channel graph learned from each input window
+loss = reconstruction_loss + sparse_loss + lambda * D(Gt, G0)
+RCA = local residual evidence + local contrast + graph support from Gt
 ```
 
-This gives the paper a concrete causal claim through temporal precedence and
-mechanism violation. The next version should not merely add the lagged residual
-as a score. It should learn sparse parent mechanisms with stronger
-counterfactual tests, for example masking candidate parents and measuring the
-change in reconstruction or mechanism residual. A fixed/dynamic temporal
-mixture can still be tested later, but it has lower priority than making the
-channel graph causally meaningful.
+This avoids claiming that the graph is a causal graph before we have causal
+identifiability evidence. The paper-level claim is structural and testable:
+normal dependency structure regularizes the learned graph, and the resulting
+graph should pass masking-based faithfulness tests. Lagged causal mechanisms
+remain a later extension after this structure-consistency claim is validated.
 
 ## Commands
 
@@ -632,6 +652,21 @@ Main method:
 
 ```powershell
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets MSL.csv swat.csv --arch-profile full --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_main_15ep
+```
+
+Structure-consistent candidate:
+
+```powershell
+$env:PYTHONIOENCODING='utf-8'
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 5 --datasets HAI_21_03_test1.csv HAI_21_03_test2.csv --arch-profile structure-consistent --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_structure_consistent_hai_5ep
+```
+
+Graph faithfulness check:
+
+```powershell
+$env:PYTHONIOENCODING='utf-8'
+D:\Anaconda3\envs\lagraph5070\python.exe scripts/evaluate_graph_faithfulness.py --dataset HAI_21_03_test1.csv --arch-profile structure-consistent --epochs 5 --event-limit 5 --window-samples 16 --random-trials 10 --num-workers 2 --prefetch-factor 2 --save-csv D:\la_v12\result\analysis\graph_faithfulness_HAI_test1_structure_consistent.csv
+D:\Anaconda3\envs\lagraph5070\python.exe scripts/evaluate_graph_faithfulness.py --dataset HAI_21_03_test2.csv --arch-profile structure-consistent --epochs 5 --event-limit 5 --window-samples 16 --random-trials 10 --num-workers 2 --prefetch-factor 2 --save-csv D:\la_v12\result\analysis\graph_faithfulness_HAI_test2_structure_consistent.csv
 ```
 
 Adaptive temporal candidate:
