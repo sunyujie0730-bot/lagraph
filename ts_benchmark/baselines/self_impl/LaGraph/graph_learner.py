@@ -202,12 +202,13 @@ class ChannelAdaptiveGraph(nn.Module):
         A_sym_logit = (A_logit + A_logit.transpose(-2, -1)) / 2.0
         A_sym = F.softmax(A_sym_logit, dim=-1)
         A_sym = torch.nan_to_num(A_sym, nan=0.0, posinf=0.0, neginf=0.0)
-        if self.use_static_prior and self.static_prior_weight > 0.0:
+        if self.use_static_prior:
             prior = self.static_prior.to(device=A_sym.device, dtype=A_sym.dtype)
             prior = prior.unsqueeze(0).expand(B, -1, -1)
-            prior_weight = min(max(self.static_prior_weight, 0.0), 1.0)
             self._prior_align_loss = F.mse_loss(A_sym, prior)
-            A_sym = (1.0 - prior_weight) * A_sym + prior_weight * prior
+            prior_weight = min(max(self.static_prior_weight, 0.0), 1.0)
+            if prior_weight > 0.0:
+                A_sym = (1.0 - prior_weight) * A_sym + prior_weight * prior
         else:
             self._prior_align_loss = A_sym.new_tensor(0.0)
 

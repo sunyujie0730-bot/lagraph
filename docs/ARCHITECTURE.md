@@ -99,11 +99,16 @@ fusion should correct the serial representation. This profile is intended to
 support the industrial multi-condition generalization narrative. It has passed
 smoke tests but does not yet have full 15-epoch benchmark results.
 
-The newest reviewer-driven candidate is `prior-guided-graph`. It keeps the
-`full` backbone but constrains the learned channel graph with a normal-state
-correlation prior computed from the training prefix. This is not a metric trick:
-it directly answers the reviewer question of whether the channel graph is a
-faithful explanatory structure or an unconstrained attention-like module.
+The reviewer-driven graph candidates now separate two hypotheses.
+`prior-guided-graph` hard-mixes a normal-state correlation prior into the
+learned channel graph. It improves graph-neighbor faithfulness, but early HAI
+tests show that the hard prior can damage detection on distribution-shifted
+events. It is therefore a stress-test candidate rather than the main method.
+`structure-consistent` keeps the `full` forward backbone unchanged and uses the
+normal-state graph only as a weak alignment loss. This is the preferred
+paper-level hypothesis because it asks a narrower and more defensible question:
+can a normal-structure consistency constraint make the learned graph more
+faithful without replacing the adaptive graph used for detection?
 
 Additional 2026-05-24 architecture candidates were tested but not promoted:
 `parallel-dual`, `parallel-dual-time`, `residual-dual`,
@@ -307,6 +312,7 @@ Important details:
 | `dynamic-temporal` | on | dynamic | on | direct reconstruction | ungated dynamic temporal ablation |
 | `dynamic-temporal-gated` | on | dynamic + residual gate | on | direct reconstruction | strongest adaptive-temporal candidate |
 | `prior-guided-graph` | normal-correlation-guided | fixed | on | direct reconstruction | graph-faithfulness candidate |
+| `structure-consistent` | adaptive + weak normal-prior loss | fixed | on | direct reconstruction | preferred graph-faithfulness candidate |
 | `state-aware` | on | fixed + state-aware correction | on | direct reconstruction | newest industrial multi-condition candidate |
 | `state-aware-dynamic` | on | dynamic + state-aware correction | on | direct reconstruction | dynamic state-aware candidate |
 | `state-aware-causal` | on | fixed + state-aware correction | on | reconstruction + counterfactual lagged score | RCA-oriented candidate |
@@ -427,9 +433,14 @@ Initial detection check on HAI_21_03_test1, 5 epochs:
 | `prior-guided-graph` | 1.0% | 0.1841 | 0.2166 | 0.8846 |
 
 Interpretation: the original channel graph should not be claimed as a faithful
-explanation graph. The stronger architecture direction is to make the graph
-normal-dependency-prior guided, then validate it with masking faithfulness,
-RCA, and detection trade-off evidence.
+explanation graph. The normal-dependency prior contains useful explanatory
+signal, but hard-mixing it into the forward graph is risky: on
+HAI_21_03_test2, `prior-guided-graph` improved learned-neighbor masking margins
+but sharply reduced detection F1. The promoted direction is therefore not a
+hard prior graph, but `structure-consistent`: the adaptive graph remains the
+forward graph, while the normal graph acts only as a weak training constraint.
+This keeps the detection and RCA story unified without turning RCA into a
+separate post-hoc subsystem.
 
 ## Score Aggregation and Synthetic Auxiliary Check
 

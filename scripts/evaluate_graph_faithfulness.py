@@ -112,7 +112,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mask-mode", choices=["baseline", "zero"], default="baseline")
     parser.add_argument(
         "--arch-profile",
-        choices=["full", "prior-guided-graph", "channel-only", "temporal-only", "reconstruction"],
+        choices=[
+            "full",
+            "prior-guided-graph",
+            "structure-consistent",
+            "channel-only",
+            "temporal-only",
+            "reconstruction",
+        ],
         default="full",
     )
     parser.add_argument("--save-csv", type=Path, default=PROJECT_ROOT / "result" / "analysis" / "graph_faithfulness.csv")
@@ -172,6 +179,17 @@ def arch_switches(profile: str) -> dict:
             "channel_corr_prior_weight": 0.30,
             "channel_corr_prior_topk": 5,
             "lambda_channel_prior_align": 0.01,
+        }
+    if profile == "structure-consistent":
+        return {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "use_channel_corr_prior": True,
+            "channel_corr_prior_weight": 0.0,
+            "channel_corr_prior_topk": 5,
+            "lambda_channel_prior_align": 0.001,
         }
     if profile == "channel-only":
         return {
