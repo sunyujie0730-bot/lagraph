@@ -188,7 +188,7 @@ For strict RCA evaluation on TE, the next step is to build a fault-ID to affecte
 
 1. RCA is currently validated at subsystem level, not exact sensor/actuator level.
 2. Graph-propagated attribution is implemented, but its current subsystem-level gain is weak.
-3. The current RCA evaluation uses true anomaly intervals; predicted-event RCA and delay analysis still need to be added.
+3. Predicted-event RCA is implemented, but its threshold sensitivity must be reported to avoid cherry-picking.
 4. TE variable-level RCA requires a reliable fault-to-variable mapping.
 
 ## Next Steps
