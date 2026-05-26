@@ -250,6 +250,7 @@ behavior.
 | HAI test1-test3 mean, mechanism ranking | 35.7070 | -0.2019 | 10.7920 | 0.8769 | top mechanism evidence is stable; learned graph neighbors are not |
 | HAI test2, mechanism ranking + correlation neighbors | 56.5092 | 2.9019 | 17.3657 | 1.0194 | normal-correlation neighbors are more faithful than learned neighbors on this case |
 | HAI test2, `mechanism-prior-graph` + learned neighbors | 56.4720 | 2.9277 | 17.3187 | 1.0160 | weak normal-prior bias makes learned neighbors behaviorally faithful in this smoke check |
+| HAI test1-test3 mean, `mechanism-prior-graph` + learned neighbors | 35.8154 | 1.1039 | 10.8018 | 0.8750 | prior-biased learned neighbors are consistently positive in the smoke check |
 
 Interpretation:
 
@@ -266,7 +267,12 @@ Interpretation:
 - `mechanism-prior-graph` is the first candidate that improves learned-neighbor
   faithfulness without replacing the learned graph by a post-hoc correlation
   graph. It uses normal correlation only as weak logit bias plus weak alignment
-  loss, while retaining the adaptive mechanism graph.
+  loss, while retaining the adaptive mechanism graph;
+- on HAI test1/test2 5-epoch detection and RCA, `mechanism-prior-graph` is
+  essentially tied with `mechanism-graph`. The average detection metrics at
+  ratios 0.5/1.0/2.0 change by less than 0.001 in raw F1, adjusted F1, and
+  affiliation F1, and predicted-event RCA at key `1.0` remains unchanged at the
+  group level. Its value is therefore edge faithfulness, not detection gain.
 
 ## Module Details
 
