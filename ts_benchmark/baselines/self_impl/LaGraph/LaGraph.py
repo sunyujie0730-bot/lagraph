@@ -149,6 +149,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_graph_direction": "outgoing",
     "rca_contrast_window": 0,
     "rca_contrast_weight": 0.0,
+    "rca_prediction_key": "pot",
     # --- v11.4 P0-2: POT 阈值参数 ---
     "pot_risk": 1e-4,            # POT EVT 风险水平
     "pot_num_quantiles": 1000,   # POT 分位数数量
@@ -2590,27 +2591,62 @@ class LaGraph:
             return feature_name.split("_", 1)[0]
         return feature_name
 
-    def export_root_cause_report(self, series_name, test_data, test_label, predict_labels=None, scores=None):
-        if not bool(getattr(self.config, "export_rca", False)):
-            return None
-        if self._last_channel_scores is None or self._last_channel_names is None:
-            return None
+    @staticmethod
+    def _rca_prediction_key_name(key):
+        if key is None:
+            return "pot"
+        return str(key)
 
-        labels = test_label.to_numpy().reshape(-1).astype(int)
-        base_channel_scores = self._last_channel_scores[: len(labels)]
-        graph_channel_scores = self._last_graph_channel_scores
-        if graph_channel_scores is None:
-            graph_channel_scores = np.zeros_like(base_channel_scores)
+    def _select_rca_prediction_mask(self, predict_labels, length):
+        if predict_labels is None:
+            return None, None
+        if not isinstance(predict_labels, dict):
+            pred = np.asarray(predict_labels).reshape(-1).astype(int)
+            pred = pred[:length]
+            if len(pred) < length:
+                pred = np.pad(pred, (0, length - len(pred)), mode="constant")
+            return "single", pred
+
+        requested = str(getattr(self.config, "rca_prediction_key", "pot") or "pot")
+        selected_key = None
+        if requested.lower() == "pot" and None in predict_labels:
+            selected_key = None
         else:
-            graph_channel_scores = graph_channel_scores[: len(labels)]
-        graph_weight = float(getattr(self.config, "rca_graph_weight", 0.0) or 0.0)
-        contrast_window = int(getattr(self.config, "rca_contrast_window", 0) or 0)
-        contrast_weight = float(getattr(self.config, "rca_contrast_weight", 0.0) or 0.0)
-        channel_scores = base_channel_scores + graph_weight * graph_channel_scores
-        feature_names = list(self._last_channel_names)
-        events = []
+            for key in predict_labels.keys():
+                if self._rca_prediction_key_name(key) == requested:
+                    selected_key = key
+                    break
+        if selected_key is None and None in predict_labels:
+            selected_key = None
+        elif selected_key is None and predict_labels:
+            selected_key = next(iter(predict_labels.keys()))
 
-        for event_id, (start, end) in enumerate(self._label_segments(labels), start=1):
+        pred = np.asarray(predict_labels[selected_key]).reshape(-1).astype(int)
+        pred = pred[:length]
+        if len(pred) < length:
+            pred = np.pad(pred, (0, length - len(pred)), mode="constant")
+        return self._rca_prediction_key_name(selected_key), pred
+
+    @staticmethod
+    def _normalize_prediction_mask(prediction, length):
+        pred = np.asarray(prediction).reshape(-1).astype(int)
+        pred = pred[:length]
+        if len(pred) < length:
+            pred = np.pad(pred, (0, length - len(pred)), mode="constant")
+        return pred
+
+    def _build_rca_events(
+        self,
+        segments,
+        channel_scores,
+        base_channel_scores,
+        graph_channel_scores,
+        feature_names,
+        contrast_window,
+        contrast_weight,
+    ):
+        events = []
+        for event_id, (start, end) in enumerate(segments, start=1):
             if end <= start:
                 continue
             event_raw_scores = channel_scores[start:end].mean(axis=0)
@@ -2655,6 +2691,72 @@ class LaGraph:
                     "group_ranking": group_ranking,
                 }
             )
+        return events
+
+    def export_root_cause_report(self, series_name, test_data, test_label, predict_labels=None, scores=None):
+        if not bool(getattr(self.config, "export_rca", False)):
+            return None
+        if self._last_channel_scores is None or self._last_channel_names is None:
+            return None
+
+        labels = test_label.to_numpy().reshape(-1).astype(int)
+        base_channel_scores = self._last_channel_scores[: len(labels)]
+        graph_channel_scores = self._last_graph_channel_scores
+        if graph_channel_scores is None:
+            graph_channel_scores = np.zeros_like(base_channel_scores)
+        else:
+            graph_channel_scores = graph_channel_scores[: len(labels)]
+        graph_weight = float(getattr(self.config, "rca_graph_weight", 0.0) or 0.0)
+        contrast_window = int(getattr(self.config, "rca_contrast_window", 0) or 0)
+        contrast_weight = float(getattr(self.config, "rca_contrast_weight", 0.0) or 0.0)
+        channel_scores = base_channel_scores + graph_weight * graph_channel_scores
+        feature_names = list(self._last_channel_names)
+        events = self._build_rca_events(
+            self._label_segments(labels),
+            channel_scores,
+            base_channel_scores,
+            graph_channel_scores,
+            feature_names,
+            contrast_window,
+            contrast_weight,
+        )
+        pred_key, pred_mask = self._select_rca_prediction_mask(predict_labels, len(labels))
+        predicted_events_by_key = {}
+        if isinstance(predict_labels, dict):
+            for key, prediction in predict_labels.items():
+                key_name = self._rca_prediction_key_name(key)
+                mask = self._normalize_prediction_mask(prediction, len(labels))
+                predicted_events_by_key[key_name] = self._build_rca_events(
+                    self._label_segments(mask),
+                    channel_scores,
+                    base_channel_scores,
+                    graph_channel_scores,
+                    feature_names,
+                    contrast_window,
+                    contrast_weight,
+                )
+        elif predict_labels is not None:
+            mask = self._normalize_prediction_mask(predict_labels, len(labels))
+            predicted_events_by_key["single"] = self._build_rca_events(
+                self._label_segments(mask),
+                channel_scores,
+                base_channel_scores,
+                graph_channel_scores,
+                feature_names,
+                contrast_window,
+                contrast_weight,
+            )
+        predicted_events = predicted_events_by_key.get(pred_key, [])
+        if not predicted_events and pred_mask is not None:
+            predicted_events = self._build_rca_events(
+                self._label_segments(pred_mask),
+                channel_scores,
+                base_channel_scores,
+                graph_channel_scores,
+                feature_names,
+                contrast_window,
+                contrast_weight,
+            )
 
         from datetime import datetime
         from ts_benchmark.common.constant import ROOT_PATH
@@ -2667,13 +2769,16 @@ class LaGraph:
         payload = {
             "series_name": series_name,
             "dataset_name": self.dataset_name,
-            "score_method": "mean channel-wise normalized reconstruction error plus graph-propagated attribution over true anomaly event",
+            "score_method": "mean channel-wise normalized reconstruction error plus graph-propagated and local-contrast attribution",
             "rca_graph_weight": graph_weight,
             "rca_graph_direction": str(getattr(self.config, "rca_graph_direction", "outgoing") or "outgoing"),
             "rca_contrast_window": contrast_window,
             "rca_contrast_weight": contrast_weight,
+            "rca_prediction_key": pred_key,
             "feature_names": feature_names,
             "events": events,
+            "predicted_events": predicted_events,
+            "predicted_events_by_key": predicted_events_by_key,
         }
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, ensure_ascii=False)

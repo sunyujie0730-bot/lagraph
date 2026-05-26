@@ -21,6 +21,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rca", type=Path, required=True, help="Path to *_rca.json exported by LaGraph.")
     parser.add_argument("--meta", type=Path, default=None, help="Root-cause metadata JSON. Defaults by series_name.")
     parser.add_argument("--scope", choices=["group", "channel"], default="group")
+    parser.add_argument(
+        "--event-source",
+        choices=["true", "predicted"],
+        default="true",
+        help="Evaluate RCA on true anomaly intervals or model-predicted anomaly intervals.",
+    )
+    parser.add_argument(
+        "--prediction-key",
+        type=str,
+        default=None,
+        help="Prediction key to evaluate when --event-source=predicted, e.g. pot, 0.5, 1.0, 2.",
+    )
     parser.add_argument("--k", type=int, nargs="+", default=[1, 3, 5])
     parser.add_argument(
         "--score-mode",
@@ -66,6 +78,17 @@ def match_meta_event(pred_event: dict, meta_events: list[dict]) -> dict | None:
             best = event
             best_overlap = value
     return best
+
+
+def match_pred_event(meta_event: dict, pred_events: list[dict]) -> tuple[dict | None, int]:
+    best = None
+    best_overlap = 0
+    for event in pred_events:
+        value = overlap(event["start"], event["end"], meta_event["start"], meta_event["end"])
+        if value > best_overlap:
+            best = event
+            best_overlap = value
+    return best, best_overlap
 
 
 def root_cause_group_name(feature_name: str) -> str:
@@ -167,6 +190,43 @@ def mean_metric_row(rows: list[dict]) -> dict:
     return {key: sum(row[key] for row in rows) / len(rows) for key in keys}
 
 
+def ranking_for_event(pred_event: dict | None, args: argparse.Namespace) -> list[str]:
+    if not pred_event:
+        return []
+    if args.score_mode == "components":
+        return component_ranking_names(
+            pred_event,
+            args.scope,
+            args.component_graph_weight,
+            args.component_contrast_weight,
+        )
+    return ranking_names(pred_event, args.scope)
+
+
+def evaluate_ranking(
+    pred_event: dict | None,
+    roots: set[str],
+    exported_ranking: list[str],
+    args: argparse.Namespace,
+) -> tuple[dict, str]:
+    if not pred_event:
+        return metric_row([], roots, args.k), ""
+    if args.baseline == "random":
+        if args.random_candidates == "prediction":
+            candidates = exported_ranking
+        else:
+            candidates = meta_candidates(args._meta, args.scope)
+        trial_rows = []
+        for trial in range(args.random_trials):
+            seed = args.random_seed + int(pred_event.get("event_id", 0)) * args.random_trials + trial
+            ranking = baseline_ranking(candidates, roots, seed)
+            trial_rows.append(metric_row(ranking, roots, args.k))
+        return mean_metric_row(trial_rows), f"random_mean_{args.random_trials}"
+    metric_values = metric_row(exported_ranking, roots, args.k)
+    top1 = exported_ranking[0] if exported_ranking else ""
+    return metric_values, top1
+
+
 def main() -> None:
     args = parse_args()
     rca = load_json(args.rca)
@@ -175,58 +235,81 @@ def main() -> None:
         series_stem = Path(rca["series_name"]).stem
         meta_path = DEFAULT_META_DIR / f"{series_stem}.json"
     meta = load_json(meta_path)
+    args._meta = meta
 
     root_key = "root_groups" if args.scope == "group" else "root_variables"
     rows = []
-    for pred_event in rca.get("events", []):
-        meta_event = match_meta_event(pred_event, meta.get("events", []))
-        if not meta_event:
-            continue
-        roots = set(meta_event.get(root_key, []))
-        if not roots:
-            continue
-        if args.score_mode == "components":
-            exported_ranking = component_ranking_names(
-                pred_event,
-                args.scope,
-                args.component_graph_weight,
-                args.component_contrast_weight,
-            )
+    if args.event_source == "predicted":
+        pred_events_by_key = rca.get("predicted_events_by_key", {})
+        prediction_key = args.prediction_key or rca.get("rca_prediction_key")
+        if prediction_key is not None and str(prediction_key) in pred_events_by_key:
+            pred_events = pred_events_by_key[str(prediction_key)]
         else:
-            exported_ranking = ranking_names(pred_event, args.scope)
-        if args.baseline == "random":
-            if args.random_candidates == "prediction":
-                candidates = exported_ranking
-            else:
-                candidates = meta_candidates(meta, args.scope)
-            trial_rows = []
-            for trial in range(args.random_trials):
-                seed = args.random_seed + int(pred_event.get("event_id", 0)) * args.random_trials + trial
-                ranking = baseline_ranking(candidates, roots, seed)
-                trial_rows.append(metric_row(ranking, roots, args.k))
-            metric_values = mean_metric_row(trial_rows)
-            top1 = f"random_mean_{args.random_trials}"
-        else:
-            ranking = exported_ranking
-            metric_values = metric_row(ranking, roots, args.k)
-            top1 = ranking[0] if ranking else ""
-        row = {
-            "series_name": rca.get("series_name"),
-            "event_id": pred_event.get("event_id"),
-            "event_start": pred_event.get("start"),
-            "event_end": pred_event.get("end"),
-            "roots": ",".join(sorted(roots)),
-            "top1": top1,
-            "method": "random" if args.baseline == "random" else "lagraph",
-        }
-        row.update(metric_values)
-        rows.append(row)
+            pred_events = rca.get("predicted_events", [])
+            prediction_key = rca.get("rca_prediction_key", prediction_key)
+        for meta_idx, meta_event in enumerate(meta.get("events", []), start=1):
+            roots = set(meta_event.get(root_key, []))
+            if not roots:
+                continue
+            pred_event, best_overlap = match_pred_event(meta_event, pred_events)
+            exported_ranking = ranking_for_event(pred_event, args)
+            metric_values, top1 = evaluate_ranking(pred_event, roots, exported_ranking, args)
+            delay = math.nan
+            if pred_event and best_overlap > 0:
+                delay = max(0, int(pred_event.get("start", 0)) - int(meta_event.get("start", 0)))
+            for k in args.k:
+                metric_values[f"RCA_Delay@{k}"] = delay if metric_values.get(f"Hit@{k}", 0.0) > 0 else math.nan
+            row = {
+                "series_name": rca.get("series_name"),
+                "event_source": "predicted",
+                "prediction_key": prediction_key,
+                "event_id": meta_event.get("event_id", meta_idx),
+                "event_start": meta_event.get("start"),
+                "event_end": meta_event.get("end"),
+                "pred_event_id": "" if not pred_event else pred_event.get("event_id"),
+                "pred_start": "" if not pred_event else pred_event.get("start"),
+                "pred_end": "" if not pred_event else pred_event.get("end"),
+                "overlap": best_overlap,
+                "matched": 1.0 if best_overlap > 0 else 0.0,
+                "roots": ",".join(sorted(roots)),
+                "top1": top1,
+                "method": "random" if args.baseline == "random" else "lagraph",
+            }
+            row.update(metric_values)
+            rows.append(row)
+    else:
+        for pred_event in rca.get("events", []):
+            meta_event = match_meta_event(pred_event, meta.get("events", []))
+            if not meta_event:
+                continue
+            roots = set(meta_event.get(root_key, []))
+            if not roots:
+                continue
+            exported_ranking = ranking_for_event(pred_event, args)
+            metric_values, top1 = evaluate_ranking(pred_event, roots, exported_ranking, args)
+            row = {
+                "series_name": rca.get("series_name"),
+                "event_source": "true",
+                "event_id": pred_event.get("event_id"),
+                "event_start": pred_event.get("start"),
+                "event_end": pred_event.get("end"),
+                "roots": ",".join(sorted(roots)),
+                "top1": top1,
+                "method": "random" if args.baseline == "random" else "lagraph",
+            }
+            row.update(metric_values)
+            rows.append(row)
 
     if not rows:
         raise SystemExit("No evaluable RCA events found. Check metadata roots and event intervals.")
 
     df = pd.DataFrame(rows)
-    metric_cols = [c for c in df.columns if c.startswith(("Hit@", "Precision@", "Recall@", "NDCG@")) or c == "MRR"]
+    metric_cols = [
+        c
+        for c in df.columns
+        if c.startswith(("Hit@", "Precision@", "Recall@", "NDCG@", "RCA_Delay@"))
+        or c in {"MRR", "matched"}
+    ]
     summary = df[metric_cols].mean().to_frame("mean").T
     print("\nPer-event RCA:")
     print(df.to_string(index=False))

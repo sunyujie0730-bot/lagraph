@@ -426,6 +426,12 @@ def main():
         default=None,
         help="Weight for positive event-vs-local-baseline lift in exported RCA rankings.",
     )
+    parser.add_argument(
+        "--rca-prediction-key",
+        type=str,
+        default=None,
+        help="Prediction key used for predicted-event RCA export, e.g. pot, 0.5, 1.0, 5.",
+    )
     args = parser.parse_args()
 
     # 确定训练轮次
@@ -1135,6 +1141,8 @@ def main():
         score_hyper_params["rca_contrast_window"] = max(0, args.rca_contrast_window)
     if args.rca_contrast_weight is not None:
         score_hyper_params["rca_contrast_weight"] = max(0.0, args.rca_contrast_weight)
+    if args.rca_prediction_key is not None:
+        score_hyper_params["rca_prediction_key"] = args.rca_prediction_key
     effective_switches = {
         **arch_switches,
         **vq_hyper_params,

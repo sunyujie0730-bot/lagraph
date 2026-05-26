@@ -70,7 +70,13 @@ RCA evaluation example:
 ```powershell
 python scripts/evaluate_rca.py --rca result/rca/HAI_21_03_test1/<timestamp>_rca.json --scope group
 python scripts/evaluate_rca.py --rca result/rca/HAI_21_03_test1/<timestamp>_rca.json --scope group --score-mode components --component-contrast-weight 0.75
+python scripts/evaluate_rca.py --rca result/rca/HAI_21_03_test1/<timestamp>_rca.json --scope group --event-source predicted --prediction-key pot
 ```
+
+RCA JSON now stores two event sources:
+
+- `events`: RCA over true anomaly intervals. This isolates localization quality from detection quality.
+- `predicted_events_by_key`: RCA over model-predicted anomaly intervals for each threshold key such as `pot`, `0.5`, `1.0`, `2`, and `5`. This reflects deployment behavior.
 
 ## HAI RCA Ground Truth
 
@@ -132,6 +138,41 @@ Interpretation:
 - Compared with z-score, LaGraph-contrast has higher average MRR, Hit@1, NDCG@3, and NDCG@5 on the current HAI subsystem RCA benchmark.
 - The gain is useful for paper framing, but it is not yet enough to claim strong variable-level causal root-cause localization.
 
+## Predicted-Event RCA Protocol
+
+Predicted-event RCA answers a stricter question:
+
+```text
+Can the deployed detector both cover the true event and rank the correct root subsystem?
+```
+
+Evaluation is done per true attack event. For each true event, the evaluator finds the overlapping predicted event with maximum overlap. If no predicted event overlaps, the RCA metrics for that true event are zero. This means `matched` is the event coverage rate under the selected detection threshold.
+
+Additional metric:
+
+```text
+RCA_Delay@K = max(0, predicted_event_start - true_event_start)
+```
+
+The delay is reported only when the root subsystem appears in Top-K.
+
+Predicted-event RCA averaged across all five HAI test files:
+
+| Prediction key | matched | MRR | Hit@1 | NDCG@3 | NDCG@5 | RCA_Delay@1 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 2 | 0.9900 | 0.9375 | 0.8933 | 0.8860 | 0.9308 | 18.40 |
+| 5 | 1.0000 | 0.9425 | 0.8933 | 0.8846 | 0.9338 | 18.00 |
+| 1.0 | 0.9800 | 0.9275 | 0.8833 | 0.8760 | 0.9208 | 19.62 |
+| 0.5 | 0.9600 | 0.9275 | 0.9000 | 0.8709 | 0.9157 | 23.52 |
+| pot | 0.8867 | 0.8617 | 0.8367 | 0.8321 | 0.8514 | 24.43 |
+
+Interpretation:
+
+- Predicted-event RCA is dominated by event coverage. POT is conservative and misses events on HAI test2/test5.
+- Threshold key `2` is the current best balance on NDCG@3 and delay; key `5` gives complete event coverage but likely costs more detection precision.
+- Wider thresholds improve `matched`, but the detection false-positive cost must be reported separately through anomaly-detection metrics.
+- For the paper, report both protocols: true-event RCA as localization upper bound, and predicted-event RCA as deployment-oriented diagnosis.
+
 ## TE RCA Ground Truth
 
 Current TE converted files use only the first 53 process variables and exclude the disturbance variables. Therefore, strict variable-level root-cause labels are not yet available for TE.
@@ -166,11 +207,13 @@ rca_i = reconstruction_contribution_i
 first time root subsystem enters Top-K - anomaly start time
 ```
 
-3. Build variable-level labels for HAI where attack descriptions allow exact component mapping.
+3. Run predicted-event RCA for all HAI test files and report threshold sensitivity.
 
-4. Build TE fault-to-observed-variable mapping before claiming strict TE RCA.
+4. Build variable-level labels for HAI where attack descriptions allow exact component mapping.
 
-5. Compare against simple RCA baselines:
+5. Build TE fault-to-observed-variable mapping before claiming strict TE RCA.
+
+6. Compare against simple RCA baselines:
 
 - raw reconstruction error
 - z-score deviation
