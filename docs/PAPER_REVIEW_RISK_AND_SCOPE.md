@@ -35,9 +35,9 @@ small detection-performance gap -> stronger diagnosis, interpretability,
 generalization discipline, or efficiency.
 ```
 
-This trade-off is acceptable only when it is measured. A module should not enter
-the main method because it sounds causal, adaptive, or graph-based. It must
-improve at least one paper-level outcome:
+This trade-off is acceptable only when it is measured or audited. A module
+should not enter the main method because it sounds causal, adaptive, or
+graph-based. It must improve at least one paper-level outcome:
 
 | Paper-level outcome | Required evidence |
 | --- | --- |
@@ -46,11 +46,19 @@ improve at least one paper-level outcome:
 | Efficiency | parameter count/runtime/memory improves without detection collapse |
 | RCA quality | true-event and predicted-event RCA improve over simple baselines |
 | Event-level utility | Affiliation F1 or delay improves without hiding raw F1 |
+| Explanation faithfulness | perturbing or removing the claimed evidence changes the model/RCA output as expected |
 
 The safest thesis is therefore diagnosis-first, not detector-first. Detection
 remains necessary, but the main novelty should be judged by whether the system
 helps explain and localize industrial anomaly events under a transparent
 protocol.
+
+Important nuance: a module does not have to increase detection metrics to be
+paper-worthy. It can enter the main paper if it substantially improves
+interpretability, explanation faithfulness, or auditability while keeping
+detection performance within an acceptable gap. The deciding question is
+whether it supports a clean research claim, not whether it makes the software
+look more complete.
 
 ## Reviewer First Questions
 
@@ -287,11 +295,15 @@ flowchart TD
 A future module can enter the main paper only if all conditions are met:
 
 1. It has a one-sentence physical or diagnostic interpretation.
-2. It improves at least one primary metric without degrading the main table.
-3. It beats a simple baseline, not only a weak random baseline.
-4. Its ablation is clean and reproducible.
-5. It does not require dataset-specific test-set tuning.
-6. It can be visualized or explained in a single figure.
+2. It improves at least one paper-level outcome: detection, RCA quality,
+   explanation faithfulness, generalization discipline, or efficiency.
+3. If it does not improve detection metrics, it must keep the main detection
+   table within a pre-declared acceptable gap and provide stronger explanation
+   evidence.
+4. It beats or complements a simple baseline, not only a weak random baseline.
+5. Its ablation is clean and reproducible.
+6. It does not require dataset-specific test-set tuning.
+7. It can be visualized or explained in a single figure.
 
 If any condition fails, the module stays in appendix or future work.
 

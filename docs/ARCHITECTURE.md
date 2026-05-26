@@ -34,7 +34,8 @@ claiming a universal metric lead.
 The current system should not be optimized as a detector-only leaderboard model.
 If the method cannot become SOTA on every dataset and metric, the paper should
 make an explicit trade: accept a small detection-performance gap only when it
-buys a measurable diagnosis or deployment advantage.
+buys a measurable paper contribution. That contribution can be metric-based
+or explanation-based, but it must be evaluable.
 
 Acceptable trade-offs:
 
@@ -42,15 +43,17 @@ Acceptable trade-offs:
 | --- | --- | --- |
 | Slightly lower raw F1 | Affiliation F1, RCA ranking, or delay improves under a fixed protocol | hiding weak point-wise detection |
 | Slightly lower adjusted F1 | Predicted-event RCA coverage and delay remain competitive | threshold or segment tuning |
-| Extra graph module | The learned structure is visualizable and improves RCA or robustness | module stacking |
+| Extra graph module | The learned structure is visualizable and gives faithful diagnostic evidence, even if detection metrics only tie | module stacking |
 | Removing a module | Runtime/parameter count drops and detection/RCA does not collapse | underpowered architecture |
 | Dataset-specific sensitivity | Reported as sensitivity, not promoted as a universal default | cherry-picking |
+| Interpretability-only module | It produces a clear formula, figure, case study, and ablation showing what explanation would be lost without it | system-feature drift |
 
 Non-acceptable trade-offs:
 
 - large raw F1 or adjusted F1 degradation with only a tiny affiliation gain;
 - post-processing that inflates event coverage but weakens RCA or precision;
 - a graph or causal module that cannot be explained in one figure;
+- an explanation module whose output is not faithful to model behavior or input perturbations;
 - any setting chosen only because it is best on the test labels.
 
 Practical paper stance:
@@ -60,6 +63,12 @@ LaGraph is not positioned as a universal SOTA detector. It is positioned as a
 compact industrial anomaly diagnosis framework that balances detection,
 hierarchical RCA, interpretability, and single-GPU efficiency.
 ```
+
+This does not mean every main contribution must improve detection metrics. A
+module can be paper-worthy if it materially improves interpretability while
+leaving detection nearly unchanged. The review standard is whether the module
+supports a defensible scientific claim, not whether it adds another system
+feature.
 
 ## Main Profile
 
