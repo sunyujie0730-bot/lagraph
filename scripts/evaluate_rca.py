@@ -38,10 +38,18 @@ def parse_args() -> argparse.Namespace:
         "--score-mode",
         choices=["exported", "components"],
         default="exported",
-        help="Use exported ranking or recompute ranking from base/graph/contrast component scores.",
+        help="Use exported ranking or recompute ranking from base/graph/mechanism/contrast component scores.",
     )
+    parser.add_argument("--component-base-weight", type=float, default=1.0)
     parser.add_argument("--component-graph-weight", type=float, default=0.0)
+    parser.add_argument("--component-mechanism-weight", type=float, default=0.0)
     parser.add_argument("--component-contrast-weight", type=float, default=0.0)
+    parser.add_argument(
+        "--method-name",
+        type=str,
+        default=None,
+        help="Name written to the output CSV, useful for RCA ablation tables.",
+    )
     parser.add_argument("--baseline", choices=["none", "random"], default="none")
     parser.add_argument("--random-seed", type=int, default=2021)
     parser.add_argument(
@@ -105,7 +113,9 @@ def ranking_names(pred_event: dict, scope: str) -> list[str]:
 def component_ranking_names(
     pred_event: dict,
     scope: str,
+    base_weight: float,
     graph_weight: float,
+    mechanism_weight: float,
     contrast_weight: float,
 ) -> list[str]:
     channel_items = pred_event.get("channel_ranking", [])
@@ -116,8 +126,9 @@ def component_ranking_names(
         scored = []
         for item in channel_items:
             score = (
-                float(item.get("base_score", item.get("score", 0.0)))
+                base_weight * float(item.get("base_score", item.get("score", 0.0)))
                 + graph_weight * float(item.get("graph_score", 0.0))
+                + mechanism_weight * float(item.get("mechanism_score", 0.0))
                 + contrast_weight * float(item.get("contrast_score", 0.0))
             )
             scored.append((item["name"], score))
@@ -127,8 +138,9 @@ def component_ranking_names(
     for item in channel_items:
         group = root_cause_group_name(item["name"])
         score = (
-            float(item.get("base_score", item.get("score", 0.0)))
+            base_weight * float(item.get("base_score", item.get("score", 0.0)))
             + graph_weight * float(item.get("graph_score", 0.0))
+            + mechanism_weight * float(item.get("mechanism_score", 0.0))
             + contrast_weight * float(item.get("contrast_score", 0.0))
         )
         group_scores[group] = max(group_scores.get(group, float("-inf")), score)
@@ -197,7 +209,9 @@ def ranking_for_event(pred_event: dict | None, args: argparse.Namespace) -> list
         return component_ranking_names(
             pred_event,
             args.scope,
+            args.component_base_weight,
             args.component_graph_weight,
+            args.component_mechanism_weight,
             args.component_contrast_weight,
         )
     return ranking_names(pred_event, args.scope)
@@ -273,7 +287,7 @@ def main() -> None:
                 "matched": 1.0 if best_overlap > 0 else 0.0,
                 "roots": ",".join(sorted(roots)),
                 "top1": top1,
-                "method": "random" if args.baseline == "random" else "lagraph",
+                "method": args.method_name or ("random" if args.baseline == "random" else "lagraph"),
             }
             row.update(metric_values)
             rows.append(row)
@@ -295,7 +309,7 @@ def main() -> None:
                 "event_end": pred_event.get("end"),
                 "roots": ",".join(sorted(roots)),
                 "top1": top1,
-                "method": "random" if args.baseline == "random" else "lagraph",
+                "method": args.method_name or ("random" if args.baseline == "random" else "lagraph"),
             }
             row.update(metric_values)
             rows.append(row)
