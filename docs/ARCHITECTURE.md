@@ -237,16 +237,18 @@ Interpretation:
 
 ## Mechanism Faithfulness Smoke Check
 
-A lightweight 2026-05-26 counterfactual masking check was run on
-`HAI_21_03_test1` with `mechanism-graph`, 3 epochs, a 30k-row training prefix,
-three anomaly events, eight event windows, and five random trials. This is not a
-final paper table; it is a feasibility check for whether mechanism explanations
-change model behavior.
+A lightweight 2026-05-26 counterfactual masking check was run with
+`mechanism-graph`, 3 epochs, a 30k-row training prefix, three anomaly events,
+eight event windows, and five random trials. This is not a final paper table; it
+is a feasibility check for whether mechanism explanations change model
+behavior.
 
 | Ranking source | Top-vs-random score margin | Neighbor-vs-random score margin | Top-vs-random recon margin | Top-vs-random mechanism margin | Interpretation |
 | --- | ---: | ---: | ---: | ---: | --- |
-| mechanism ranking | 12.4830 | 0.0381 | 3.5358 | 0.5889 | mechanism-ranked channels are behaviorally faithful |
-| reconstruction ranking | 14.7191 | -0.0208 | 4.1201 | 0.5812 | residual-ranked channels are also faithful |
+| HAI test1, mechanism ranking | 12.4830 | 0.0381 | 3.5358 | 0.5889 | mechanism-ranked channels are behaviorally faithful |
+| HAI test1, reconstruction ranking | 14.7191 | -0.0208 | 4.1201 | 0.5812 | residual-ranked channels are also faithful |
+| HAI test1-test3 mean, mechanism ranking | 35.7070 | -0.2019 | 10.7920 | 0.8769 | top mechanism evidence is stable; learned graph neighbors are not |
+| HAI test2, mechanism ranking + correlation neighbors | 56.5092 | 2.9019 | 17.3657 | 1.0194 | normal-correlation neighbors are more faithful than learned neighbors on this case |
 
 Interpretation:
 
@@ -255,8 +257,11 @@ Interpretation:
 - mechanism-ranked channels also change the mechanism residual itself, which is
   the first direct evidence that the mechanism branch has behavioral meaning;
 - learned graph neighbors remain unstable and should not be overclaimed as
-  faithful causal parents yet. They require stronger edge-level evidence before
-  becoming a main contribution.
+  faithful causal parents yet;
+- normal-correlation neighbors can be more faithful than learned graph
+  neighbors, so the next architecture problem is edge faithfulness: learned
+  graph edges should be constrained or trained to preserve the functional
+  neighbor evidence already visible in the normal dependency prior.
 
 ## Module Details
 
