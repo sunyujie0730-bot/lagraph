@@ -449,6 +449,12 @@ def main():
         help="Weight for graph-propagated attribution in exported RCA rankings.",
     )
     parser.add_argument(
+        "--rca-mechanism-weight",
+        type=float,
+        default=None,
+        help="Weight for channel mechanism-violation attribution in exported RCA rankings.",
+    )
+    parser.add_argument(
         "--rca-graph-direction",
         choices=["outgoing", "incoming", "both"],
         default=None,
@@ -650,6 +656,7 @@ def main():
             "lambda_channel_mechanism": 0.02,
             "use_channel_mechanism_score": True,
             "channel_mechanism_score_weight": 0.05,
+            "rca_mechanism_weight": 1.0,
         },
         "channel-only": {
             "use_channel_graph": True,
@@ -1237,6 +1244,8 @@ def main():
         score_hyper_params["lambda_temporal_diff_loss"] = max(0.0, args.lambda_temporal_diff_loss)
     if args.rca_graph_weight is not None:
         score_hyper_params["rca_graph_weight"] = max(0.0, args.rca_graph_weight)
+    if args.rca_mechanism_weight is not None:
+        score_hyper_params["rca_mechanism_weight"] = max(0.0, args.rca_mechanism_weight)
     if args.rca_graph_direction is not None:
         score_hyper_params["rca_graph_direction"] = args.rca_graph_direction
     if args.rca_contrast_window is not None:

@@ -850,7 +850,7 @@ class SparseGCN(nn.Module):
         k = min(max(1, self.score_topk_k or self.multi_scale_scorer.topk_k), C)
         score = err.topk(k=k, dim=-1, largest=True, sorted=False)[0].mean(dim=-1)
         loss = F.smooth_l1_loss(pred, resid)
-        return pred, score, loss
+        return pred, score, loss, err
 
     def set_synthetic_score_stats(self, score_center, score_scale):
         self.synthetic_score_center.copy_(
@@ -901,6 +901,7 @@ class SparseGCN(nn.Module):
         causal_mechanism_loss = None
         channel_mechanism_score = None
         channel_mechanism_loss = None
+        channel_mechanism_error = None
 
         if self.use_lagged_causal_graph and self.lagged_causal_graph is not None:
             causal_input = resid.detach() if self.causal_detach_backbone else resid
@@ -922,7 +923,7 @@ class SparseGCN(nn.Module):
         if self.use_channel_graph and (
             self.use_channel_mechanism_score or self.lambda_channel_mechanism > 0
         ):
-            _, channel_mechanism_score, channel_mechanism_loss = self._channel_mechanism(
+            _, channel_mechanism_score, channel_mechanism_loss, channel_mechanism_error = self._channel_mechanism(
                 resid, A_adaptive,
             )
 
@@ -1005,6 +1006,8 @@ class SparseGCN(nn.Module):
             aux_losses['causal_sparse_loss'] = self.lagged_causal_graph.get_sparsity_loss()
         if channel_mechanism_score is not None:
             aux_losses['channel_mechanism_score'] = channel_mechanism_score
+        if channel_mechanism_error is not None:
+            aux_losses['channel_mechanism_error'] = channel_mechanism_error
         if channel_mechanism_loss is not None:
             aux_losses['channel_mechanism_loss'] = channel_mechanism_loss
         if synthetic_logits is not None:

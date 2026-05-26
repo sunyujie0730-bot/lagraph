@@ -185,7 +185,9 @@ transformation. In `mechanism-graph`, the adaptive channel graph defines a
 self-excluded neighbor mechanism: each variable should be predictable from its
 graph neighbors during normal operation. The mechanism residual is trained on
 normal windows and calibrated on normal scores, then fused with reconstruction
-error at inference. This makes the graph scientifically testable: if the graph
+error at inference. The same channel-level mechanism residual is exported for
+RCA, so each ranked variable contains `base_score`, `graph_score`, and
+`mechanism_score`. This makes the graph scientifically testable: if the graph
 is meaningful, masking graph-supported mechanism channels should affect the
 anomaly score more than random masking.
 
@@ -680,6 +682,23 @@ Mechanism-graph candidate:
 $env:PYTHONIOENCODING='utf-8'
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 5 --datasets HAI_21_03_test1.csv HAI_21_03_test2.csv --arch-profile mechanism-graph --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_mechanism_graph_hai_5ep
 ```
+
+Mechanism-aware RCA export:
+
+```powershell
+$env:PYTHONIOENCODING='utf-8'
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 5 --datasets HAI_21_03_test1.csv HAI_21_03_test2.csv --arch-profile mechanism-graph --export-rca --rca-mechanism-weight 1.0 --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_mechanism_graph_rca_5ep
+```
+
+Mechanism-aware RCA evaluation:
+
+```powershell
+D:\Anaconda3\envs\lagraph5070\python.exe scripts/evaluate_rca.py --rca D:\la_v12\result\rca\HAI_21_03_test1\<timestamp>_rca.json --scope group --save-csv D:\la_v12\result\rca\mechanism_rca_eval.csv
+```
+
+Implementation note: RCA export aligns all-detect labels to the dataset
+`train_lens` metadata before matching HAI root-cause intervals. The exported
+JSON records `rca_offset`, and each ranked channel includes `mechanism_score`.
 
 Graph faithfulness check:
 

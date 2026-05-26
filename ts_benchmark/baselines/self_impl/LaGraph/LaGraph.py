@@ -155,6 +155,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "prediction_dilate": 0,
     "export_rca": False,
     "rca_graph_weight": 0.0,
+    "rca_mechanism_weight": 0.0,
     "rca_graph_direction": "outgoing",
     "rca_contrast_window": 0,
     "rca_contrast_weight": 0.0,
@@ -822,6 +823,7 @@ class LaGraph:
         self._val_anomaly_scores = None
         self._last_channel_scores = None
         self._last_graph_channel_scores = None
+        self._last_mechanism_channel_scores = None
         self._last_channel_names = None
 
         # ★ P0-2: POT 阈值估计器
@@ -1021,6 +1023,7 @@ class LaGraph:
                 "lambda_channel_mechanism": getattr(self.config, "lambda_channel_mechanism", None),
                 "use_channel_mechanism_score": getattr(self.config, "use_channel_mechanism_score", None),
                 "channel_mechanism_score_weight": getattr(self.config, "channel_mechanism_score_weight", None),
+                "rca_mechanism_weight": getattr(self.config, "rca_mechanism_weight", None),
                 "use_state_aware_fusion": getattr(self.config, "use_state_aware_fusion", None),
                 "state_aware_num_states": getattr(self.config, "state_aware_num_states", None),
                 "state_aware_graph_gate_init": getattr(self.config, "state_aware_graph_gate_init", None),
@@ -2435,12 +2438,24 @@ class LaGraph:
     def _detect_forward_with_channels(self, input_data):
         score, _ = self.model.multi_scale_forward(input_data)
         raw_model = self._get_raw_model()
-        x_rec, A_adaptive, _, _, _, _, _ = raw_model(input_data)
+        x_rec, A_adaptive, _, _, _, aux_losses, _ = raw_model(input_data)
         channel_err = F.l1_loss(x_rec, input_data, reduction="none")
         if hasattr(raw_model, "_normalize_score_error"):
             channel_err = raw_model._normalize_score_error(channel_err)
         graph_err = self._graph_propagated_channel_error(channel_err, A_adaptive)
-        return score.cpu().numpy(), channel_err.cpu().numpy(), graph_err.cpu().numpy()
+        mechanism_err = None
+        if aux_losses:
+            mechanism_err = aux_losses.get("channel_mechanism_error")
+        if mechanism_err is None:
+            mechanism_err = torch.zeros_like(channel_err)
+        elif hasattr(raw_model, "_normalize_channel_mechanism_score"):
+            mechanism_err = raw_model._normalize_channel_mechanism_score(mechanism_err)
+        return (
+            score.cpu().numpy(),
+            channel_err.cpu().numpy(),
+            graph_err.cpu().numpy(),
+            mechanism_err.cpu().numpy(),
+        )
 
     def _graph_propagated_channel_error(self, channel_err, A_adaptive):
         weight = float(getattr(self.config, "rca_graph_weight", 0.0) or 0.0)
@@ -2573,22 +2588,31 @@ class LaGraph:
         export_rca = bool(getattr(self.config, "export_rca", False))
         channel_sums = None
         graph_channel_sums = None
+        mechanism_channel_sums = None
         channel_counts = None
         window_cursor = 0
         if export_rca:
             channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             graph_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
+            mechanism_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             channel_counts = np.zeros(total_length, dtype=np.float64)
 
         for i, (input_data, labels) in enumerate(test_loader):
             input_data = input_data.float().to(self.device)
             if export_rca:
-                cri, channel_err, graph_channel_err = self._detect_forward_with_channels(input_data)
+                cri, channel_err, graph_channel_err, mechanism_channel_err = self._detect_forward_with_channels(input_data)
                 self._add_window_channel_scores(channel_sums, channel_counts, channel_err, window_cursor)
                 self._add_window_channel_scores(
                     graph_channel_sums,
                     channel_counts,
                     graph_channel_err,
+                    window_cursor,
+                    update_counts=False,
+                )
+                self._add_window_channel_scores(
+                    mechanism_channel_sums,
+                    channel_counts,
+                    mechanism_channel_err,
                     window_cursor,
                     update_counts=False,
                 )
@@ -2616,10 +2640,17 @@ class LaGraph:
                 out=np.zeros_like(graph_channel_sums),
                 where=channel_counts[:, None] > 0,
             ).astype(np.float32)
+            self._last_mechanism_channel_scores = np.divide(
+                mechanism_channel_sums,
+                channel_counts[:, None],
+                out=np.zeros_like(mechanism_channel_sums),
+                where=channel_counts[:, None] > 0,
+            ).astype(np.float32)
             self._last_channel_names = list(test_data.columns)
         else:
             self._last_channel_scores = None
             self._last_graph_channel_scores = None
+            self._last_mechanism_channel_scores = None
             self._last_channel_names = None
 
         test_windows = np.concatenate(test_window_list, axis=0)
@@ -2766,6 +2797,7 @@ class LaGraph:
         channel_scores,
         base_channel_scores,
         graph_channel_scores,
+        mechanism_channel_scores,
         feature_names,
         contrast_window,
         contrast_weight,
@@ -2783,6 +2815,7 @@ class LaGraph:
             event_scores = event_raw_scores + contrast_weight * event_contrast_scores
             event_base_scores = base_channel_scores[start:end].mean(axis=0)
             event_graph_scores = graph_channel_scores[start:end].mean(axis=0)
+            event_mechanism_scores = mechanism_channel_scores[start:end].mean(axis=0)
             order = np.argsort(-event_scores)
             channel_ranking = [
                 {
@@ -2791,6 +2824,7 @@ class LaGraph:
                     "score": float(event_scores[idx]),
                     "base_score": float(event_base_scores[idx]),
                     "graph_score": float(event_graph_scores[idx]),
+                    "mechanism_score": float(event_mechanism_scores[idx]),
                     "contrast_score": float(event_contrast_scores[idx]),
                 }
                 for rank, idx in enumerate(order)
@@ -2825,22 +2859,53 @@ class LaGraph:
             return None
 
         labels = test_label.to_numpy().reshape(-1).astype(int)
-        base_channel_scores = self._last_channel_scores[: len(labels)]
+        rca_offset = 0
+        try:
+            from ts_benchmark.common.constant import ANOMALY_DETECT_DATASET_PATH
+            meta_path = os.path.join(ANOMALY_DETECT_DATASET_PATH, "DETECT_META.csv")
+            meta_df = pd.read_csv(meta_path)
+            row = meta_df.loc[meta_df["file_name"] == series_name]
+            if not row.empty and "train_lens" in row.columns and pd.notna(row.iloc[0]["train_lens"]):
+                candidate_offset = int(row.iloc[0]["train_lens"])
+                if 0 < candidate_offset < len(labels):
+                    rca_offset = candidate_offset
+        except Exception:
+            rca_offset = 0
+
+        if rca_offset > 0 and len(labels) == len(test_data):
+            labels = labels[rca_offset:]
+        elif len(labels) > len(test_data):
+            labels = labels[-len(test_data):]
+        elif len(labels) < len(test_data):
+            labels = np.pad(labels, (0, len(test_data) - len(labels)), mode="constant")
+        score_slice = slice(rca_offset, rca_offset + len(labels)) if rca_offset > 0 else slice(0, len(labels))
+        base_channel_scores = self._last_channel_scores[score_slice]
         graph_channel_scores = self._last_graph_channel_scores
         if graph_channel_scores is None:
             graph_channel_scores = np.zeros_like(base_channel_scores)
         else:
-            graph_channel_scores = graph_channel_scores[: len(labels)]
+            graph_channel_scores = graph_channel_scores[score_slice]
+        mechanism_channel_scores = getattr(self, "_last_mechanism_channel_scores", None)
+        if mechanism_channel_scores is None:
+            mechanism_channel_scores = np.zeros_like(base_channel_scores)
+        else:
+            mechanism_channel_scores = mechanism_channel_scores[score_slice]
         graph_weight = float(getattr(self.config, "rca_graph_weight", 0.0) or 0.0)
+        mechanism_weight = float(getattr(self.config, "rca_mechanism_weight", 0.0) or 0.0)
         contrast_window = int(getattr(self.config, "rca_contrast_window", 0) or 0)
         contrast_weight = float(getattr(self.config, "rca_contrast_weight", 0.0) or 0.0)
-        channel_scores = base_channel_scores + graph_weight * graph_channel_scores
+        channel_scores = (
+            base_channel_scores
+            + graph_weight * graph_channel_scores
+            + mechanism_weight * mechanism_channel_scores
+        )
         feature_names = list(self._last_channel_names)
         events = self._build_rca_events(
             self._label_segments(labels),
             channel_scores,
             base_channel_scores,
             graph_channel_scores,
+            mechanism_channel_scores,
             feature_names,
             contrast_window,
             contrast_weight,
@@ -2851,22 +2916,30 @@ class LaGraph:
             for key, prediction in predict_labels.items():
                 key_name = self._rca_prediction_key_name(key)
                 mask = self._normalize_prediction_mask(prediction, len(labels))
+                if rca_offset > 0:
+                    raw_mask = self._normalize_prediction_mask(prediction, len(test_data))
+                    mask = raw_mask[rca_offset:rca_offset + len(labels)]
                 predicted_events_by_key[key_name] = self._build_rca_events(
                     self._label_segments(mask),
                     channel_scores,
                     base_channel_scores,
                     graph_channel_scores,
+                    mechanism_channel_scores,
                     feature_names,
                     contrast_window,
                     contrast_weight,
                 )
         elif predict_labels is not None:
             mask = self._normalize_prediction_mask(predict_labels, len(labels))
+            if rca_offset > 0:
+                raw_mask = self._normalize_prediction_mask(predict_labels, len(test_data))
+                mask = raw_mask[rca_offset:rca_offset + len(labels)]
             predicted_events_by_key["single"] = self._build_rca_events(
                 self._label_segments(mask),
                 channel_scores,
                 base_channel_scores,
                 graph_channel_scores,
+                mechanism_channel_scores,
                 feature_names,
                 contrast_window,
                 contrast_weight,
@@ -2878,6 +2951,7 @@ class LaGraph:
                 channel_scores,
                 base_channel_scores,
                 graph_channel_scores,
+                mechanism_channel_scores,
                 feature_names,
                 contrast_window,
                 contrast_weight,
@@ -2894,8 +2968,10 @@ class LaGraph:
         payload = {
             "series_name": series_name,
             "dataset_name": self.dataset_name,
-            "score_method": "mean channel-wise normalized reconstruction error plus graph-propagated and local-contrast attribution",
+            "score_method": "mean channel-wise normalized reconstruction error plus graph-propagated, mechanism-violation, and local-contrast attribution",
             "rca_graph_weight": graph_weight,
+            "rca_mechanism_weight": mechanism_weight,
+            "rca_offset": int(rca_offset),
             "rca_graph_direction": str(getattr(self.config, "rca_graph_direction", "outgoing") or "outgoing"),
             "rca_contrast_window": contrast_window,
             "rca_contrast_weight": contrast_weight,
