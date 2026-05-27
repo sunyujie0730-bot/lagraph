@@ -70,6 +70,33 @@ must not be treated as ground truth.
 SWaT needs attack-to-stage or attack-to-tag mapping from the official attack
 list. Detection labels alone are insufficient for RCA metrics.
 
+## Label Completion Workflow
+
+SWaT:
+
+1. Generate the event template from binary labels.
+2. Fill `target_tags`, `subsystem_root`, `variable_roots`, `attack_type`, and
+   `source` from the official SWaT attack list.
+3. Set `label_status=verified` only after every row has an inspectable source.
+4. Import verified rows into `rca_labels.csv`.
+
+TE-MM:
+
+1. Generate the fault mapping template.
+2. Verify whether each converted `dXX` file corresponds to `IDV(XX)` or
+   `IDV(29-XX)`.
+3. Fill `selected_idv`, `subsystem_root`, and optional `variable_roots` from
+   verified TE process documentation.
+4. Set `label_status=verified` and import verified rows.
+
+Generated source templates:
+
+```text
+D:\la_v12\dataset\anomaly_detect\label_sources\swat_attack_targets_template.csv
+D:\la_v12\dataset\anomaly_detect\label_sources\swat_tag_stage_map.csv
+D:\la_v12\dataset\anomaly_detect\label_sources\te_mm_fault_mapping_template.csv
+```
+
 ## Commands
 
 Build the registry from curated metadata:
@@ -82,6 +109,19 @@ Validate coverage and event bounds:
 
 ```powershell
 D:\Anaconda3\envs\lagraph5070\python.exe D:\la_v12\scripts\validate_rca_registry.py
+```
+
+Generate SWaT and TE-MM label-source templates:
+
+```powershell
+D:\Anaconda3\envs\lagraph5070\python.exe D:\la_v12\scripts\build_swat_rca_template.py
+D:\Anaconda3\envs\lagraph5070\python.exe D:\la_v12\scripts\build_te_rca_template.py
+```
+
+Import verified label-source rows:
+
+```powershell
+D:\Anaconda3\envs\lagraph5070\python.exe D:\la_v12\scripts\import_rca_label_sources.py
 ```
 
 Evaluate an exported RCA report with the registry:
