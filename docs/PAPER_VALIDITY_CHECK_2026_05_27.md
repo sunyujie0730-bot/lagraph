@@ -134,3 +134,63 @@ z-score, correlation_prior, base_only, mechanism_only, base_plus_mechanism
 The architecture should only be frozen if this residual mechanism score creates
 a real gap over z-score/reconstruction, or if we explicitly shift the paper to a
 faithful-explanation contribution.
+
+## Follow-up: Mechanism-Residual RCA Trial
+
+Implemented mechanism-residual RCA in the exported RCA path:
+
+```text
+event_mechanism_residual_i =
+    max(0, mean(mechanism_error_i[event]) - mean(mechanism_error_i[pre_event]))
+
+event_score_i =
+    base_score_i
+    + graph_weight * graph_score_i
+    + mechanism_weight * mechanism_score_i
+    + mechanism_residual_weight * event_mechanism_residual_i
+```
+
+Command used for the first strict check:
+
+```powershell
+D:\Anaconda3\envs\lagraph5070\python.exe D:\la_v12\ts_benchmark\run_single.py --epochs 5 --datasets HAI_21_03_test2.csv --arch-profile mechanism-prior-graph --export-rca --rca-prediction-key 1.0 --rca-mechanism-weight 0 --rca-mechanism-residual-window 500 --rca-mechanism-residual-weight 1.0 --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_mech_residual_hai_test2_5ep
+```
+
+HAI test2 result:
+
+| Method | True MRR | True Hit@1 | Pred matched | Pred MRR | Pred Hit@1 | Pred NDCG@3 |
+|---|---:|---:|---:|---:|---:|---:|
+| `base_only` | 0.9500 | 0.9000 | 0.7000 | 0.6375 | 0.6000 | 0.6315 |
+| `mechanism_only` | 0.7958 | 0.7000 | 0.7000 | 0.5708 | 0.5000 | 0.5815 |
+| `mechanism_residual_only` | 0.8292 | 0.7500 | 0.7000 | 0.6375 | 0.6000 | 0.6315 |
+| `base_plus_mechanism_residual` | 0.9500 | 0.9000 | 0.7000 | 0.6375 | 0.6000 | 0.6315 |
+| `exported` | 0.9500 | 0.9000 | 0.7000 | 0.6375 | 0.6000 | 0.6315 |
+
+A weight sweep over `base_weight in {0, 0.25, 0.5, 1.0}` and
+`mechanism_residual_weight in {0.25, 0.5, 1, 2, 5, 10}` did not improve
+group-level HAI test2 RCA. Best predicted-event values remained:
+
+```text
+matched = 0.7000
+MRR     = 0.6375
+Hit@1   = 0.6000
+Hit@3   = 0.6500
+NDCG@3  = 0.6315
+```
+
+Interpretation:
+
+Mechanism residual is implemented and nonzero, but it does not create a
+group-level RCA advantage on HAI test2. The most likely reason is that HAI
+subsystem labels are coarse: even when the top channel changes, the top
+subsystem often stays the same. This reinforces the previous diagnosis: HAI
+subsystem-level RCA is too easy for simple deviation/reconstruction baselines
+and is not sufficient to prove a strong mechanism-based RCA claim.
+
+Current decision:
+
+```text
+Do not freeze the architecture as a "better RCA ranking" method yet.
+Keep mechanism residual as an available scoring component, but shift the next
+scientific step toward variable/tag-level RCA or graph faithfulness.
+```

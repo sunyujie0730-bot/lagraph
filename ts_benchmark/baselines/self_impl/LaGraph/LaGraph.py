@@ -159,6 +159,8 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_graph_direction": "outgoing",
     "rca_contrast_window": 0,
     "rca_contrast_weight": 0.0,
+    "rca_mechanism_residual_window": 0,
+    "rca_mechanism_residual_weight": 0.0,
     "rca_prediction_key": "pot",
     # --- v11.4 P0-2: POT 阈值参数 ---
     "pot_risk": 1e-4,            # POT EVT 风险水平
@@ -2801,6 +2803,8 @@ class LaGraph:
         feature_names,
         contrast_window,
         contrast_weight,
+        mechanism_residual_window,
+        mechanism_residual_weight,
     ):
         events = []
         for event_id, (start, end) in enumerate(segments, start=1):
@@ -2816,6 +2820,15 @@ class LaGraph:
             event_base_scores = base_channel_scores[start:end].mean(axis=0)
             event_graph_scores = graph_channel_scores[start:end].mean(axis=0)
             event_mechanism_scores = mechanism_channel_scores[start:end].mean(axis=0)
+            event_mechanism_residual_scores = np.zeros_like(event_mechanism_scores)
+            if mechanism_residual_window > 0 and mechanism_residual_weight > 0.0 and start > 0:
+                baseline_start = max(0, start - mechanism_residual_window)
+                baseline_mechanism_scores = mechanism_channel_scores[baseline_start:start].mean(axis=0)
+                event_mechanism_residual_scores = np.maximum(
+                    event_mechanism_scores - baseline_mechanism_scores,
+                    0.0,
+                )
+                event_scores = event_scores + mechanism_residual_weight * event_mechanism_residual_scores
             order = np.argsort(-event_scores)
             channel_ranking = [
                 {
@@ -2825,6 +2838,7 @@ class LaGraph:
                     "base_score": float(event_base_scores[idx]),
                     "graph_score": float(event_graph_scores[idx]),
                     "mechanism_score": float(event_mechanism_scores[idx]),
+                    "mechanism_residual_score": float(event_mechanism_residual_scores[idx]),
                     "contrast_score": float(event_contrast_scores[idx]),
                 }
                 for rank, idx in enumerate(order)
@@ -2894,6 +2908,8 @@ class LaGraph:
         mechanism_weight = float(getattr(self.config, "rca_mechanism_weight", 0.0) or 0.0)
         contrast_window = int(getattr(self.config, "rca_contrast_window", 0) or 0)
         contrast_weight = float(getattr(self.config, "rca_contrast_weight", 0.0) or 0.0)
+        mechanism_residual_window = int(getattr(self.config, "rca_mechanism_residual_window", 0) or 0)
+        mechanism_residual_weight = float(getattr(self.config, "rca_mechanism_residual_weight", 0.0) or 0.0)
         channel_scores = (
             base_channel_scores
             + graph_weight * graph_channel_scores
@@ -2909,6 +2925,8 @@ class LaGraph:
             feature_names,
             contrast_window,
             contrast_weight,
+            mechanism_residual_window,
+            mechanism_residual_weight,
         )
         pred_key, pred_mask = self._select_rca_prediction_mask(predict_labels, len(labels))
         predicted_events_by_key = {}
@@ -2928,6 +2946,8 @@ class LaGraph:
                     feature_names,
                     contrast_window,
                     contrast_weight,
+                    mechanism_residual_window,
+                    mechanism_residual_weight,
                 )
         elif predict_labels is not None:
             mask = self._normalize_prediction_mask(predict_labels, len(labels))
@@ -2943,6 +2963,8 @@ class LaGraph:
                 feature_names,
                 contrast_window,
                 contrast_weight,
+                mechanism_residual_window,
+                mechanism_residual_weight,
             )
         predicted_events = predicted_events_by_key.get(pred_key, [])
         if not predicted_events and pred_mask is not None:
@@ -2955,6 +2977,8 @@ class LaGraph:
                 feature_names,
                 contrast_window,
                 contrast_weight,
+                mechanism_residual_window,
+                mechanism_residual_weight,
             )
 
         from datetime import datetime
@@ -2975,6 +2999,8 @@ class LaGraph:
             "rca_graph_direction": str(getattr(self.config, "rca_graph_direction", "outgoing") or "outgoing"),
             "rca_contrast_window": contrast_window,
             "rca_contrast_weight": contrast_weight,
+            "rca_mechanism_residual_window": mechanism_residual_window,
+            "rca_mechanism_residual_weight": mechanism_residual_weight,
             "rca_prediction_key": pred_key,
             "feature_names": feature_names,
             "events": events,

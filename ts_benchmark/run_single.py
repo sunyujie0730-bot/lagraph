@@ -474,6 +474,18 @@ def main():
         help="Weight for positive event-vs-local-baseline lift in exported RCA rankings.",
     )
     parser.add_argument(
+        "--rca-mechanism-residual-window",
+        type=int,
+        default=None,
+        help="Number of points before each event used as the mechanism-residual RCA baseline.",
+    )
+    parser.add_argument(
+        "--rca-mechanism-residual-weight",
+        type=float,
+        default=None,
+        help="Weight for positive mechanism-error lift in exported RCA rankings.",
+    )
+    parser.add_argument(
         "--rca-prediction-key",
         type=str,
         default=None,
@@ -1267,6 +1279,10 @@ def main():
         score_hyper_params["rca_contrast_window"] = max(0, args.rca_contrast_window)
     if args.rca_contrast_weight is not None:
         score_hyper_params["rca_contrast_weight"] = max(0.0, args.rca_contrast_weight)
+    if args.rca_mechanism_residual_window is not None:
+        score_hyper_params["rca_mechanism_residual_window"] = max(0, args.rca_mechanism_residual_window)
+    if args.rca_mechanism_residual_weight is not None:
+        score_hyper_params["rca_mechanism_residual_weight"] = max(0.0, args.rca_mechanism_residual_weight)
     if args.rca_prediction_key is not None:
         score_hyper_params["rca_prediction_key"] = args.rca_prediction_key
     effective_switches = {

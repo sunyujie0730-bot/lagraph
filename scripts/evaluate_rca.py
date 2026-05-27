@@ -50,6 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--component-base-weight", type=float, default=1.0)
     parser.add_argument("--component-graph-weight", type=float, default=0.0)
     parser.add_argument("--component-mechanism-weight", type=float, default=0.0)
+    parser.add_argument("--component-mechanism-residual-weight", type=float, default=0.0)
     parser.add_argument("--component-contrast-weight", type=float, default=0.0)
     parser.add_argument(
         "--method-name",
@@ -160,6 +161,7 @@ def component_ranking_names(
     base_weight: float,
     graph_weight: float,
     mechanism_weight: float,
+    mechanism_residual_weight: float,
     contrast_weight: float,
 ) -> list[str]:
     channel_items = pred_event.get("channel_ranking", [])
@@ -173,6 +175,7 @@ def component_ranking_names(
                 base_weight * float(item.get("base_score", item.get("score", 0.0)))
                 + graph_weight * float(item.get("graph_score", 0.0))
                 + mechanism_weight * float(item.get("mechanism_score", 0.0))
+                + mechanism_residual_weight * float(item.get("mechanism_residual_score", 0.0))
                 + contrast_weight * float(item.get("contrast_score", 0.0))
             )
             scored.append((item["name"], score))
@@ -185,6 +188,7 @@ def component_ranking_names(
             base_weight * float(item.get("base_score", item.get("score", 0.0)))
             + graph_weight * float(item.get("graph_score", 0.0))
             + mechanism_weight * float(item.get("mechanism_score", 0.0))
+            + mechanism_residual_weight * float(item.get("mechanism_residual_score", 0.0))
             + contrast_weight * float(item.get("contrast_score", 0.0))
         )
         group_scores[group] = max(group_scores.get(group, float("-inf")), score)
@@ -256,6 +260,7 @@ def ranking_for_event(pred_event: dict | None, args: argparse.Namespace) -> list
             args.component_base_weight,
             args.component_graph_weight,
             args.component_mechanism_weight,
+            args.component_mechanism_residual_weight,
             args.component_contrast_weight,
         )
     return ranking_names(pred_event, args.scope)

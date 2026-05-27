@@ -92,6 +92,28 @@ def main() -> None:
                 "1.0",
             ],
         ),
+        (
+            "mechanism_residual_only",
+            [
+                "--score-mode",
+                "components",
+                "--component-base-weight",
+                "0.0",
+                "--component-mechanism-residual-weight",
+                "1.0",
+            ],
+        ),
+        (
+            "base_plus_mechanism_residual",
+            [
+                "--score-mode",
+                "components",
+                "--component-base-weight",
+                "1.0",
+                "--component-mechanism-residual-weight",
+                "1.0",
+            ],
+        ),
     ]
 
     event_sources = ["true", "predicted"] if args.event_source == "both" else [args.event_source]
