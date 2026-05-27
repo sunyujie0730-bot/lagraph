@@ -14,12 +14,19 @@ import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_META_DIR = PROJECT_ROOT / "dataset" / "anomaly_detect" / "root_cause_meta"
+DEFAULT_LABEL_REGISTRY = PROJECT_ROOT / "dataset" / "anomaly_detect" / "rca_labels.csv"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rca", type=Path, required=True, help="Path to *_rca.json exported by LaGraph.")
     parser.add_argument("--meta", type=Path, default=None, help="Root-cause metadata JSON. Defaults by series_name.")
+    parser.add_argument(
+        "--registry",
+        type=Path,
+        default=DEFAULT_LABEL_REGISTRY,
+        help="Unified RCA label registry CSV. Used by default when --meta is not set.",
+    )
     parser.add_argument("--scope", choices=["group", "channel"], default="group")
     parser.add_argument(
         "--event-source",
@@ -71,6 +78,43 @@ def parse_args() -> argparse.Namespace:
 def load_json(path: Path) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def decode_list(value) -> list[str]:
+    if pd.isna(value) or value == "":
+        return []
+    return [part for part in str(value).split(";") if part]
+
+
+def load_meta_from_registry(registry_path: Path, series_name: str) -> dict:
+    df = pd.read_csv(registry_path)
+    rows = df.loc[df["file"] == series_name].copy()
+    if rows.empty:
+        raise ValueError(f"{series_name} has no RCA labels in {registry_path}")
+
+    events = []
+    group_scope = set()
+    for _, row in rows.sort_values("event_id").iterrows():
+        root_groups = decode_list(row.get("subsystem_root", ""))
+        root_variables = decode_list(row.get("variable_roots", ""))
+        group_scope.update(root_groups)
+        events.append(
+            {
+                "event_id": int(row["event_id"]),
+                "start": int(row["event_start"]),
+                "end": int(row["event_end"]),
+                "root_groups": root_groups,
+                "root_variables": root_variables,
+            }
+        )
+
+    return {
+        "series_name": series_name,
+        "task": rows.iloc[0].get("task", ""),
+        "time_index": rows.iloc[0].get("time_index", "relative_to_test_segment"),
+        "group_scope": sorted(group_scope),
+        "events": events,
+    }
 
 
 def overlap(a_start: int, a_end: int, b_start: int, b_end: int) -> int:
@@ -244,11 +288,14 @@ def evaluate_ranking(
 def main() -> None:
     args = parse_args()
     rca = load_json(args.rca)
-    meta_path = args.meta
-    if meta_path is None:
+    if args.meta is not None:
+        meta = load_json(args.meta)
+    elif args.registry is not None and args.registry.exists():
+        meta = load_meta_from_registry(args.registry, rca["series_name"])
+    else:
         series_stem = Path(rca["series_name"]).stem
         meta_path = DEFAULT_META_DIR / f"{series_stem}.json"
-    meta = load_json(meta_path)
+        meta = load_json(meta_path)
     args._meta = meta
 
     root_key = "root_groups" if args.scope == "group" else "root_variables"

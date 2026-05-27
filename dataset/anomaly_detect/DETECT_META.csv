@@ -1,7 +1,5 @@
 file_name,length,dataset_name,size,freq,if_univariate,trend,seasonal,stationary,transition,shifting,correlation,train_lens,n_features,mode,fault_id,source_dataset,source_version,pattern
 swat.csv,449919,Multi,large,other,False,,,,,,,,,,,,,
-MSL.csv,132046,Multi,large,other,False,,,,,,,,,,,,,
-SMD.csv,1416825,,large,other,False,,,,,,,,,,,,,
 TE_MM_M1_d01.csv,14402,TE_multimode,large,other,False,,,,,,,5760,53,1,1,Multi-mode Tennessee Eastman,v1.0,mode_1_fault_01;normal_train_ratio=0.8
 TE_MM_M1_d06.csv,7913,TE_multimode,small,other,False,,,,,,,5760,53,1,6,Multi-mode Tennessee Eastman,v1.0,mode_1_fault_06;normal_train_ratio=0.8
 TE_MM_M1_d14.csv,14402,TE_multimode,large,other,False,,,,,,,5760,53,1,14,Multi-mode Tennessee Eastman,v1.0,mode_1_fault_14;normal_train_ratio=0.8
