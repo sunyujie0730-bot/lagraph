@@ -11,7 +11,7 @@ datasets that can support root-cause analysis (RCA).
 | HAI 21.03 test1-test5 | Main industrial RCA benchmark | Registered subsystem labels from `attack_P1/P2/P3` | Use for detection, predicted-event RCA, and graph faithfulness |
 | SWaT | Industrial validation | Attack-stage/tag mapping still missing | Keep detection; add RCA only after source labels are registered |
 | TE-MM | Process fault generalization | Fault-file to IDV mapping needs confirmation | Keep detection; add process-unit RCA only after mapping is verified |
-| WADI | Future industrial validation | Not downloaded yet | Add after official WaDi.A2 data and attack labels are available |
+| WADI A2 2019 | Industrial validation candidate | Raw data and attack-description PDF available; target mapping needs verification | Use `WADI_A2_2019_ds10.csv` for detection smoke tests; add RCA after attack descriptions are reconciled with converted event indices |
 | MSL | Removed from active suite | Weak RCA ground truth for this paper's claim | Do not use in main experiments |
 | SMD | Removed from active suite | Large and not aligned with current industrial RCA story | Do not use in main experiments |
 
@@ -70,6 +70,12 @@ must not be treated as ground truth.
 SWaT needs attack-to-stage or attack-to-tag mapping from the official attack
 list. Detection labels alone are insufficient for RCA metrics.
 
+WADI A2 includes binary attack labels and a one-page attack-description table.
+This is stronger than a pure detection label, but it still needs a manual
+event-to-target reconciliation before entering `rca_labels.csv`, because the
+CSV time formatting is ambiguous and one description row can cover multiple
+attack identifiers.
+
 ## Label Completion Workflow
 
 SWaT:
@@ -116,6 +122,12 @@ Generate SWaT and TE-MM label-source templates:
 ```powershell
 D:\Anaconda3\envs\lagraph5070\python.exe D:\la_v12\scripts\build_swat_rca_template.py
 D:\Anaconda3\envs\lagraph5070\python.exe D:\la_v12\scripts\build_te_rca_template.py
+```
+
+Convert the downloaded WADI A2 data into the project long format:
+
+```powershell
+D:\Anaconda3\envs\lagraph5070\python.exe D:\la_v12\scripts\convert_wadi_dataset.py --downsample 10
 ```
 
 Import verified label-source rows:

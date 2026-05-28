@@ -13,3 +13,4 @@ HAI_21_03_test2.csv,334802,HAI_21_03,large,other,False,,,,,,,216001,79,,,HAI,21.
 HAI_21_03_test3.csv,324002,HAI_21_03,large,other,False,,,,,,,216001,79,,,HAI,21.03,train=train1.csv.gz;test=test3.csv.gz;downsample=1
 HAI_21_03_test4.csv,255602,HAI_21_03,large,other,False,,,,,,,216001,79,,,HAI,21.03,train=train1.csv.gz;test=test4.csv.gz;downsample=1
 HAI_21_03_test5.csv,308402,HAI_21_03,large,other,False,,,,,,,216001,79,,,HAI,21.03,train=train1.csv.gz;test=test5.csv.gz;downsample=1
+WADI_A2_2019_ds10.csv,95739,WADI_A2,large,other,False,,,,,,,78458,127,,,WADI,A2_19_Nov_2019,normal=WADI_14days_new.csv;attack=WADI_attackdataLABLE.csv;downsample=10
