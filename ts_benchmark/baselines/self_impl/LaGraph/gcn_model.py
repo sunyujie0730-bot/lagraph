@@ -454,6 +454,8 @@ class SparseGCN(nn.Module):
                  use_channel_mechanism_score=False,
                  channel_mechanism_score_weight=0.1,
                  channel_mechanism_score_eps=1e-6,
+                 use_mechanism_coupled_decoder=False,
+                 mechanism_coupling_init=0.15,
                  use_state_aware_fusion=False,
                  state_aware_num_states=4,
                  state_aware_graph_gate_init=0.6,
@@ -508,6 +510,8 @@ class SparseGCN(nn.Module):
         self.use_channel_mechanism_score = bool(use_channel_mechanism_score)
         self.channel_mechanism_score_weight = float(channel_mechanism_score_weight)
         self.channel_mechanism_score_eps = float(channel_mechanism_score_eps)
+        self.use_mechanism_coupled_decoder = bool(use_mechanism_coupled_decoder)
+        self.mechanism_coupling_init = float(mechanism_coupling_init)
         self.use_state_aware_fusion = use_state_aware_fusion
         self.state_aware_num_states = int(state_aware_num_states)
         self.state_aware_graph_gate_init = float(state_aware_graph_gate_init)
@@ -646,6 +650,17 @@ class SparseGCN(nn.Module):
         self.residual_shortcut = nn.Linear(c_out, d_model, bias=True)
         self.residual_gate = nn.Parameter(torch.tensor(0.1))
 
+        coupling_init = min(max(float(mechanism_coupling_init), 1e-3), 1.0 - 1e-3)
+        self.mechanism_coupling_logit = nn.Parameter(
+            torch.tensor(float(np.log(coupling_init / (1.0 - coupling_init))))
+        )
+        self.mechanism_context_fusion = nn.Sequential(
+            nn.Linear(c_out * 3, c_out),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(c_out, c_out),
+        )
+
         # === ★ P0: Dual-Path VQ Bottleneck (旁路模式) ===
         self.vq_bottleneck = VQBottleneck(
             dim=c_out,
@@ -735,6 +750,8 @@ class SparseGCN(nn.Module):
         self._set_trainable(self.synthetic_anomaly_head, self.use_synthetic_anomaly_head)
         self._set_trainable(self.vq_bottleneck, self.use_vq_bypass)
         self._set_trainable(self.multi_scale_scorer, self.use_multi_scale_scorer)
+        self._set_trainable(self.mechanism_context_fusion, self.use_mechanism_coupled_decoder)
+        self.mechanism_coupling_logit.requires_grad = self.use_mechanism_coupled_decoder
 
     def _parallel_fuse_graphs(self, resid, resid_channel, resid_temporal):
         gate_input = torch.cat(
@@ -839,13 +856,17 @@ class SparseGCN(nn.Module):
         )
         return (mechanism_score - center).clamp_min(0.0) / scale.clamp_min(self.channel_mechanism_score_eps)
 
-    def _channel_mechanism(self, resid, A_adaptive):
-        _, _, C = resid.shape
-        eye = torch.eye(C, device=resid.device, dtype=resid.dtype).unsqueeze(0)
-        A_mech = A_adaptive.to(dtype=resid.dtype) * (1.0 - eye)
+    def _graph_neighbor_context(self, feat, A_adaptive):
+        _, _, C = feat.shape
+        eye = torch.eye(C, device=feat.device, dtype=feat.dtype).unsqueeze(0)
+        A_mech = A_adaptive.to(dtype=feat.dtype) * (1.0 - eye)
         col_sum = A_mech.sum(dim=1, keepdim=True).clamp_min(1e-8)
         A_mech = A_mech / col_sum
-        pred = torch.bmm(resid, A_mech)
+        return torch.bmm(feat, A_mech)
+
+    def _channel_mechanism(self, resid, A_adaptive):
+        _, _, C = resid.shape
+        pred = self._graph_neighbor_context(resid, A_adaptive)
         err = torch.abs(resid - pred)
         k = min(max(1, self.score_topk_k or self.multi_scale_scorer.topk_k), C)
         score = err.topk(k=k, dim=-1, largest=True, sorted=False)[0].mean(dim=-1)
@@ -902,6 +923,7 @@ class SparseGCN(nn.Module):
         channel_mechanism_score = None
         channel_mechanism_loss = None
         channel_mechanism_error = None
+        mechanism_coupling_weight = None
 
         if self.use_lagged_causal_graph and self.lagged_causal_graph is not None:
             causal_input = resid.detach() if self.causal_detach_backbone else resid
@@ -959,6 +981,21 @@ class SparseGCN(nn.Module):
                 A_temp = None
             stage1_feat = resid_temp  # (B, L, C)
 
+        if self.use_mechanism_coupled_decoder and self.use_channel_graph:
+            mechanism_context = self._graph_neighbor_context(stage1_feat, A_adaptive)
+            mechanism_delta = self.mechanism_context_fusion(
+                torch.cat(
+                    [
+                        stage1_feat,
+                        mechanism_context,
+                        (stage1_feat - mechanism_context).abs(),
+                    ],
+                    dim=-1,
+                )
+            )
+            mechanism_coupling_weight = torch.sigmoid(self.mechanism_coupling_logit)
+            stage1_feat = stage1_feat + mechanism_coupling_weight * mechanism_delta
+
         # ★ P0: Dual-Path VQ — 旁路模式
         #   VQ 不参与重建路径，仅计算 vq_dist 和 vq_loss
         #   continuous_feat = stage1_feat (原始连续特征)
@@ -1010,6 +1047,8 @@ class SparseGCN(nn.Module):
             aux_losses['channel_mechanism_error'] = channel_mechanism_error
         if channel_mechanism_loss is not None:
             aux_losses['channel_mechanism_loss'] = channel_mechanism_loss
+        if mechanism_coupling_weight is not None:
+            aux_losses['mechanism_coupling_weight'] = mechanism_coupling_weight.detach()
         if synthetic_logits is not None:
             aux_losses['synthetic_logits'] = synthetic_logits
         if graph_fusion_gate is not None:
