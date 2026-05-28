@@ -1,20 +1,7 @@
 file_name,length,dataset_name,size,freq,if_univariate,trend,seasonal,stationary,transition,shifting,correlation,train_lens,n_features,mode,fault_id,source_dataset,source_version,pattern
-swat.csv,449919,Multi,large,other,False,,,,,,,,,,,,,
-TE_MM_M1_d01.csv,14402,TE_multimode,large,other,False,,,,,,,5760,53,1,1,Multi-mode Tennessee Eastman,v1.0,mode_1_fault_01;normal_train_ratio=0.8
-TE_MM_M1_d06.csv,7913,TE_multimode,small,other,False,,,,,,,5760,53,1,6,Multi-mode Tennessee Eastman,v1.0,mode_1_fault_06;normal_train_ratio=0.8
-TE_MM_M1_d14.csv,14402,TE_multimode,large,other,False,,,,,,,5760,53,1,14,Multi-mode Tennessee Eastman,v1.0,mode_1_fault_14;normal_train_ratio=0.8
-TE_MM_M1_d21.csv,14402,TE_multimode,large,other,False,,,,,,,5760,53,1,21,Multi-mode Tennessee Eastman,v1.0,mode_1_fault_21;normal_train_ratio=0.8
-TE_MM_M2_d01.csv,14402,TE_multimode,large,other,False,,,,,,,5760,53,2,1,Multi-mode Tennessee Eastman,v1.0,mode_2_fault_01;normal_train_ratio=0.8
-TE_MM_M2_d06.csv,7878,TE_multimode,small,other,False,,,,,,,5760,53,2,6,Multi-mode Tennessee Eastman,v1.0,mode_2_fault_06;normal_train_ratio=0.8
-TE_MM_M2_d14.csv,14402,TE_multimode,large,other,False,,,,,,,5760,53,2,14,Multi-mode Tennessee Eastman,v1.0,mode_2_fault_14;normal_train_ratio=0.8
-TE_MM_M2_d21.csv,14402,TE_multimode,large,other,False,,,,,,,5760,53,2,21,Multi-mode Tennessee Eastman,v1.0,mode_2_fault_21;normal_train_ratio=0.8
 HAI_21_03_test1.csv,259202,HAI_21_03,large,other,False,,,,,,,216001,79,,,HAI,21.03,train=train1.csv.gz;test=test1.csv.gz;downsample=1
 HAI_21_03_test2.csv,334802,HAI_21_03,large,other,False,,,,,,,216001,79,,,HAI,21.03,train=train1.csv.gz;test=test2.csv.gz;downsample=1
 HAI_21_03_test3.csv,324002,HAI_21_03,large,other,False,,,,,,,216001,79,,,HAI,21.03,train=train1.csv.gz;test=test3.csv.gz;downsample=1
 HAI_21_03_test4.csv,255602,HAI_21_03,large,other,False,,,,,,,216001,79,,,HAI,21.03,train=train1.csv.gz;test=test4.csv.gz;downsample=1
 HAI_21_03_test5.csv,308402,HAI_21_03,large,other,False,,,,,,,216001,79,,,HAI,21.03,train=train1.csv.gz;test=test5.csv.gz;downsample=1
-WADI_A2_2019_ds10.csv,95739,WADI_A2,large,other,False,,,,,,,78458,127,,,WADI,A2_19_Nov_2019,normal=WADI_14days_new.csv;attack=WADI_attackdataLABLE.csv;downsample=10
-WADI_A2_2019_ds10_stable.csv,95739,WADI_A2,large,other,False,,,,,,,78458,93,,,WADI,A2_19_Nov_2019,normal=WADI_14days_new.csv;attack=WADI_attackdataLABLE.csv;downsample=10;min_train_std=0.0001;drop_columns=
-WADI_A2_2019_ds10_stable_drop2B002.csv,95739,WADI_A2,large,other,False,,,,,,,78458,92,,,WADI,A2_19_Nov_2019,normal=WADI_14days_new.csv;attack=WADI_attackdataLABLE.csv;downsample=10;min_train_std=0.0001;drop_columns=2B_AIT_002_PV
-SWAT_A6_Dec2019_process.csv,13201,SWAT_A6,small,second,False,,,,,,,8700,81,,,SWaT,A6_Dec_2019,label=process_disrupt_sensor_actuator_only;train=before_12:30:00;source=Log.docx
 SWAT_A1A2_Physical_v1.csv,944919,SWAT_A1A2,large,second,False,,,,,,,495000,51,,,SWaT A1/A2,Dec 2015 Physical Normal_v1+Attack_v0,normal_v1_train+attack_v0_test;downsample=1

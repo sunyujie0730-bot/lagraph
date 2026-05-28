@@ -12,6 +12,7 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REGISTRY = PROJECT_ROOT / "dataset" / "anomaly_detect" / "rca_labels.csv"
 DEFAULT_LABEL_SOURCE_DIR = PROJECT_ROOT / "dataset" / "anomaly_detect" / "label_sources"
+DEFAULT_DATA_DIR = PROJECT_ROOT / "dataset" / "anomaly_detect" / "data"
 
 
 def parse_args() -> argparse.Namespace:
@@ -46,6 +47,8 @@ def rows_from_verified_sources(source_dir: Path) -> list[dict]:
         verified = frame.loc[frame["label_status"].astype(str).str.lower().eq("verified")].copy()
         for _, row in verified.iterrows():
             file_name = row["file"]
+            if not (DEFAULT_DATA_DIR / str(file_name)).exists():
+                continue
             subsystem_root = normalize_roots(row.get("subsystem_root", ""))
             variable_roots = normalize_roots(row.get("variable_roots", ""))
             if not subsystem_root and not variable_roots:
@@ -69,10 +72,21 @@ def rows_from_verified_sources(source_dir: Path) -> list[dict]:
     return rows
 
 
+def filter_rows_by_metadata(rows: list[dict], registry_path: Path) -> list[dict]:
+    metadata_path = registry_path.parent / "DETECT_META.csv"
+    if not metadata_path.exists():
+        return rows
+    metadata = pd.read_csv(metadata_path)
+    if "file_name" not in metadata.columns:
+        return rows
+    available_files = set(metadata["file_name"].astype(str))
+    return [row for row in rows if row["file"] in available_files]
+
+
 def main() -> None:
     args = parse_args()
     registry = pd.read_csv(args.registry) if args.registry.exists() else pd.DataFrame()
-    new_rows = rows_from_verified_sources(args.source_dir)
+    new_rows = filter_rows_by_metadata(rows_from_verified_sources(args.source_dir), args.registry)
     if not new_rows:
         print("No verified RCA source rows found; registry unchanged.")
         return
