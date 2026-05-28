@@ -33,6 +33,7 @@ def rows_from_verified_sources(source_dir: Path) -> list[dict]:
     source_files = [
         source_dir / "swat_attack_targets_template.csv",
         source_dir / "te_mm_fault_mapping_template.csv",
+        source_dir / "wadi_attack_targets_template.csv",
     ]
     for source_path in source_files:
         if not source_path.exists():

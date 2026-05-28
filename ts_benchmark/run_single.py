@@ -133,6 +133,23 @@ def main():
         help="每个 DataLoader worker 预取 batch 数 (default: 2; num_workers=0 时自动忽略)",
     )
     parser.add_argument(
+        "--robust-input-preprocess",
+        action="store_true",
+        help="Clip each channel by normal-training quantiles before StandardScaler.",
+    )
+    parser.add_argument(
+        "--input-clip-lower-quantile",
+        type=float,
+        default=None,
+        help="Lower quantile for --robust-input-preprocess, e.g. 0.001.",
+    )
+    parser.add_argument(
+        "--input-clip-upper-quantile",
+        type=float,
+        default=None,
+        help="Upper quantile for --robust-input-preprocess, e.g. 0.999.",
+    )
+    parser.add_argument(
         "--arch-profile",
         choices=[
             "full",
@@ -1285,6 +1302,18 @@ def main():
         score_hyper_params["rca_mechanism_residual_weight"] = max(0.0, args.rca_mechanism_residual_weight)
     if args.rca_prediction_key is not None:
         score_hyper_params["rca_prediction_key"] = args.rca_prediction_key
+    if args.robust_input_preprocess:
+        score_hyper_params["use_robust_input_preprocess"] = True
+    if args.input_clip_lower_quantile is not None:
+        score_hyper_params["use_robust_input_preprocess"] = True
+        score_hyper_params["input_clip_lower_quantile"] = min(
+            max(float(args.input_clip_lower_quantile), 0.0), 0.5
+        )
+    if args.input_clip_upper_quantile is not None:
+        score_hyper_params["use_robust_input_preprocess"] = True
+        score_hyper_params["input_clip_upper_quantile"] = min(
+            max(float(args.input_clip_upper_quantile), 0.5), 1.0
+        )
     effective_switches = {
         **arch_switches,
         **vq_hyper_params,

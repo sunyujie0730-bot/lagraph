@@ -101,6 +101,8 @@ Generated source templates:
 D:\la_v12\dataset\anomaly_detect\label_sources\swat_attack_targets_template.csv
 D:\la_v12\dataset\anomaly_detect\label_sources\swat_tag_stage_map.csv
 D:\la_v12\dataset\anomaly_detect\label_sources\te_mm_fault_mapping_template.csv
+D:\la_v12\dataset\anomaly_detect\label_sources\wadi_attack_targets_template.csv
+D:\la_v12\dataset\anomaly_detect\label_sources\wadi_tag_stage_map.csv
 ```
 
 ## Commands
@@ -128,6 +130,12 @@ Convert the downloaded WADI A2 data into the project long format:
 
 ```powershell
 D:\Anaconda3\envs\lagraph5070\python.exe D:\la_v12\scripts\convert_wadi_dataset.py --downsample 10
+```
+
+Generate the WADI A2 RCA source template:
+
+```powershell
+D:\Anaconda3\envs\lagraph5070\python.exe D:\la_v12\scripts\build_wadi_rca_template.py
 ```
 
 Import verified label-source rows:

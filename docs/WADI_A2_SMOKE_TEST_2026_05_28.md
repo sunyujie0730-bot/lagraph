@@ -16,6 +16,7 @@ downsampled `ds10` version.
 | `WADI_A2_2019_ds10.csv` | 127 | Official normal + attack files converted to LaGraph long format |
 | `WADI_A2_2019_ds10_stable.csv` | 93 | Drops normal-training near-zero-variance channels (`std < 1e-4`) |
 | `WADI_A2_2019_ds10_stable_drop2B002.csv` | 92 | Stable version plus drops `2B_AIT_002_PV` |
+| `WADI_A2_2019_ds10.csv` + robust input clipping | 127 | Keeps all variables and clips each channel by normal-training quantiles before standardization |
 
 All variants keep the same time length:
 
@@ -73,6 +74,12 @@ Best rows are selected separately by raw F1, adjusted F1, and affiliation F.
 | drop `2B_AIT_002_PV` | F1 | 5.0 | 0.3139 | 0.2441 | 0.4393 | 0.5578 | 0.7079 | 0.5633 | 0.9527 |
 | drop `2B_AIT_002_PV` | adjusted F1 | 2.0 | 0.2987 | 0.3393 | 0.2668 | 0.6473 | 0.6551 | 0.5528 | 0.8038 |
 | drop `2B_AIT_002_PV` | affiliation F | 15.0 | 0.2081 | 0.1257 | 0.6038 | 0.3011 | 0.7117 | 0.5572 | 0.9847 |
+| robust clip `q=0.001/0.999` | F1 | 2.0 | 0.2731 | 0.2916 | 0.2568 | 0.7079 | 0.7132 | 0.5822 | 0.9204 |
+| robust clip `q=0.001/0.999` | adjusted F1 | 0.5 | 0.2298 | 0.5625 | 0.1444 | 0.7326 | 0.6833 | 0.6088 | 0.7786 |
+| robust clip `q=0.001/0.999` | affiliation F | 2.0 | 0.2731 | 0.2916 | 0.2568 | 0.7079 | 0.7132 | 0.5822 | 0.9204 |
+| robust clip `q=0.01/0.99` | F1 | 5.0 | 0.3481 | 0.3135 | 0.3912 | 0.6479 | 0.7098 | 0.5718 | 0.9355 |
+| robust clip `q=0.01/0.99` | adjusted F1 | 1.0 | 0.2461 | 0.4230 | 0.1735 | 0.7589 | 0.7392 | 0.6434 | 0.8686 |
+| robust clip `q=0.01/0.99` | affiliation F | 1.0 | 0.2461 | 0.4230 | 0.1735 | 0.7589 | 0.7392 | 0.6434 | 0.8686 |
 
 ## Interpretation
 
@@ -90,15 +97,35 @@ Near-zero-variance filtering alone does not help, so the dominant issue is not
 constant channels. The dominant issue is the single high-scale normal-label
 shift in `2B_AIT_002_PV`.
 
+The stronger, paper-defensible result is that a generic train-only robust
+preprocessing rule works without deleting the suspicious variable:
+
+```text
+raw best F1:                    0.1271
+manual-drop best F1:             0.3139
+robust q=0.01/0.99 best F1:      0.3481
+
+manual-drop best adjusted F1:    0.6473
+robust q=0.01/0.99 adjusted F1:  0.7589
+
+raw best affiliation F:          0.7432
+robust q=0.01/0.99 affiliation F: 0.7392
+```
+
+This supports a general industrial-sensor robustness argument: train-time
+normal quantile clipping can suppress sensor scale glitches while preserving
+event-level detection quality.
+
 ## Paper-Relevant Decision
 
 WADI A2 should not be introduced as a final benchmark until the preprocessing
 rule is fixed and justified. A defensible route is:
 
 1. Keep raw WADI A2 as a data-quality diagnostic.
-2. Use the stable/drop version only if the paper explicitly reports the sensor
-   exclusion rule and explains it as an official-data scale inconsistency.
-3. Prefer WADI for robustness and RCA validation after attack target labels are
+2. Prefer robust input clipping over manual channel deletion, because it keeps
+   all variables and is dataset-agnostic.
+3. Use the stable/drop version only as a diagnostic, not as the main benchmark.
+4. Prefer WADI for robustness and RCA validation after attack target labels are
    reconciled from `table_WADI.pdf`.
 
 The current evidence supports using WADI as a valuable industrial stress test,

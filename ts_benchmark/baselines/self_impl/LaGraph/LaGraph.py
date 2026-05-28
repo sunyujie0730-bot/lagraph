@@ -137,6 +137,11 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "state_aware_residual_init": 0.15,
     "lambda_state_balance": 0.0,
     "lambda_state_confidence": 0.0,
+    # --- robust industrial sensor preprocessing ---
+    "use_robust_input_preprocess": False,
+    "input_clip_lower_quantile": 0.001,
+    "input_clip_upper_quantile": 0.999,
+    "input_clip_eps": 1e-12,
     # --- RTX 5070 single-GPU training path ---
     "dataloader_num_workers": 2,
     "dataloader_prefetch_factor": 2,
@@ -790,6 +795,8 @@ class LaGraph:
         super(LaGraph, self).__init__()
         self.config = TransformerConfig(**kwargs)
         self.scaler = StandardScaler()
+        self._input_clip_lower = None
+        self._input_clip_upper = None
         self.win_size = self.config.win_size
 
         # GPU 检测
@@ -858,6 +865,45 @@ class LaGraph:
 
     def __repr__(self) -> str:
         return "LaGraph-v11.4"
+
+    def _fit_input_preprocessor(self, train_frame: pd.DataFrame) -> None:
+        values = train_frame.values.astype(np.float64, copy=False)
+        if getattr(self.config, "use_robust_input_preprocess", False):
+            lower_q = float(getattr(self.config, "input_clip_lower_quantile", 0.001))
+            upper_q = float(getattr(self.config, "input_clip_upper_quantile", 0.999))
+            lower_q = min(max(lower_q, 0.0), 0.5)
+            upper_q = min(max(upper_q, 0.5), 1.0)
+            if lower_q >= upper_q:
+                raise ValueError(
+                    "input_clip_lower_quantile must be smaller than input_clip_upper_quantile"
+                )
+            self._input_clip_lower = np.nanquantile(values, lower_q, axis=0)
+            self._input_clip_upper = np.nanquantile(values, upper_q, axis=0)
+            eps = float(getattr(self.config, "input_clip_eps", 1e-12) or 1e-12)
+            invalid = (self._input_clip_upper - self._input_clip_lower) < eps
+            if np.any(invalid):
+                self._input_clip_lower[invalid] = -np.inf
+                self._input_clip_upper[invalid] = np.inf
+            fit_values = np.clip(values, self._input_clip_lower, self._input_clip_upper)
+            print(
+                "\n  [InputPreprocess] Robust channel clipping enabled: "
+                f"q=({lower_q:.4f}, {upper_q:.4f}), clipped_constant_channels={int(np.sum(invalid))}"
+            )
+        else:
+            self._input_clip_lower = None
+            self._input_clip_upper = None
+            fit_values = values
+        self.scaler.fit(fit_values)
+
+    def _transform_input_frame(self, frame: pd.DataFrame) -> pd.DataFrame:
+        values = frame.values.astype(np.float64, copy=False)
+        if self._input_clip_lower is not None and self._input_clip_upper is not None:
+            values = np.clip(values, self._input_clip_lower, self._input_clip_upper)
+        return pd.DataFrame(
+            self.scaler.transform(values),
+            columns=frame.columns,
+            index=frame.index,
+        )
 
     def _get_raw_model(self):
         return self.model
@@ -1296,10 +1342,7 @@ class LaGraph:
         self.model.to(self.device)
         self.model.eval()
 
-        scaled_data = pd.DataFrame(
-            self.scaler.transform(train_data.values),
-            columns=train_data.columns, index=train_data.index,
-        )
+        scaled_data = self._transform_input_frame(train_data)
         loader = anomaly_detection_data_provider(
             scaled_data,
             batch_size=min(self.config.batch_size, 64),
@@ -1347,10 +1390,7 @@ class LaGraph:
         self.model.to(self.device)
         self.model.eval()
 
-        scaled_data = pd.DataFrame(
-            self.scaler.transform(train_data.values),
-            columns=train_data.columns, index=train_data.index,
-        )
+        scaled_data = self._transform_input_frame(train_data)
 
         def _loader():
             return anomaly_detection_data_provider(
@@ -1412,10 +1452,7 @@ class LaGraph:
         self.model.to(self.device)
         self.model.eval()
 
-        scaled_data = pd.DataFrame(
-            self.scaler.transform(train_data.values),
-            columns=train_data.columns, index=train_data.index,
-        )
+        scaled_data = self._transform_input_frame(train_data)
         loader = anomaly_detection_data_provider(
             scaled_data,
             batch_size=min(self.config.batch_size, 64),
@@ -1463,10 +1500,7 @@ class LaGraph:
         self.model.to(self.device)
         self.model.eval()
 
-        scaled_data = pd.DataFrame(
-            self.scaler.transform(train_data.values),
-            columns=train_data.columns, index=train_data.index,
-        )
+        scaled_data = self._transform_input_frame(train_data)
         loader = anomaly_detection_data_provider(
             scaled_data,
             batch_size=min(self.config.batch_size, 64),
@@ -1513,10 +1547,7 @@ class LaGraph:
         self.model.to(self.device)
         self.model.eval()
 
-        scaled_data = pd.DataFrame(
-            self.scaler.transform(train_data.values),
-            columns=train_data.columns, index=train_data.index,
-        )
+        scaled_data = self._transform_input_frame(train_data)
         loader = anomaly_detection_data_provider(
             scaled_data,
             batch_size=min(self.config.batch_size, 64),
@@ -1592,20 +1623,12 @@ class LaGraph:
         self._destroy_model_and_clean_cuda()
 
         train_data_value, valid_data = train_val_split(train_data, 0.8, None)
-        self.scaler.fit(train_data_value.values)
+        self._fit_input_preprocessor(train_data_value)
 
         self._train_raw = train_data_value.copy()
 
-        train_scaled = pd.DataFrame(
-            self.scaler.transform(train_data_value.values),
-            columns=train_data_value.columns,
-            index=train_data_value.index,
-        )
-        valid_scaled = pd.DataFrame(
-            self.scaler.transform(valid_data.values),
-            columns=valid_data.columns,
-            index=valid_data.index,
-        )
+        train_scaled = self._transform_input_frame(train_data_value)
+        valid_scaled = self._transform_input_frame(valid_data)
 
         if self.multi_gpu_requested:
             print(
@@ -2514,10 +2537,7 @@ class LaGraph:
             elif free_gb < 4.0:
                 eval_batch_size = min(eval_batch_size, 48)
 
-        scaled_data = pd.DataFrame(
-            self.scaler.transform(train.values),
-            columns=train.columns, index=train.index,
-        )
+        scaled_data = self._transform_input_frame(train)
         total_length = len(scaled_data)
 
         self.model.eval()
@@ -2572,10 +2592,7 @@ class LaGraph:
             elif free_gb < 4.0:
                 eval_batch_size = min(eval_batch_size, 48)
 
-        scaled_test = pd.DataFrame(
-            self.scaler.transform(test_data.values),
-            columns=test_data.columns, index=test_data.index,
-        )
+        scaled_test = self._transform_input_frame(test_data)
         total_length = len(scaled_test)
 
         self.model.eval()
