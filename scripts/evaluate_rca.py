@@ -7,6 +7,7 @@ import argparse
 import json
 import math
 import random
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -145,14 +146,25 @@ def match_pred_event(meta_event: dict, pred_events: list[dict]) -> tuple[dict | 
 
 
 def root_cause_group_name(feature_name: str) -> str:
-    if isinstance(feature_name, str) and len(feature_name) >= 2 and feature_name[0] == "P" and feature_name[1].isdigit():
-        return feature_name.split("_", 1)[0]
-    return feature_name
+    if not isinstance(feature_name, str):
+        return feature_name
+    name = feature_name.strip()
+    if len(name) >= 2 and name[0] == "P" and name[1].isdigit():
+        return name.split("_", 1)[0]
+    if re.match(r"^[123]_", name):
+        return f"WADI_P{name[0]}"
+    match = re.search(r"(\d{3})", name)
+    if match:
+        return f"P{match.group(1)[0]}"
+    return name
 
 
 def ranking_names(pred_event: dict, scope: str) -> list[str]:
     key = "group_ranking" if scope == "group" else "channel_ranking"
-    return [item["name"] for item in pred_event.get(key, [])]
+    names = [item["name"] for item in pred_event.get(key, [])]
+    if scope == "group":
+        return list(dict.fromkeys(root_cause_group_name(name) for name in names))
+    return names
 
 
 def component_ranking_names(
