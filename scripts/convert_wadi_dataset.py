@@ -64,6 +64,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-name", default=None)
     parser.add_argument("--downsample", type=int, default=10)
     parser.add_argument("--chunk-size", type=int, default=100000)
+    parser.add_argument(
+        "--min-train-std",
+        type=float,
+        default=0.0,
+        help="Drop feature columns whose normal-training standard deviation is below this value.",
+    )
+    parser.add_argument(
+        "--drop-columns",
+        nargs="*",
+        default=[],
+        help="Additional feature columns to exclude after reading the official WADI files.",
+    )
     return parser.parse_args()
 
 
@@ -152,6 +164,29 @@ def write_long_csv(path: Path, values: pd.DataFrame, labels: np.ndarray) -> None
     label_frame.to_csv(path, mode="a", index=False, header=False)
 
 
+def filter_feature_columns(
+    normal_values: pd.DataFrame,
+    attack_values: pd.DataFrame,
+    *,
+    min_train_std: float,
+    drop_columns: list[str],
+) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+    selected = list(normal_values.columns)
+    if min_train_std > 0:
+        train_std = normal_values.std()
+        selected = [column for column in selected if float(train_std[column]) >= min_train_std]
+
+    explicit_drop = set(drop_columns)
+    missing_drop = sorted(explicit_drop.difference(normal_values.columns))
+    if missing_drop:
+        raise ValueError(f"Requested WADI drop columns are missing: {missing_drop}")
+    selected = [column for column in selected if column not in explicit_drop]
+
+    if not selected:
+        raise ValueError("No WADI feature columns remain after filtering")
+    return normal_values.loc[:, selected], attack_values.loc[:, selected], selected
+
+
 def update_metadata(metadata_path: Path, row: dict) -> None:
     if metadata_path.exists():
         metadata = pd.read_csv(metadata_path)
@@ -206,6 +241,12 @@ def main() -> None:
         chunk_size=args.chunk_size,
         attack=True,
     )
+    normal_values, attack_values, selected_columns = filter_feature_columns(
+        normal_values,
+        attack_values,
+        min_train_std=args.min_train_std,
+        drop_columns=args.drop_columns,
+    )
 
     values = pd.concat([normal_values, attack_values], ignore_index=True)
     labels = np.concatenate([normal_labels, attack_labels])
@@ -225,10 +266,13 @@ def main() -> None:
         "shifting": "",
         "correlation": "",
         "train_lens": int(len(normal_values)),
-        "n_features": int(len(feature_columns)),
+        "n_features": int(len(selected_columns)),
         "source_dataset": "WADI",
         "source_version": "A2_19_Nov_2019",
-        "pattern": f"normal={NORMAL_FILE};attack={ATTACK_FILE};downsample={args.downsample}",
+        "pattern": (
+            f"normal={NORMAL_FILE};attack={ATTACK_FILE};downsample={args.downsample};"
+            f"min_train_std={args.min_train_std};drop_columns={'+'.join(args.drop_columns)}"
+        ),
     }
     update_metadata(metadata_path, row)
 
