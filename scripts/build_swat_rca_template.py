@@ -14,6 +14,7 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SWAT = PROJECT_ROOT / "dataset" / "anomaly_detect" / "data" / "swat.csv"
 DEFAULT_OUT_DIR = PROJECT_ROOT / "dataset" / "anomaly_detect" / "label_sources"
+DEFAULT_METADATA = PROJECT_ROOT / "dataset" / "anomaly_detect" / "DETECT_META.csv"
 DEFAULT_ATTACK_LIST = (
     PROJECT_ROOT
     / "dataset"
@@ -30,8 +31,11 @@ SWAT_TEST_START = pd.Timestamp("2015-12-28 10:00:00")
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--swat", type=Path, default=DEFAULT_SWAT)
+    parser.add_argument("--file-name", default=None)
+    parser.add_argument("--metadata", type=Path, default=DEFAULT_METADATA)
     parser.add_argument("--attack-list", type=Path, default=DEFAULT_ATTACK_LIST)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
+    parser.add_argument("--output-name", default=None)
     parser.add_argument("--chunk-size", type=int, default=1_000_000)
     return parser.parse_args()
 
@@ -194,15 +198,37 @@ def read_long_swat(path: Path, chunk_size: int) -> tuple[list[int], list[str]]:
     return labels, sorted(feature_tags)
 
 
+def read_train_lens(metadata_path: Path, file_name: str) -> int:
+    if not metadata_path.exists():
+        return 0
+    metadata = pd.read_csv(metadata_path)
+    rows = metadata.loc[metadata["file_name"] == file_name]
+    if rows.empty or "train_lens" not in rows.columns:
+        return 0
+    value = rows.iloc[0]["train_lens"]
+    if pd.isna(value):
+        return 0
+    return int(value)
+
+
 def main() -> None:
     args = parse_args()
+    file_name = args.file_name or args.swat.name
+    train_lens = read_train_lens(args.metadata, file_name)
     labels, feature_tags = read_long_swat(args.swat, args.chunk_size)
-    segments = binary_segments(labels)
+    segments = [
+        (start - train_lens, end - train_lens)
+        for start, end in binary_segments(labels)
+        if end >= train_lens
+    ]
+    if any(start < 0 for start, _ in segments):
+        raise ValueError(f"{file_name} has an anomaly segment before train_lens={train_lens}")
     feature_tag_set = set(feature_tags)
     official_attacks = read_official_attacks(args.attack_list, feature_tag_set)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    attack_template = args.out_dir / "swat_attack_targets_template.csv"
+    output_name = args.output_name or "swat_attack_targets_template.csv"
+    attack_template = args.out_dir / output_name
     stage_map = args.out_dir / "swat_tag_stage_map.csv"
 
     rows = []
@@ -221,7 +247,7 @@ def main() -> None:
             }
         rows.append(
             {
-                "file": "swat.csv",
+                "file": file_name,
                 "event_id": idx,
                 "event_start": start,
                 "event_end": end,

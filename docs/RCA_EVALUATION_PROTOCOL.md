@@ -9,7 +9,8 @@ datasets that can support root-cause analysis (RCA).
 | Dataset | Current role | RCA status | Decision |
 |---|---|---|---|
 | HAI 21.03 test1-test5 | Main industrial RCA benchmark | Registered subsystem labels from `attack_P1/P2/P3` | Use for detection, predicted-event RCA, and graph faithfulness |
-| SWaT A1/A2 (`swat.csv`) | Industrial validation and RCA benchmark | 34 verified events reconciled from `List_of_attacks_Final.xlsx`; 1 binary-label segment has no overlapping physical-attack row | Use for detection, predicted-event RCA, and variable/subsystem RCA; exclude the `needs_review` segment from strict RCA metrics |
+| SWaT A1/A2 (`swat.csv`) | Legacy attack-only industrial validation | 34 verified events reconciled from `List_of_attacks_Final.xlsx`; 1 binary-label segment has no overlapping physical-attack row | Keep for comparability with earlier experiments |
+| SWaT A1/A2 Physical (`SWAT_A1A2_Physical_v1.csv`) | Main SWaT industrial detection+RCA benchmark | Official `Normal_v1` training segment plus `Attack_v0` test segment; 34 verified RCA events | Prefer for new SWaT experiments because it preserves the official normal/attack split |
 | SWaT A6 2019 | Supplemental process-disruption stress test | Log-derived process attack intervals available; target tags are not specified | Use only as supplemental detection/robustness evidence, not as verified RCA benchmark |
 | TE-MM | Process fault generalization | Fault-file to IDV mapping needs confirmation | Keep detection; add process-unit RCA only after mapping is verified |
 | WADI A2 2019 | Industrial validation candidate | Raw data and attack-description PDF available; target mapping needs verification | Use `WADI_A2_2019_ds10.csv` for detection smoke tests; add RCA after attack descriptions are reconciled with converted event indices |
@@ -68,12 +69,15 @@ to `IDV(28)-(01)`, so file number and disturbance ID may be reversed. Until this
 is verified from the generation code or source documentation, TE-MM RCA labels
 must not be treated as ground truth.
 
-SWaT A1/A2 now uses the official `List_of_attacks_Final.xlsx` attack list copied
-under `dataset/anomaly_detect/data/raw/SWAT/SWaT.A1_A2_Dec_2015/`. The processed
-`swat.csv` binary-label segments are aligned against the official attack start
-and end times. Verified overlapping rows enter `rca_labels.csv`; one segment at
-relative index `73801-74522` currently has no overlapping physical-attack row
-and remains `needs_review`.
+SWaT A1/A2 now uses the official physical files and attack list copied under
+`dataset/anomaly_detect/data/raw/SWAT/SWaT.A1_A2_Dec_2015/`. The reproducible
+converter `scripts/convert_swat_a12_dataset.py` builds
+`SWAT_A1A2_Physical_v1.csv` from `Physical/SWaT_Dataset_Normal_v1.xlsx` and
+`Physical/SWaT_Dataset_Attack_v0.xlsx`, with `train_lens=495000`. The legacy
+`swat.csv` remains available and corresponds to the official attack segment
+only. Both SWaT variants align binary-label segments against
+`List_of_attacks_Final.xlsx`; one segment around relative index `73800-74522`
+currently has no overlapping physical-attack row and remains `needs_review`.
 
 SWaT A6 2019 is different from the common SWaT A1/A2 benchmark. Its `Log.docx`
 contains cyber attack phases and five "Disrupt Sensor and Actuator" intervals.
@@ -139,7 +143,14 @@ Generate SWaT and TE-MM label-source templates:
 
 ```powershell
 D:\Anaconda3\envs\lagraph5070\python.exe D:\la_v12\scripts\build_swat_rca_template.py
+D:\Anaconda3\envs\lagraph5070\python.exe D:\la_v12\scripts\build_swat_rca_template.py --swat D:\la_v12\dataset\anomaly_detect\data\SWAT_A1A2_Physical_v1.csv --file-name SWAT_A1A2_Physical_v1.csv --output-name swat_a12_physical_attack_targets_template.csv
 D:\Anaconda3\envs\lagraph5070\python.exe D:\la_v12\scripts\build_te_rca_template.py
+```
+
+Convert the official SWaT A1/A2 physical files into the project long format:
+
+```powershell
+D:\Anaconda3\envs\lagraph5070\python.exe D:\la_v12\scripts\convert_swat_a12_dataset.py
 ```
 
 Convert the downloaded WADI A2 data into the project long format:
