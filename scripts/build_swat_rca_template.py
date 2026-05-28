@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
-"""Build a SWaT RCA annotation template from binary anomaly labels.
-
-The SWaT CSV in this project only contains point-wise anomaly labels. It does
-not contain attack target tags, so this script deliberately creates a template
-instead of writing ground-truth RCA labels.
-"""
+"""Build a SWaT RCA annotation template from binary labels and attack metadata."""
 
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import re
 from pathlib import Path
 
@@ -18,11 +14,23 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SWAT = PROJECT_ROOT / "dataset" / "anomaly_detect" / "data" / "swat.csv"
 DEFAULT_OUT_DIR = PROJECT_ROOT / "dataset" / "anomaly_detect" / "label_sources"
+DEFAULT_ATTACK_LIST = (
+    PROJECT_ROOT
+    / "dataset"
+    / "anomaly_detect"
+    / "data"
+    / "raw"
+    / "SWAT"
+    / "SWaT.A1_A2_Dec_2015"
+    / "List_of_attacks_Final.xlsx"
+)
+SWAT_TEST_START = pd.Timestamp("2015-12-28 10:00:00")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--swat", type=Path, default=DEFAULT_SWAT)
+    parser.add_argument("--attack-list", type=Path, default=DEFAULT_ATTACK_LIST)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--chunk-size", type=int, default=1_000_000)
     return parser.parse_args()
@@ -33,6 +41,123 @@ def infer_stage(tag: str) -> str:
     if not match:
         return ""
     return f"P{match.group(1)[0]}"
+
+
+def normalize_tag(tag: str) -> str:
+    return re.sub(r"[^A-Z0-9]", "", str(tag).upper())
+
+
+def normalize_attack_tags(raw_value: object, feature_tags: set[str]) -> list[str]:
+    if pd.isna(raw_value):
+        return []
+    tags = []
+    for part in re.split(r"[,;/]+|\band\b", str(raw_value), flags=re.IGNORECASE):
+        tag = normalize_tag(part)
+        if not tag or "NOPHYSICAL" in tag:
+            continue
+        if tag == "DIT301" and "DPIT301" in feature_tags:
+            tag = "DPIT301"
+        tags.append(tag)
+    return sorted(dict.fromkeys(tags))
+
+
+def combine_end_time(start_time: pd.Timestamp, end_value: object) -> pd.Timestamp:
+    if isinstance(end_value, dt.datetime):
+        end_time = pd.Timestamp(end_value)
+    elif isinstance(end_value, dt.time):
+        end_time = pd.Timestamp(dt.datetime.combine(start_time.date(), end_value))
+    else:
+        end_time = pd.to_datetime(end_value)
+    if end_time < start_time:
+        end_time += pd.Timedelta(days=1)
+    return end_time
+
+
+def normalize_start_time(value: object) -> pd.Timestamp:
+    start_time = pd.Timestamp(value)
+    # The final five SWaT rows are stored in the workbook as 2015-01-02, but
+    # the benchmark interval and binary labels place them on 2016-01-02.
+    if start_time < SWAT_TEST_START:
+        start_time = start_time.replace(year=start_time.year + 1)
+    return start_time
+
+
+def overlap_len(left_start: int, left_end: int, right_start: int, right_end: int) -> int:
+    return max(0, min(left_end, right_end) - max(left_start, right_start) + 1)
+
+
+def read_official_attacks(path: Path, feature_tags: set[str]) -> list[dict]:
+    if not path.exists():
+        return []
+
+    frame = pd.read_excel(path)
+    required = {"Attack #", "Start Time", "End Time", "Attack Point", "Attack"}
+    missing = sorted(required - set(frame.columns))
+    if missing:
+        raise ValueError(f"{path} is missing required columns: {missing}")
+
+    rows = []
+    physical = frame[
+        frame["End Time"].notna()
+        & ~frame["Attack Point"].astype(str).str.contains("No Physical", case=False, na=False)
+    ].copy()
+    for _, row in physical.iterrows():
+        start_time = normalize_start_time(row["Start Time"])
+        end_time = combine_end_time(start_time, row["End Time"])
+        target_tags = normalize_attack_tags(row["Attack Point"], feature_tags)
+        variable_roots = [tag for tag in target_tags if tag in feature_tags]
+        subsystem_root = sorted(dict.fromkeys(stage for stage in map(infer_stage, target_tags) if stage))
+        rows.append(
+            {
+                "attack_identifier": str(int(row["Attack #"])),
+                "start_sec": int(round((start_time - SWAT_TEST_START).total_seconds())),
+                "end_sec": int(round((end_time - SWAT_TEST_START).total_seconds())),
+                "target_tags": target_tags,
+                "variable_roots": variable_roots,
+                "subsystem_root": subsystem_root,
+                "attack_type": str(row["Attack"]).strip() if not pd.isna(row["Attack"]) else "",
+            }
+        )
+    return rows
+
+
+def annotate_segment(
+    event_start: int,
+    event_end: int,
+    official_attacks: list[dict],
+    attack_list_path: Path,
+) -> dict:
+    hits = []
+    for attack in official_attacks:
+        overlap = overlap_len(event_start, event_end, attack["start_sec"], attack["end_sec"])
+        attack_duration = max(1, attack["end_sec"] - attack["start_sec"] + 1)
+        if overlap / attack_duration >= 0.10 or overlap >= 60:
+            hits.append(attack)
+    if not hits:
+        return {
+            "attack_identifier": "",
+            "target_tags": "",
+            "subsystem_root": "",
+            "variable_roots": "",
+            "attack_type": "",
+            "source": f"no overlapping physical row in {attack_list_path.name}",
+            "label_status": "needs_review",
+        }
+
+    attack_ids = ";".join(hit["attack_identifier"] for hit in hits)
+    target_tags = sorted(dict.fromkeys(tag for hit in hits for tag in hit["target_tags"]))
+    variable_roots = sorted(dict.fromkeys(tag for hit in hits for tag in hit["variable_roots"]))
+    subsystem_root = sorted(dict.fromkeys(stage for hit in hits for stage in hit["subsystem_root"]))
+    attack_type = " | ".join(hit["attack_type"] for hit in hits if hit["attack_type"])
+    return {
+        "attack_identifier": attack_ids,
+        "target_tags": ";".join(target_tags),
+        "subsystem_root": ";".join(subsystem_root),
+        "variable_roots": ";".join(variable_roots),
+        "attack_type": attack_type,
+        "source": f"{attack_list_path.name}: attack #{attack_ids}",
+        "label_status": "verified",
+    }
 
 
 def binary_segments(values: list[int]) -> list[tuple[int, int]]:
@@ -73,18 +198,20 @@ def main() -> None:
     args = parse_args()
     labels, feature_tags = read_long_swat(args.swat, args.chunk_size)
     segments = binary_segments(labels)
+    feature_tag_set = set(feature_tags)
+    official_attacks = read_official_attacks(args.attack_list, feature_tag_set)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     attack_template = args.out_dir / "swat_attack_targets_template.csv"
     stage_map = args.out_dir / "swat_tag_stage_map.csv"
 
-    pd.DataFrame(
-        [
-            {
-                "file": "swat.csv",
-                "event_id": idx,
-                "event_start": start,
-                "event_end": end,
+    rows = []
+    for idx, (start, end) in enumerate(segments, start=1):
+        if official_attacks:
+            annotation = annotate_segment(start, end, official_attacks, args.attack_list)
+        else:
+            annotation = {
+                "attack_identifier": "",
                 "target_tags": "",
                 "subsystem_root": "",
                 "variable_roots": "",
@@ -92,9 +219,16 @@ def main() -> None:
                 "source": "TODO: official SWaT attack list",
                 "label_status": "needs_manual_source",
             }
-            for idx, (start, end) in enumerate(segments, start=1)
-        ]
-    ).to_csv(attack_template, index=False)
+        rows.append(
+            {
+                "file": "swat.csv",
+                "event_id": idx,
+                "event_start": start,
+                "event_end": end,
+                **annotation,
+            }
+        )
+    pd.DataFrame(rows).to_csv(attack_template, index=False)
 
     pd.DataFrame(
         [
@@ -107,7 +241,8 @@ def main() -> None:
         ]
     ).to_csv(stage_map, index=False)
 
-    print(f"Wrote {attack_template} with {len(segments)} anomaly events")
+    verified = sum(1 for row in rows if row["label_status"] == "verified")
+    print(f"Wrote {attack_template} with {len(segments)} anomaly events ({verified} verified)")
     print(f"Wrote {stage_map} with {len(feature_tags)} feature tags")
 
 

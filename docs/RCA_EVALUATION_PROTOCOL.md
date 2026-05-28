@@ -9,7 +9,7 @@ datasets that can support root-cause analysis (RCA).
 | Dataset | Current role | RCA status | Decision |
 |---|---|---|---|
 | HAI 21.03 test1-test5 | Main industrial RCA benchmark | Registered subsystem labels from `attack_P1/P2/P3` | Use for detection, predicted-event RCA, and graph faithfulness |
-| SWaT A1/A2 (`swat.csv`) | Industrial validation | Attack-stage/tag mapping still missing | Keep detection; add RCA only after source labels are registered |
+| SWaT A1/A2 (`swat.csv`) | Industrial validation and RCA benchmark | 34 verified events reconciled from `List_of_attacks_Final.xlsx`; 1 binary-label segment has no overlapping physical-attack row | Use for detection, predicted-event RCA, and variable/subsystem RCA; exclude the `needs_review` segment from strict RCA metrics |
 | SWaT A6 2019 | Supplemental process-disruption stress test | Log-derived process attack intervals available; target tags are not specified | Use only as supplemental detection/robustness evidence, not as verified RCA benchmark |
 | TE-MM | Process fault generalization | Fault-file to IDV mapping needs confirmation | Keep detection; add process-unit RCA only after mapping is verified |
 | WADI A2 2019 | Industrial validation candidate | Raw data and attack-description PDF available; target mapping needs verification | Use `WADI_A2_2019_ds10.csv` for detection smoke tests; add RCA after attack descriptions are reconciled with converted event indices |
@@ -68,8 +68,12 @@ to `IDV(28)-(01)`, so file number and disturbance ID may be reversed. Until this
 is verified from the generation code or source documentation, TE-MM RCA labels
 must not be treated as ground truth.
 
-SWaT needs attack-to-stage or attack-to-tag mapping from the official attack
-list. Detection labels alone are insufficient for RCA metrics.
+SWaT A1/A2 now uses the official `List_of_attacks_Final.xlsx` attack list copied
+under `dataset/anomaly_detect/data/raw/SWAT/SWaT.A1_A2_Dec_2015/`. The processed
+`swat.csv` binary-label segments are aligned against the official attack start
+and end times. Verified overlapping rows enter `rca_labels.csv`; one segment at
+relative index `73801-74522` currently has no overlapping physical-attack row
+and remains `needs_review`.
 
 SWaT A6 2019 is different from the common SWaT A1/A2 benchmark. Its `Log.docx`
 contains cyber attack phases and five "Disrupt Sensor and Actuator" intervals.
@@ -89,10 +93,13 @@ attack identifiers.
 SWaT:
 
 1. Generate the event template from binary labels.
-2. Fill `target_tags`, `subsystem_root`, `variable_roots`, `attack_type`, and
-   `source` from the official SWaT attack list.
-3. Set `label_status=verified` only after every row has an inspectable source.
-4. Import verified rows into `rca_labels.csv`.
+2. Align each event with `List_of_attacks_Final.xlsx` using the standard
+   `2015-12-28 10:00:00` test-segment origin.
+3. Fill `target_tags`, `subsystem_root`, `variable_roots`, `attack_type`, and
+   `source` from overlapping official physical attacks.
+4. Set `label_status=verified` only for events with sufficient official-time
+   overlap; leave unmatched segments as `needs_review`.
+5. Import verified rows into `rca_labels.csv`.
 
 TE-MM:
 
