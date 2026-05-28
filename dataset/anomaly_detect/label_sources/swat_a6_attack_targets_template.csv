@@ -1,0 +1,6 @@
+file,event_id,event_start,event_end,target_tags,subsystem_root,variable_roots,attack_type,source,label_status
+SWAT_A6_Dec2019_process.csv,1,0,179,,,,Disrupt Sensor and Actuator,Log.docx,needs_review
+SWAT_A6_Dec2019_process.csv,2,780,959,,,,Disrupt Sensor and Actuator,Log.docx,needs_review
+SWAT_A6_Dec2019_process.csv,3,1560,1739,,,,Disrupt Sensor and Actuator,Log.docx,needs_review
+SWAT_A6_Dec2019_process.csv,4,2340,2519,,,,Disrupt Sensor and Actuator,Log.docx,needs_review
+SWAT_A6_Dec2019_process.csv,5,3120,3299,,,,Disrupt Sensor and Actuator,Log.docx,needs_review

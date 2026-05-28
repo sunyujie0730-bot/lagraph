@@ -16,3 +16,4 @@ HAI_21_03_test5.csv,308402,HAI_21_03,large,other,False,,,,,,,216001,79,,,HAI,21.
 WADI_A2_2019_ds10.csv,95739,WADI_A2,large,other,False,,,,,,,78458,127,,,WADI,A2_19_Nov_2019,normal=WADI_14days_new.csv;attack=WADI_attackdataLABLE.csv;downsample=10
 WADI_A2_2019_ds10_stable.csv,95739,WADI_A2,large,other,False,,,,,,,78458,93,,,WADI,A2_19_Nov_2019,normal=WADI_14days_new.csv;attack=WADI_attackdataLABLE.csv;downsample=10;min_train_std=0.0001;drop_columns=
 WADI_A2_2019_ds10_stable_drop2B002.csv,95739,WADI_A2,large,other,False,,,,,,,78458,92,,,WADI,A2_19_Nov_2019,normal=WADI_14days_new.csv;attack=WADI_attackdataLABLE.csv;downsample=10;min_train_std=0.0001;drop_columns=2B_AIT_002_PV
+SWAT_A6_Dec2019_process.csv,13201,SWAT_A6,small,second,False,,,,,,,8700,81,,,SWaT,A6_Dec_2019,label=process_disrupt_sensor_actuator_only;train=before_12:30:00;source=Log.docx

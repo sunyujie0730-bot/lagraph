@@ -32,6 +32,7 @@ def rows_from_verified_sources(source_dir: Path) -> list[dict]:
     rows = []
     source_files = [
         source_dir / "swat_attack_targets_template.csv",
+        source_dir / "swat_a6_attack_targets_template.csv",
         source_dir / "te_mm_fault_mapping_template.csv",
         source_dir / "wadi_attack_targets_template.csv",
     ]

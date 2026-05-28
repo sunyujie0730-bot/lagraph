@@ -9,7 +9,8 @@ datasets that can support root-cause analysis (RCA).
 | Dataset | Current role | RCA status | Decision |
 |---|---|---|---|
 | HAI 21.03 test1-test5 | Main industrial RCA benchmark | Registered subsystem labels from `attack_P1/P2/P3` | Use for detection, predicted-event RCA, and graph faithfulness |
-| SWaT | Industrial validation | Attack-stage/tag mapping still missing | Keep detection; add RCA only after source labels are registered |
+| SWaT A1/A2 (`swat.csv`) | Industrial validation | Attack-stage/tag mapping still missing | Keep detection; add RCA only after source labels are registered |
+| SWaT A6 2019 | Supplemental process-disruption stress test | Log-derived process attack intervals available; target tags are not specified | Use only as supplemental detection/robustness evidence, not as verified RCA benchmark |
 | TE-MM | Process fault generalization | Fault-file to IDV mapping needs confirmation | Keep detection; add process-unit RCA only after mapping is verified |
 | WADI A2 2019 | Industrial validation candidate | Raw data and attack-description PDF available; target mapping needs verification | Use `WADI_A2_2019_ds10.csv` for detection smoke tests; add RCA after attack descriptions are reconciled with converted event indices |
 | MSL | Removed from active suite | Weak RCA ground truth for this paper's claim | Do not use in main experiments |
@@ -70,6 +71,13 @@ must not be treated as ground truth.
 SWaT needs attack-to-stage or attack-to-tag mapping from the official attack
 list. Detection labels alone are insufficient for RCA metrics.
 
+SWaT A6 2019 is different from the common SWaT A1/A2 benchmark. Its `Log.docx`
+contains cyber attack phases and five "Disrupt Sensor and Actuator" intervals.
+The current converted dataset labels only those physical process-disruption
+intervals and treats earlier historian exfiltration phases as non-process
+events. Because the log does not name exact attacked tags, its RCA rows remain
+`needs_review`.
+
 WADI A2 includes binary attack labels and a one-page attack-description table.
 This is stronger than a pure detection label, but it still needs a manual
 event-to-target reconciliation before entering `rca_labels.csv`, because the
@@ -99,6 +107,7 @@ Generated source templates:
 
 ```text
 D:\la_v12\dataset\anomaly_detect\label_sources\swat_attack_targets_template.csv
+D:\la_v12\dataset\anomaly_detect\label_sources\swat_a6_attack_targets_template.csv
 D:\la_v12\dataset\anomaly_detect\label_sources\swat_tag_stage_map.csv
 D:\la_v12\dataset\anomaly_detect\label_sources\te_mm_fault_mapping_template.csv
 D:\la_v12\dataset\anomaly_detect\label_sources\wadi_attack_targets_template.csv
