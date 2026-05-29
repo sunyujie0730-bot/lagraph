@@ -428,6 +428,12 @@ def main():
         help="Override synthetic variable-level RCA ranking loss weight",
     )
     parser.add_argument(
+        "--synthetic-aux-interval",
+        type=int,
+        default=None,
+        help="Run synthetic anomaly/RCA auxiliary loss every N training batches; 1 keeps the original behavior",
+    )
+    parser.add_argument(
         "--synthetic-rca-margin",
         type=float,
         default=None,
@@ -1423,6 +1429,8 @@ def main():
     if args.lambda_synthetic_rca is not None:
         score_hyper_params["lambda_synthetic_rca"] = max(0.0, args.lambda_synthetic_rca)
         score_hyper_params["use_synthetic_rca_loss"] = score_hyper_params["lambda_synthetic_rca"] > 0.0
+    if args.synthetic_aux_interval is not None:
+        score_hyper_params["synthetic_aux_interval"] = max(1, int(args.synthetic_aux_interval))
     if args.synthetic_rca_margin is not None:
         score_hyper_params["synthetic_rca_margin"] = max(float(args.synthetic_rca_margin), 0.0)
     if args.synthetic_rca_topk is not None:

@@ -84,6 +84,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "use_synthetic_anomaly_head": False,
     "use_synthetic_score": False,
     "lambda_synthetic_anomaly": 0.0,
+    "synthetic_aux_interval": 1,
     "use_synthetic_rca_loss": False,
     "lambda_synthetic_rca": 0.0,
     "synthetic_rca_margin": 0.2,
@@ -1043,6 +1044,7 @@ class LaGraph:
                 "score_center_width": getattr(self.config, "score_center_width", None),
                 "use_synthetic_anomaly_aux": getattr(self.config, "use_synthetic_anomaly_aux", None),
                 "lambda_synthetic_anomaly": getattr(self.config, "lambda_synthetic_anomaly", None),
+                "synthetic_aux_interval": getattr(self.config, "synthetic_aux_interval", None),
                 "use_synthetic_score": getattr(self.config, "use_synthetic_score", None),
                 "synthetic_score_weight": getattr(self.config, "synthetic_score_weight", None),
                 "use_parallel_graph_fusion": getattr(self.config, "use_parallel_graph_fusion", None),
@@ -1330,10 +1332,13 @@ class LaGraph:
 
         return x, mask, channel_mask
 
-    def _synthetic_anomaly_aux_loss(self, input_data, normal_aux_losses):
+    def _synthetic_anomaly_aux_loss(self, input_data, normal_aux_losses, batch_idx=None):
         use_aux = bool(getattr(self.config, "use_synthetic_anomaly_aux", False))
         use_rca = bool(getattr(self.config, "use_synthetic_rca_loss", False))
         if not use_aux and not use_rca:
+            return input_data.new_tensor(0.0)
+        interval = int(getattr(self.config, "synthetic_aux_interval", 1) or 1)
+        if batch_idx is not None and interval > 1 and batch_idx % interval != 0:
             return input_data.new_tensor(0.0)
         lambda_synth = float(getattr(self.config, "lambda_synthetic_anomaly", 0.0) or 0.0)
         lambda_rca = float(getattr(self.config, "lambda_synthetic_rca", 0.0) or 0.0)
@@ -1968,7 +1973,7 @@ class LaGraph:
                 else:
                     if use_vq_bypass and aux_losses and 'vq_loss' in aux_losses:
                         loss = loss + lambda_vq * aux_losses['vq_loss']
-                    loss = loss + self._synthetic_anomaly_aux_loss(input_data, aux_losses)
+                    loss = loss + self._synthetic_anomaly_aux_loss(input_data, aux_losses, batch_idx=i)
 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
@@ -2303,6 +2308,7 @@ class LaGraph:
                 "score_center_width": getattr(self.config, "score_center_width", None),
                 "use_synthetic_anomaly_aux": getattr(self.config, "use_synthetic_anomaly_aux", None),
                 "lambda_synthetic_anomaly": getattr(self.config, "lambda_synthetic_anomaly", None),
+                "synthetic_aux_interval": getattr(self.config, "synthetic_aux_interval", None),
                 "use_synthetic_score": getattr(self.config, "use_synthetic_score", None),
                 "synthetic_score_weight": getattr(self.config, "synthetic_score_weight", None),
                 "score_smoothing_window": getattr(self.config, "score_smoothing_window", None),
