@@ -456,6 +456,8 @@ class SparseGCN(nn.Module):
                  channel_mechanism_score_eps=1e-6,
                  use_mechanism_coupled_decoder=False,
                  mechanism_coupling_init=0.15,
+                 use_mechanism_predictive_head=False,
+                 mechanism_predictive_blend_init=0.30,
                  use_state_aware_fusion=False,
                  state_aware_num_states=4,
                  state_aware_graph_gate_init=0.6,
@@ -512,6 +514,8 @@ class SparseGCN(nn.Module):
         self.channel_mechanism_score_eps = float(channel_mechanism_score_eps)
         self.use_mechanism_coupled_decoder = bool(use_mechanism_coupled_decoder)
         self.mechanism_coupling_init = float(mechanism_coupling_init)
+        self.use_mechanism_predictive_head = bool(use_mechanism_predictive_head)
+        self.mechanism_predictive_blend_init = float(mechanism_predictive_blend_init)
         self.use_state_aware_fusion = use_state_aware_fusion
         self.state_aware_num_states = int(state_aware_num_states)
         self.state_aware_graph_gate_init = float(state_aware_graph_gate_init)
@@ -661,6 +665,23 @@ class SparseGCN(nn.Module):
             nn.Linear(c_out, c_out),
         )
 
+        predictive_blend_init = min(max(float(mechanism_predictive_blend_init), 1e-3), 1.0 - 1e-3)
+        self.mechanism_predictive_blend_logit = nn.Parameter(
+            torch.tensor(float(np.log(predictive_blend_init / (1.0 - predictive_blend_init))))
+        )
+        self.mechanism_predictor = nn.Sequential(
+            nn.Linear(c_out * 3, c_out),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(c_out, c_out),
+        )
+        self.mechanism_predictive_fusion = nn.Sequential(
+            nn.Linear(c_out * 3, c_out),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(c_out, c_out),
+        )
+
         # === ★ P0: Dual-Path VQ Bottleneck (旁路模式) ===
         self.vq_bottleneck = VQBottleneck(
             dim=c_out,
@@ -752,6 +773,9 @@ class SparseGCN(nn.Module):
         self._set_trainable(self.multi_scale_scorer, self.use_multi_scale_scorer)
         self._set_trainable(self.mechanism_context_fusion, self.use_mechanism_coupled_decoder)
         self.mechanism_coupling_logit.requires_grad = self.use_mechanism_coupled_decoder
+        self._set_trainable(self.mechanism_predictor, self.use_mechanism_predictive_head)
+        self._set_trainable(self.mechanism_predictive_fusion, self.use_mechanism_predictive_head)
+        self.mechanism_predictive_blend_logit.requires_grad = self.use_mechanism_predictive_head
 
     def _parallel_fuse_graphs(self, resid, resid_channel, resid_temporal):
         gate_input = torch.cat(
@@ -873,6 +897,39 @@ class SparseGCN(nn.Module):
         loss = F.smooth_l1_loss(pred, resid)
         return pred, score, loss, err
 
+    def _mechanism_predictive(self, resid, A_adaptive, temporal_pred=None):
+        parent_context = self._graph_neighbor_context(resid, A_adaptive)
+        if temporal_pred is None:
+            temporal_context = torch.zeros_like(resid)
+        else:
+            temporal_context = temporal_pred.to(dtype=resid.dtype)
+            if temporal_context.shape[1] != resid.shape[1]:
+                if temporal_context.shape[1] > resid.shape[1]:
+                    temporal_context = temporal_context[:, -resid.shape[1]:, :]
+                else:
+                    pad_len = resid.shape[1] - temporal_context.shape[1]
+                    temporal_context = F.pad(
+                        temporal_context.transpose(1, 2),
+                        (pad_len, 0),
+                        mode="constant",
+                        value=0.0,
+                    ).transpose(1, 2)
+
+        predictor_input = torch.cat(
+            [
+                parent_context,
+                temporal_context,
+                (parent_context - temporal_context).abs(),
+            ],
+            dim=-1,
+        )
+        pred = self.mechanism_predictor(predictor_input)
+        err = torch.abs(resid - pred)
+        k = min(max(1, self.score_topk_k or self.multi_scale_scorer.topk_k), resid.shape[-1])
+        score = err.topk(k=k, dim=-1, largest=True, sorted=False)[0].mean(dim=-1)
+        loss = F.smooth_l1_loss(pred, resid)
+        return pred, score, loss, err
+
     def set_synthetic_score_stats(self, score_center, score_scale):
         self.synthetic_score_center.copy_(
             torch.as_tensor([score_center], dtype=self.synthetic_score_center.dtype, device=self.synthetic_score_center.device)
@@ -920,10 +977,13 @@ class SparseGCN(nn.Module):
         state_aware_info = None
         causal_score = None
         causal_mechanism_loss = None
+        causal_pred = None
         channel_mechanism_score = None
         channel_mechanism_loss = None
         channel_mechanism_error = None
+        channel_mechanism_pred = None
         mechanism_coupling_weight = None
+        mechanism_predictive_blend_weight = None
 
         if self.use_lagged_causal_graph and self.lagged_causal_graph is not None:
             causal_input = resid.detach() if self.causal_detach_backbone else resid
@@ -942,12 +1002,22 @@ class SparseGCN(nn.Module):
             resid_adapted = resid
             A_adaptive = torch.eye(C, device=x.device).unsqueeze(0).expand(B, C, C)
 
-        if self.use_channel_graph and (
+        if self.use_mechanism_predictive_head and self.use_channel_graph:
+            (
+                channel_mechanism_pred,
+                channel_mechanism_score,
+                channel_mechanism_loss,
+                channel_mechanism_error,
+            ) = self._mechanism_predictive(resid, A_adaptive, temporal_pred=causal_pred)
+        elif self.use_channel_graph and (
             self.use_channel_mechanism_score or self.lambda_channel_mechanism > 0
         ):
-            _, channel_mechanism_score, channel_mechanism_loss, channel_mechanism_error = self._channel_mechanism(
-                resid, A_adaptive,
-            )
+            (
+                channel_mechanism_pred,
+                channel_mechanism_score,
+                channel_mechanism_loss,
+                channel_mechanism_error,
+            ) = self._channel_mechanism(resid, A_adaptive)
 
         # 步骤 3: 简化时序图
         if self.use_state_aware_fusion and self.use_channel_graph and self.use_temporal_graph:
@@ -995,6 +1065,20 @@ class SparseGCN(nn.Module):
             )
             mechanism_coupling_weight = torch.sigmoid(self.mechanism_coupling_logit)
             stage1_feat = stage1_feat + mechanism_coupling_weight * mechanism_delta
+
+        if self.use_mechanism_predictive_head and channel_mechanism_pred is not None:
+            mechanism_delta = self.mechanism_predictive_fusion(
+                torch.cat(
+                    [
+                        stage1_feat,
+                        channel_mechanism_pred,
+                        (stage1_feat - channel_mechanism_pred).abs(),
+                    ],
+                    dim=-1,
+                )
+            )
+            mechanism_predictive_blend_weight = torch.sigmoid(self.mechanism_predictive_blend_logit)
+            stage1_feat = stage1_feat + mechanism_predictive_blend_weight * mechanism_delta
 
         # ★ P0: Dual-Path VQ — 旁路模式
         #   VQ 不参与重建路径，仅计算 vq_dist 和 vq_loss
@@ -1049,6 +1133,8 @@ class SparseGCN(nn.Module):
             aux_losses['channel_mechanism_loss'] = channel_mechanism_loss
         if mechanism_coupling_weight is not None:
             aux_losses['mechanism_coupling_weight'] = mechanism_coupling_weight.detach()
+        if mechanism_predictive_blend_weight is not None:
+            aux_losses['mechanism_predictive_blend_weight'] = mechanism_predictive_blend_weight.detach()
         if synthetic_logits is not None:
             aux_losses['synthetic_logits'] = synthetic_logits
         if graph_fusion_gate is not None:

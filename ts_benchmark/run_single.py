@@ -165,6 +165,7 @@ def main():
             "mechanism-coupled",
             "mechanism-coupled-lite",
             "mechanism-coupled-noscore",
+            "mechanism-predictive",
             "channel-only",
             "temporal-only",
             "state-aware",
@@ -400,6 +401,12 @@ def main():
         type=float,
         default=None,
         help="Override initial mechanism coupling gate for mechanism-coupled profiles",
+    )
+    parser.add_argument(
+        "--mechanism-predictive-blend-init",
+        type=float,
+        default=None,
+        help="Override initial mechanism-predictive fusion gate",
     )
     parser.add_argument(
         "--causal-topk",
@@ -746,6 +753,25 @@ def main():
             "use_channel_mechanism_score": False,
             "channel_mechanism_score_weight": 0.0,
             "rca_mechanism_weight": 1.0,
+        },
+        "mechanism-predictive": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_lagged_causal_graph": True,
+            "causal_lags": [1, 3, 6, 12],
+            "causal_topk": 5,
+            "causal_detach_backbone": False,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "use_mechanism_predictive_head": True,
+            "mechanism_predictive_blend_init": 0.30,
+            "lambda_channel_mechanism": 0.05,
+            "lambda_causal_mechanism": 0.01,
+            "lambda_causal_sparse": 0.001,
+            "use_channel_mechanism_score": True,
+            "channel_mechanism_score_weight": 0.30,
+            "rca_mechanism_weight": 1.0,
+            "rca_graph_weight": 0.2,
         },
         "channel-only": {
             "use_channel_graph": True,
@@ -1316,6 +1342,11 @@ def main():
     if args.mechanism_coupling_init is not None:
         score_hyper_params["mechanism_coupling_init"] = min(
             max(float(args.mechanism_coupling_init), 0.0),
+            1.0,
+        )
+    if args.mechanism_predictive_blend_init is not None:
+        score_hyper_params["mechanism_predictive_blend_init"] = min(
+            max(float(args.mechanism_predictive_blend_init), 0.0),
             1.0,
         )
     if args.causal_topk is not None:
