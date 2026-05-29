@@ -163,6 +163,8 @@ def main():
             "mechanism-graph",
             "mechanism-prior-graph",
             "mechanism-coupled",
+            "mechanism-coupled-lite",
+            "mechanism-coupled-noscore",
             "channel-only",
             "temporal-only",
             "state-aware",
@@ -392,6 +394,12 @@ def main():
         type=float,
         default=None,
         help="Override channel mechanism-violation score fusion weight",
+    )
+    parser.add_argument(
+        "--mechanism-coupling-init",
+        type=float,
+        default=None,
+        help="Override initial mechanism coupling gate for mechanism-coupled profiles",
     )
     parser.add_argument(
         "--causal-topk",
@@ -713,6 +721,30 @@ def main():
             "lambda_channel_mechanism": 0.02,
             "use_channel_mechanism_score": True,
             "channel_mechanism_score_weight": 0.05,
+            "rca_mechanism_weight": 1.0,
+        },
+        "mechanism-coupled-lite": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "use_mechanism_coupled_decoder": True,
+            "mechanism_coupling_init": 0.05,
+            "lambda_channel_mechanism": 0.005,
+            "use_channel_mechanism_score": True,
+            "channel_mechanism_score_weight": 0.02,
+            "rca_mechanism_weight": 0.5,
+        },
+        "mechanism-coupled-noscore": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "use_mechanism_coupled_decoder": True,
+            "mechanism_coupling_init": 0.05,
+            "lambda_channel_mechanism": 0.005,
+            "use_channel_mechanism_score": False,
+            "channel_mechanism_score_weight": 0.0,
             "rca_mechanism_weight": 1.0,
         },
         "channel-only": {
@@ -1281,6 +1313,11 @@ def main():
             0.0, args.channel_mechanism_score_weight,
         )
         score_hyper_params["use_channel_mechanism_score"] = True
+    if args.mechanism_coupling_init is not None:
+        score_hyper_params["mechanism_coupling_init"] = min(
+            max(float(args.mechanism_coupling_init), 0.0),
+            1.0,
+        )
     if args.causal_topk is not None:
         score_hyper_params["causal_topk"] = max(1, args.causal_topk)
     if args.lambda_synthetic_anomaly is not None:
