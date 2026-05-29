@@ -5,6 +5,8 @@ Baselines:
 - zscore: rank variables by absolute normal-train z-score during an event.
 - correlation_prior: propagate z-score evidence over a normal-train absolute
   correlation graph before ranking.
+- granger_prior: propagate z-score evidence over a normal-train directed
+  pairwise Granger graph before ranking.
 """
 
 from __future__ import annotations
@@ -42,6 +44,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prediction-key", default="1.0")
     parser.add_argument("--corr-topk", type=int, default=5)
     parser.add_argument("--corr-weight", type=float, default=1.0)
+    parser.add_argument("--include-granger", action="store_true")
+    parser.add_argument("--granger-max-lag", type=int, default=3)
+    parser.add_argument("--granger-topk", type=int, default=5)
+    parser.add_argument("--granger-weight", type=float, default=1.0)
+    parser.add_argument(
+        "--granger-train-points",
+        type=int,
+        default=50000,
+        help="Use the last N normal points for pairwise Granger estimation; 0 uses all training points.",
+    )
+    parser.add_argument("--granger-ridge", type=float, default=1e-4)
+    parser.add_argument(
+        "--event-head-ratio",
+        type=float,
+        default=1.0,
+        help="Use only the first fraction of each event for static RCA scores.",
+    )
+    parser.add_argument(
+        "--event-head-points",
+        type=int,
+        default=0,
+        help="Use at most this many leading event points for static RCA scores.",
+    )
     parser.add_argument("--k", type=int, nargs="+", default=[1, 3, 5])
     parser.add_argument("--save-csv", type=Path, default=None)
     return parser.parse_args()
@@ -82,6 +107,18 @@ def match_pred_event(meta_event: dict, pred_events: list[dict]) -> tuple[dict | 
     return best, best_overlap
 
 
+def event_score_bounds(start: int, end: int, head_ratio: float = 1.0, head_points: int = 0) -> tuple[int, int]:
+    length = max(0, int(end) - int(start))
+    if length <= 0:
+        return int(start), int(end)
+    score_len = length
+    if 0.0 < float(head_ratio) < 1.0:
+        score_len = min(score_len, int(math.ceil(length * float(head_ratio))))
+    if int(head_points or 0) > 0:
+        score_len = min(score_len, int(head_points))
+    return int(start), int(start) + max(1, score_len)
+
+
 def metric_row(ranking: list[str], roots: set[str], k_values: list[int]) -> dict:
     row = {}
     first_rank = next((idx for idx, name in enumerate(ranking, start=1) if name in roots), None)
@@ -109,6 +146,69 @@ def topk_abs_corr(train_x: pd.DataFrame, topk: int) -> np.ndarray:
         corr = keep
     row_sum = corr.sum(axis=1, keepdims=True)
     return np.divide(corr, row_sum, out=np.zeros_like(corr), where=row_sum > 0)
+
+
+def _ridge_rss(design: np.ndarray, y: np.ndarray, ridge: float) -> float:
+    xtx = design.T @ design
+    xty = design.T @ y
+    if ridge > 0:
+        reg = np.eye(xtx.shape[0], dtype=xtx.dtype) * float(ridge)
+        reg[0, 0] = 0.0
+        xtx = xtx + reg
+    try:
+        beta = np.linalg.solve(xtx, xty)
+    except np.linalg.LinAlgError:
+        beta = np.linalg.lstsq(design, y, rcond=None)[0]
+    resid = y - design @ beta
+    return float(np.dot(resid, resid))
+
+
+def pairwise_granger_graph(
+    train_x: pd.DataFrame,
+    max_lag: int,
+    topk: int,
+    train_points: int,
+    ridge: float,
+) -> np.ndarray:
+    """Return row-normalized directed scores A[source, target]."""
+    x = train_x.to_numpy(dtype=np.float64, copy=True)
+    if train_points and train_points > 0 and len(x) > train_points:
+        x = x[-train_points:]
+    if x.shape[0] <= max_lag + 2:
+        return np.zeros((x.shape[1], x.shape[1]), dtype=np.float32)
+    x = x - np.nanmean(x, axis=0, keepdims=True)
+    scale = np.nanstd(x, axis=0, keepdims=True)
+    x = x / np.where(scale > 1e-8, scale, 1.0)
+    x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+
+    n, c = x.shape
+    max_lag = max(1, int(max_lag))
+    lagged = np.stack([x[max_lag - lag:n - lag] for lag in range(1, max_lag + 1)], axis=2)
+    y_all = x[max_lag:]
+    ones = np.ones((y_all.shape[0], 1), dtype=np.float64)
+    scores = np.zeros((c, c), dtype=np.float64)
+    eps = 1e-12
+
+    for target in range(c):
+        y = y_all[:, target]
+        target_lags = lagged[:, target, :]
+        restricted = np.concatenate([ones, target_lags], axis=1)
+        rss_restricted = _ridge_rss(restricted, y, ridge)
+        for source in range(c):
+            if source == target:
+                continue
+            source_lags = lagged[:, source, :]
+            unrestricted = np.concatenate([restricted, source_lags], axis=1)
+            rss_unrestricted = _ridge_rss(unrestricted, y, ridge)
+            scores[source, target] = max(0.0, math.log((rss_restricted + eps) / (rss_unrestricted + eps)))
+
+    if 0 < topk < c:
+        keep = np.zeros_like(scores)
+        idx = np.argpartition(-scores, kth=topk - 1, axis=1)[:, :topk]
+        keep[np.arange(c)[:, None], idx] = scores[np.arange(c)[:, None], idx]
+        scores = keep
+    row_sum = scores.sum(axis=1, keepdims=True)
+    return np.divide(scores, row_sum, out=np.zeros_like(scores), where=row_sum > 0).astype(np.float32)
 
 
 def rank_scores(scores: np.ndarray, columns: list[str], scope: str) -> list[str]:
@@ -177,6 +277,19 @@ def main() -> None:
     scale = train_x.std(axis=0).replace(0, 1.0)
     z = ((test_x - center) / scale).abs().to_numpy(dtype=np.float32)
     corr = topk_abs_corr(train_x, args.corr_topk)
+    granger = None
+    if args.include_granger:
+        print(
+            f"Estimating pairwise Granger graph: max_lag={args.granger_max_lag}, "
+            f"topk={args.granger_topk}, train_points={args.granger_train_points}"
+        )
+        granger = pairwise_granger_graph(
+            ((train_x - center) / scale).astype(np.float32),
+            args.granger_max_lag,
+            args.granger_topk,
+            args.granger_train_points,
+            args.granger_ridge,
+        )
 
     rows = []
     for event in events:
@@ -195,10 +308,11 @@ def main() -> None:
 
         start = max(0, min(start, len(z)))
         end = max(start, min(end, len(z)))
+        score_start, score_end = event_score_bounds(start, end, args.event_head_ratio, args.event_head_points)
         has_evaluable_window = end > start
         if args.event_source == "predicted" and (pred_event is None or best_overlap <= 0):
             has_evaluable_window = False
-        event_z = z[start:end].mean(axis=0) if has_evaluable_window else None
+        event_z = z[score_start:score_end].mean(axis=0) if has_evaluable_window else None
         score_items = [
             ("zscore", event_z),
             (
@@ -206,6 +320,13 @@ def main() -> None:
                 None if event_z is None else event_z + args.corr_weight * corr.dot(event_z),
             ),
         ]
+        if granger is not None:
+            score_items.append(
+                (
+                    "granger_prior",
+                    None if event_z is None else event_z + args.granger_weight * granger.dot(event_z),
+                )
+            )
 
         for method, scores in score_items:
             ranking = [] if scores is None else rank_scores(scores, columns, args.scope)
@@ -223,6 +344,8 @@ def main() -> None:
                 "event_id": event["event_id"],
                 "event_start": start,
                 "event_end": end,
+                "score_start": score_start,
+                "score_end": score_end,
                 "pred_event_id": pred_event_id,
                 "overlap": "" if args.event_source == "true" else best_overlap,
                 "matched": math.nan if args.event_source == "true" else (1.0 if best_overlap > 0 else 0.0),

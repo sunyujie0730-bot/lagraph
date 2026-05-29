@@ -166,6 +166,7 @@ def main():
             "mechanism-coupled-lite",
             "mechanism-coupled-noscore",
             "mechanism-predictive",
+            "mechanism-predictive-rca",
             "channel-only",
             "temporal-only",
             "state-aware",
@@ -421,6 +422,24 @@ def main():
         help="Override synthetic anomaly auxiliary loss weight",
     )
     parser.add_argument(
+        "--lambda-synthetic-rca",
+        type=float,
+        default=None,
+        help="Override synthetic variable-level RCA ranking loss weight",
+    )
+    parser.add_argument(
+        "--synthetic-rca-margin",
+        type=float,
+        default=None,
+        help="Margin for synthetic variable-level RCA ranking loss",
+    )
+    parser.add_argument(
+        "--synthetic-rca-topk",
+        type=int,
+        default=None,
+        help="Number of hardest non-root variables used by synthetic RCA ranking loss",
+    )
+    parser.add_argument(
         "--synthetic-score-weight",
         type=float,
         default=None,
@@ -528,6 +547,18 @@ def main():
         type=float,
         default=None,
         help="Weight for positive mechanism-error lift in exported RCA rankings.",
+    )
+    parser.add_argument(
+        "--rca-event-head-ratio",
+        type=float,
+        default=None,
+        help="Use only the first fraction of each event for RCA ranking; 1.0 keeps full-event aggregation.",
+    )
+    parser.add_argument(
+        "--rca-event-head-points",
+        type=int,
+        default=None,
+        help="Use at most this many leading points of each event for RCA ranking.",
     )
     parser.add_argument(
         "--rca-prediction-key",
@@ -783,6 +814,31 @@ def main():
             "channel_mechanism_score_weight": 0.30,
             "rca_mechanism_weight": 1.0,
             "rca_graph_weight": 0.2,
+        },
+        "mechanism-predictive-rca": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_lagged_causal_graph": True,
+            "causal_lags": [1, 3, 6, 12],
+            "causal_topk": 5,
+            "causal_detach_backbone": False,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "use_mechanism_predictive_head": True,
+            "mechanism_predictive_blend_init": 0.30,
+            "lambda_channel_mechanism": 0.05,
+            "lambda_causal_mechanism": 0.01,
+            "lambda_causal_sparse": 0.001,
+            "use_channel_mechanism_score": True,
+            "channel_mechanism_score_weight": 0.30,
+            "rca_mechanism_weight": 1.0,
+            "rca_graph_weight": 0.2,
+            "use_synthetic_rca_loss": True,
+            "lambda_synthetic_rca": 0.05,
+            "synthetic_rca_margin": 0.2,
+            "synthetic_rca_topk": 5,
+            "synthetic_rca_min_roots": 1,
+            "synthetic_rca_max_roots": 3,
         },
         "channel-only": {
             "use_channel_graph": True,
@@ -1364,6 +1420,13 @@ def main():
         score_hyper_params["causal_topk"] = max(1, args.causal_topk)
     if args.lambda_synthetic_anomaly is not None:
         score_hyper_params["lambda_synthetic_anomaly"] = max(0.0, args.lambda_synthetic_anomaly)
+    if args.lambda_synthetic_rca is not None:
+        score_hyper_params["lambda_synthetic_rca"] = max(0.0, args.lambda_synthetic_rca)
+        score_hyper_params["use_synthetic_rca_loss"] = score_hyper_params["lambda_synthetic_rca"] > 0.0
+    if args.synthetic_rca_margin is not None:
+        score_hyper_params["synthetic_rca_margin"] = max(float(args.synthetic_rca_margin), 0.0)
+    if args.synthetic_rca_topk is not None:
+        score_hyper_params["synthetic_rca_topk"] = max(1, int(args.synthetic_rca_topk))
     if args.synthetic_score_weight is not None:
         score_hyper_params["synthetic_score_weight"] = max(0.0, args.synthetic_score_weight)
     if args.reconstruction_loss is not None:
@@ -1392,6 +1455,10 @@ def main():
         score_hyper_params["rca_mechanism_residual_window"] = max(0, args.rca_mechanism_residual_window)
     if args.rca_mechanism_residual_weight is not None:
         score_hyper_params["rca_mechanism_residual_weight"] = max(0.0, args.rca_mechanism_residual_weight)
+    if args.rca_event_head_ratio is not None:
+        score_hyper_params["rca_event_head_ratio"] = min(max(float(args.rca_event_head_ratio), 1e-6), 1.0)
+    if args.rca_event_head_points is not None:
+        score_hyper_params["rca_event_head_points"] = max(0, int(args.rca_event_head_points))
     if args.rca_prediction_key is not None:
         score_hyper_params["rca_prediction_key"] = args.rca_prediction_key
     if args.rca_export_lite:

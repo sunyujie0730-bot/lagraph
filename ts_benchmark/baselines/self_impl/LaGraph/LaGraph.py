@@ -84,6 +84,12 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "use_synthetic_anomaly_head": False,
     "use_synthetic_score": False,
     "lambda_synthetic_anomaly": 0.0,
+    "use_synthetic_rca_loss": False,
+    "lambda_synthetic_rca": 0.0,
+    "synthetic_rca_margin": 0.2,
+    "synthetic_rca_topk": 5,
+    "synthetic_rca_min_roots": 1,
+    "synthetic_rca_max_roots": 3,
     "synthetic_score_weight": 0.1,
     "synthetic_score_eps": 1e-6,
     "synthetic_min_len": 4,
@@ -172,6 +178,8 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_contrast_weight": 0.0,
     "rca_mechanism_residual_window": 0,
     "rca_mechanism_residual_weight": 0.0,
+    "rca_event_head_ratio": 1.0,
+    "rca_event_head_points": 0,
     "rca_prediction_key": "pot",
     # --- v11.4 P0-2: POT 阈值参数 ---
     "pot_risk": 1e-4,            # POT EVT 风险水平
@@ -1257,23 +1265,37 @@ class LaGraph:
         B, L, C = x.shape
         device = x.device
         mask = torch.zeros(B, L, device=device, dtype=torch.float32)
+        channel_mask = torch.zeros(B, C, device=device, dtype=torch.float32)
 
         min_len = int(getattr(self.config, "synthetic_min_len", 4) or 4)
         max_len = int(getattr(self.config, "synthetic_max_len", 20) or 20)
         min_len = min(max(1, min_len), max(1, L))
         max_len = min(max(min_len, max_len), max(1, L))
+        use_rca_roots = bool(getattr(self.config, "use_synthetic_rca_loss", False))
+        min_roots = int(getattr(self.config, "synthetic_rca_min_roots", 1) or 1)
+        max_roots = int(getattr(self.config, "synthetic_rca_max_roots", 3) or 3)
+        min_roots = min(max(1, min_roots), C)
+        max_roots = min(max(min_roots, max_roots), C)
 
         for b in range(B):
             n_segments = int(torch.randint(1, 3, (1,), device=device).item())
+            fixed_root_channels = None
+            if use_rca_roots:
+                n_roots = int(torch.randint(min_roots, max_roots + 1, (1,), device=device).item())
+                fixed_root_channels = torch.randperm(C, device=device)[:n_roots]
             for _ in range(n_segments):
                 seg_len = int(torch.randint(min_len, max_len + 1, (1,), device=device).item())
                 start_hi = max(1, L - seg_len + 1)
                 start = int(torch.randint(0, start_hi, (1,), device=device).item())
                 end = min(L, start + seg_len)
 
-                frac = float(torch.empty((), device=device).uniform_(0.10, 0.35).item())
-                n_channels = min(C, max(1, int(round(C * frac))))
-                ch = torch.randperm(C, device=device)[:n_channels]
+                if use_rca_roots:
+                    ch = fixed_root_channels
+                    n_channels = int(ch.numel())
+                else:
+                    frac = float(torch.empty((), device=device).uniform_(0.10, 0.35).item())
+                    n_channels = min(C, max(1, int(round(C * frac))))
+                    ch = torch.randperm(C, device=device)[:n_channels]
                 typ = int(torch.randint(0, 7, (1,), device=device).item())
                 scale = input_data[b, :, ch].std(dim=0).clamp_min(0.2)
                 sign = torch.where(
@@ -1304,35 +1326,69 @@ class LaGraph:
                     x[b, local_idx[:, None], ch] = x[b, local_idx[:, None], ch] + amp
 
                 mask[b, start:end] = 1.0
+                channel_mask[b, ch] = 1.0
 
-        return x, mask
+        return x, mask, channel_mask
 
     def _synthetic_anomaly_aux_loss(self, input_data, normal_aux_losses):
-        if not getattr(self.config, "use_synthetic_anomaly_aux", False):
+        use_aux = bool(getattr(self.config, "use_synthetic_anomaly_aux", False))
+        use_rca = bool(getattr(self.config, "use_synthetic_rca_loss", False))
+        if not use_aux and not use_rca:
             return input_data.new_tensor(0.0)
         lambda_synth = float(getattr(self.config, "lambda_synthetic_anomaly", 0.0) or 0.0)
-        if lambda_synth <= 0 or not normal_aux_losses:
+        lambda_rca = float(getattr(self.config, "lambda_synthetic_rca", 0.0) or 0.0)
+        if (lambda_synth <= 0 and lambda_rca <= 0) or not normal_aux_losses:
             return input_data.new_tensor(0.0)
         normal_logits = normal_aux_losses.get("synthetic_logits")
-        if normal_logits is None:
-            return input_data.new_tensor(0.0)
 
-        synth_data, synth_mask = self._make_synthetic_anomaly_batch(input_data)
-        _, _, _, _, _, synth_aux, _ = self.model(synth_data)
+        synth_data, synth_mask, synth_channel_mask = self._make_synthetic_anomaly_batch(input_data)
+        synth_rec, _, _, _, _, synth_aux, _ = self.model(synth_data)
         synth_logits = synth_aux.get("synthetic_logits") if synth_aux else None
-        if synth_logits is None:
-            return input_data.new_tensor(0.0)
+        total_loss = input_data.new_tensor(0.0)
 
-        normal_target = torch.zeros_like(normal_logits)
-        normal_loss = F.binary_cross_entropy_with_logits(normal_logits, normal_target)
+        if use_aux and lambda_synth > 0 and normal_logits is not None and synth_logits is not None:
+            normal_target = torch.zeros_like(normal_logits)
+            normal_loss = F.binary_cross_entropy_with_logits(normal_logits, normal_target)
 
-        pos = synth_mask.sum().clamp_min(1.0)
-        neg = (synth_mask.numel() - synth_mask.sum()).clamp_min(1.0)
-        pos_weight = (neg / pos).clamp(1.0, 20.0)
-        synth_loss = F.binary_cross_entropy_with_logits(
-            synth_logits, synth_mask, pos_weight=pos_weight,
-        )
-        return lambda_synth * (synth_loss + 0.25 * normal_loss)
+            pos = synth_mask.sum().clamp_min(1.0)
+            neg = (synth_mask.numel() - synth_mask.sum()).clamp_min(1.0)
+            pos_weight = (neg / pos).clamp(1.0, 20.0)
+            synth_loss = F.binary_cross_entropy_with_logits(
+                synth_logits, synth_mask, pos_weight=pos_weight,
+            )
+            total_loss = total_loss + lambda_synth * (synth_loss + 0.25 * normal_loss)
+
+        if use_rca and lambda_rca > 0:
+            channel_err = None
+            if synth_aux:
+                channel_err = synth_aux.get("channel_mechanism_error")
+            if channel_err is None:
+                channel_err = F.l1_loss(synth_rec, synth_data, reduction="none")
+            channel_scores = channel_err.mean(dim=1)
+            total_loss = total_loss + lambda_rca * self._synthetic_rca_ranking_loss(
+                channel_scores,
+                synth_channel_mask,
+            )
+
+        return total_loss
+
+    def _synthetic_rca_ranking_loss(self, channel_scores, channel_mask):
+        margin = float(getattr(self.config, "synthetic_rca_margin", 0.2) or 0.2)
+        hard_topk = int(getattr(self.config, "synthetic_rca_topk", 5) or 5)
+        losses = []
+        for b in range(channel_scores.shape[0]):
+            roots = channel_mask[b] > 0.5
+            non_roots = ~roots
+            if roots.sum() == 0 or non_roots.sum() == 0:
+                continue
+            pos_score = channel_scores[b, roots].mean()
+            neg_scores = channel_scores[b, non_roots]
+            k = min(max(1, hard_topk), neg_scores.numel())
+            hard_neg = torch.topk(neg_scores, k=k).values.mean()
+            losses.append(F.relu(channel_scores.new_tensor(margin) + hard_neg - pos_score))
+        if not losses:
+            return channel_scores.new_tensor(0.0)
+        return torch.stack(losses).mean()
 
     @torch.no_grad()
     def _fit_score_channel_stats(self, train_data: pd.DataFrame):
@@ -2836,22 +2892,30 @@ class LaGraph:
         contrast_weight,
         mechanism_residual_window,
         mechanism_residual_weight,
+        event_head_ratio=1.0,
+        event_head_points=0,
         max_channel_ranking=None,
     ):
         events = []
         for event_id, (start, end) in enumerate(segments, start=1):
             if end <= start:
                 continue
-            event_raw_scores = channel_scores[start:end].mean(axis=0)
+            score_start, score_end = self._rca_event_score_bounds(
+                start,
+                end,
+                event_head_ratio,
+                event_head_points,
+            )
+            event_raw_scores = channel_scores[score_start:score_end].mean(axis=0)
             event_contrast_scores = np.zeros_like(event_raw_scores)
             if contrast_window > 0 and contrast_weight > 0.0 and start > 0:
                 baseline_start = max(0, start - contrast_window)
                 baseline_scores = channel_scores[baseline_start:start].mean(axis=0)
                 event_contrast_scores = np.maximum(event_raw_scores - baseline_scores, 0.0)
             event_scores = event_raw_scores + contrast_weight * event_contrast_scores
-            event_base_scores = base_channel_scores[start:end].mean(axis=0)
-            event_graph_scores = graph_channel_scores[start:end].mean(axis=0)
-            event_mechanism_scores = mechanism_channel_scores[start:end].mean(axis=0)
+            event_base_scores = base_channel_scores[score_start:score_end].mean(axis=0)
+            event_graph_scores = graph_channel_scores[score_start:score_end].mean(axis=0)
+            event_mechanism_scores = mechanism_channel_scores[score_start:score_end].mean(axis=0)
             event_mechanism_residual_scores = np.zeros_like(event_mechanism_scores)
             if mechanism_residual_window > 0 and mechanism_residual_weight > 0.0 and start > 0:
                 baseline_start = max(0, start - mechanism_residual_window)
@@ -2893,12 +2957,30 @@ class LaGraph:
                     "start": int(start),
                     "end": int(end),
                     "length": int(end - start),
+                    "score_start": int(score_start),
+                    "score_end": int(score_end),
+                    "score_length": int(score_end - score_start),
                     "top_channels": channel_ranking[:20],
                     "channel_ranking": channel_ranking,
                     "group_ranking": group_ranking,
                 }
             )
         return events
+
+    @staticmethod
+    def _rca_event_score_bounds(start, end, event_head_ratio=1.0, event_head_points=0):
+        length = max(0, int(end) - int(start))
+        if length <= 0:
+            return int(start), int(end)
+        head_len = length
+        ratio = float(event_head_ratio if event_head_ratio is not None else 1.0)
+        if 0.0 < ratio < 1.0:
+            head_len = min(head_len, int(np.ceil(length * ratio)))
+        points = int(event_head_points or 0)
+        if points > 0:
+            head_len = min(head_len, points)
+        head_len = max(1, head_len)
+        return int(start), int(start) + head_len
 
     def export_root_cause_report(self, series_name, test_data, test_label, predict_labels=None, scores=None):
         if not bool(getattr(self.config, "export_rca", False)):
@@ -2944,6 +3026,8 @@ class LaGraph:
         contrast_weight = float(getattr(self.config, "rca_contrast_weight", 0.0) or 0.0)
         mechanism_residual_window = int(getattr(self.config, "rca_mechanism_residual_window", 0) or 0)
         mechanism_residual_weight = float(getattr(self.config, "rca_mechanism_residual_weight", 0.0) or 0.0)
+        event_head_ratio = float(getattr(self.config, "rca_event_head_ratio", 1.0) or 1.0)
+        event_head_points = int(getattr(self.config, "rca_event_head_points", 0) or 0)
         export_lite = bool(getattr(self.config, "rca_export_lite", False))
         export_top_k = int(getattr(self.config, "rca_export_top_k", 20) or 20)
         max_channel_ranking = export_top_k if export_lite else None
@@ -2964,6 +3048,8 @@ class LaGraph:
             contrast_weight,
             mechanism_residual_window,
             mechanism_residual_weight,
+            event_head_ratio,
+            event_head_points,
             max_channel_ranking=max_channel_ranking,
         )
         pred_key, pred_mask = self._select_rca_prediction_mask(predict_labels, len(labels))
@@ -2993,6 +3079,8 @@ class LaGraph:
                     contrast_weight,
                     mechanism_residual_window,
                     mechanism_residual_weight,
+                    event_head_ratio,
+                    event_head_points,
                     max_channel_ranking=max_channel_ranking,
                 )
         elif isinstance(predict_labels, dict):
@@ -3013,6 +3101,8 @@ class LaGraph:
                     contrast_weight,
                     mechanism_residual_window,
                     mechanism_residual_weight,
+                    event_head_ratio,
+                    event_head_points,
                     max_channel_ranking=max_channel_ranking,
                 )
         elif predict_labels is not None:
@@ -3031,6 +3121,8 @@ class LaGraph:
                 contrast_weight,
                 mechanism_residual_window,
                 mechanism_residual_weight,
+                event_head_ratio,
+                event_head_points,
                 max_channel_ranking=max_channel_ranking,
             )
         predicted_events = predicted_events_by_key.get(pred_key, [])
@@ -3046,6 +3138,8 @@ class LaGraph:
                 contrast_weight,
                 mechanism_residual_window,
                 mechanism_residual_weight,
+                event_head_ratio,
+                event_head_points,
                 max_channel_ranking=max_channel_ranking,
             )
 
@@ -3071,6 +3165,8 @@ class LaGraph:
             "rca_contrast_weight": contrast_weight,
             "rca_mechanism_residual_window": mechanism_residual_window,
             "rca_mechanism_residual_weight": mechanism_residual_weight,
+            "rca_event_head_ratio": event_head_ratio,
+            "rca_event_head_points": event_head_points,
             "rca_prediction_key": pred_key,
             "feature_names": feature_names,
             "events": events,
