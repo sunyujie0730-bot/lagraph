@@ -477,6 +477,17 @@ def main():
         help="Export event-level root-cause rankings based on channel reconstruction contributions.",
     )
     parser.add_argument(
+        "--rca-export-lite",
+        action="store_true",
+        help="Export only selected prediction-key RCA events and truncated rankings.",
+    )
+    parser.add_argument(
+        "--rca-export-top-k",
+        type=int,
+        default=None,
+        help="Top-K channel ranking length kept when --rca-export-lite is enabled.",
+    )
+    parser.add_argument(
         "--rca-graph-weight",
         type=float,
         default=None,
@@ -1383,6 +1394,10 @@ def main():
         score_hyper_params["rca_mechanism_residual_weight"] = max(0.0, args.rca_mechanism_residual_weight)
     if args.rca_prediction_key is not None:
         score_hyper_params["rca_prediction_key"] = args.rca_prediction_key
+    if args.rca_export_lite:
+        score_hyper_params["rca_export_lite"] = True
+    if args.rca_export_top_k is not None:
+        score_hyper_params["rca_export_top_k"] = max(1, int(args.rca_export_top_k))
     if args.robust_input_preprocess:
         score_hyper_params["use_robust_input_preprocess"] = True
     if args.input_clip_lower_quantile is not None:

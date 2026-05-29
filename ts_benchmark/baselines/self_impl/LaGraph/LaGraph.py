@@ -163,6 +163,8 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "prediction_min_len": 1,
     "prediction_dilate": 0,
     "export_rca": False,
+    "rca_export_lite": False,
+    "rca_export_top_k": 20,
     "rca_graph_weight": 0.0,
     "rca_mechanism_weight": 0.0,
     "rca_graph_direction": "outgoing",
@@ -2834,6 +2836,7 @@ class LaGraph:
         contrast_weight,
         mechanism_residual_window,
         mechanism_residual_weight,
+        max_channel_ranking=None,
     ):
         events = []
         for event_id, (start, end) in enumerate(segments, start=1):
@@ -2872,6 +2875,8 @@ class LaGraph:
                 }
                 for rank, idx in enumerate(order)
             ]
+            if max_channel_ranking is not None:
+                channel_ranking = channel_ranking[:max(1, int(max_channel_ranking))]
             group_scores = {}
             for name, value in zip(feature_names, event_scores):
                 group = self._root_cause_group_name(name)
@@ -2939,6 +2944,9 @@ class LaGraph:
         contrast_weight = float(getattr(self.config, "rca_contrast_weight", 0.0) or 0.0)
         mechanism_residual_window = int(getattr(self.config, "rca_mechanism_residual_window", 0) or 0)
         mechanism_residual_weight = float(getattr(self.config, "rca_mechanism_residual_weight", 0.0) or 0.0)
+        export_lite = bool(getattr(self.config, "rca_export_lite", False))
+        export_top_k = int(getattr(self.config, "rca_export_top_k", 20) or 20)
+        max_channel_ranking = export_top_k if export_lite else None
         channel_scores = (
             base_channel_scores
             + graph_weight * graph_channel_scores
@@ -2956,10 +2964,38 @@ class LaGraph:
             contrast_weight,
             mechanism_residual_window,
             mechanism_residual_weight,
+            max_channel_ranking=max_channel_ranking,
         )
         pred_key, pred_mask = self._select_rca_prediction_mask(predict_labels, len(labels))
         predicted_events_by_key = {}
-        if isinstance(predict_labels, dict):
+        if export_lite:
+            if pred_mask is not None:
+                if rca_offset > 0 and isinstance(predict_labels, dict):
+                    requested_prediction = None
+                    for key, prediction in predict_labels.items():
+                        if self._rca_prediction_key_name(key) == pred_key:
+                            requested_prediction = prediction
+                            break
+                    if requested_prediction is not None:
+                        raw_mask = self._normalize_prediction_mask(requested_prediction, len(test_data))
+                        pred_mask = raw_mask[rca_offset:rca_offset + len(labels)]
+                elif rca_offset > 0 and predict_labels is not None and not isinstance(predict_labels, dict):
+                    raw_mask = self._normalize_prediction_mask(predict_labels, len(test_data))
+                    pred_mask = raw_mask[rca_offset:rca_offset + len(labels)]
+                predicted_events_by_key[pred_key] = self._build_rca_events(
+                    self._label_segments(pred_mask),
+                    channel_scores,
+                    base_channel_scores,
+                    graph_channel_scores,
+                    mechanism_channel_scores,
+                    feature_names,
+                    contrast_window,
+                    contrast_weight,
+                    mechanism_residual_window,
+                    mechanism_residual_weight,
+                    max_channel_ranking=max_channel_ranking,
+                )
+        elif isinstance(predict_labels, dict):
             for key, prediction in predict_labels.items():
                 key_name = self._rca_prediction_key_name(key)
                 mask = self._normalize_prediction_mask(prediction, len(labels))
@@ -2977,6 +3013,7 @@ class LaGraph:
                     contrast_weight,
                     mechanism_residual_window,
                     mechanism_residual_weight,
+                    max_channel_ranking=max_channel_ranking,
                 )
         elif predict_labels is not None:
             mask = self._normalize_prediction_mask(predict_labels, len(labels))
@@ -2994,6 +3031,7 @@ class LaGraph:
                 contrast_weight,
                 mechanism_residual_window,
                 mechanism_residual_weight,
+                max_channel_ranking=max_channel_ranking,
             )
         predicted_events = predicted_events_by_key.get(pred_key, [])
         if not predicted_events and pred_mask is not None:
@@ -3008,6 +3046,7 @@ class LaGraph:
                 contrast_weight,
                 mechanism_residual_window,
                 mechanism_residual_weight,
+                max_channel_ranking=max_channel_ranking,
             )
 
         from datetime import datetime
@@ -3022,6 +3061,8 @@ class LaGraph:
             "series_name": series_name,
             "dataset_name": self.dataset_name,
             "score_method": "mean channel-wise normalized reconstruction error plus graph-propagated, mechanism-violation, and local-contrast attribution",
+            "rca_export_lite": export_lite,
+            "rca_export_top_k": export_top_k if export_lite else None,
             "rca_graph_weight": graph_weight,
             "rca_mechanism_weight": mechanism_weight,
             "rca_offset": int(rca_offset),
