@@ -174,6 +174,11 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_export_top_k": 20,
     "rca_graph_weight": 0.0,
     "rca_mechanism_weight": 0.0,
+    "rca_use_source_propagation": False,
+    "rca_source_weight": 0.75,
+    "rca_propagation_weight": 0.25,
+    "rca_source_mechanism_weight": 0.0,
+    "rca_causal_weight": 0.0,
     "rca_graph_direction": "outgoing",
     "rca_contrast_window": 0,
     "rca_contrast_weight": 0.0,
@@ -848,6 +853,7 @@ class LaGraph:
         self._last_channel_scores = None
         self._last_graph_channel_scores = None
         self._last_mechanism_channel_scores = None
+        self._last_causal_channel_scores = None
         self._last_channel_names = None
 
         # ★ P0-2: POT 阈值估计器
@@ -1088,6 +1094,11 @@ class LaGraph:
                 "use_channel_mechanism_score": getattr(self.config, "use_channel_mechanism_score", None),
                 "channel_mechanism_score_weight": getattr(self.config, "channel_mechanism_score_weight", None),
                 "rca_mechanism_weight": getattr(self.config, "rca_mechanism_weight", None),
+                "rca_use_source_propagation": getattr(self.config, "rca_use_source_propagation", None),
+                "rca_source_weight": getattr(self.config, "rca_source_weight", None),
+                "rca_propagation_weight": getattr(self.config, "rca_propagation_weight", None),
+                "rca_source_mechanism_weight": getattr(self.config, "rca_source_mechanism_weight", None),
+                "rca_causal_weight": getattr(self.config, "rca_causal_weight", None),
                 "use_state_aware_fusion": getattr(self.config, "use_state_aware_fusion", None),
                 "state_aware_num_states": getattr(self.config, "state_aware_num_states", None),
                 "state_aware_graph_gate_init": getattr(self.config, "state_aware_graph_gate_init", None),
@@ -2551,11 +2562,17 @@ class LaGraph:
             mechanism_err = torch.zeros_like(channel_err)
         elif hasattr(raw_model, "_normalize_channel_mechanism_score"):
             mechanism_err = raw_model._normalize_channel_mechanism_score(mechanism_err)
+        causal_err = None
+        if aux_losses:
+            causal_err = aux_losses.get("causal_channel_error")
+        if causal_err is None:
+            causal_err = torch.zeros_like(channel_err)
         return (
             score.cpu().numpy(),
             channel_err.cpu().numpy(),
             graph_err.cpu().numpy(),
             mechanism_err.cpu().numpy(),
+            causal_err.cpu().numpy(),
         )
 
     def _graph_propagated_channel_error(self, channel_err, A_adaptive):
@@ -2684,18 +2701,26 @@ class LaGraph:
         channel_sums = None
         graph_channel_sums = None
         mechanism_channel_sums = None
+        causal_channel_sums = None
         channel_counts = None
         window_cursor = 0
         if export_rca:
             channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             graph_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             mechanism_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
+            causal_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             channel_counts = np.zeros(total_length, dtype=np.float64)
 
         for i, (input_data, labels) in enumerate(test_loader):
             input_data = input_data.float().to(self.device)
             if export_rca:
-                cri, channel_err, graph_channel_err, mechanism_channel_err = self._detect_forward_with_channels(input_data)
+                (
+                    cri,
+                    channel_err,
+                    graph_channel_err,
+                    mechanism_channel_err,
+                    causal_channel_err,
+                ) = self._detect_forward_with_channels(input_data)
                 self._add_window_channel_scores(channel_sums, channel_counts, channel_err, window_cursor)
                 self._add_window_channel_scores(
                     graph_channel_sums,
@@ -2708,6 +2733,13 @@ class LaGraph:
                     mechanism_channel_sums,
                     channel_counts,
                     mechanism_channel_err,
+                    window_cursor,
+                    update_counts=False,
+                )
+                self._add_window_channel_scores(
+                    causal_channel_sums,
+                    channel_counts,
+                    causal_channel_err,
                     window_cursor,
                     update_counts=False,
                 )
@@ -2741,11 +2773,18 @@ class LaGraph:
                 out=np.zeros_like(mechanism_channel_sums),
                 where=channel_counts[:, None] > 0,
             ).astype(np.float32)
+            self._last_causal_channel_scores = np.divide(
+                causal_channel_sums,
+                channel_counts[:, None],
+                out=np.zeros_like(causal_channel_sums),
+                where=channel_counts[:, None] > 0,
+            ).astype(np.float32)
             self._last_channel_names = list(test_data.columns)
         else:
             self._last_channel_scores = None
             self._last_graph_channel_scores = None
             self._last_mechanism_channel_scores = None
+            self._last_causal_channel_scores = None
             self._last_channel_names = None
 
         test_windows = np.concatenate(test_window_list, axis=0)
@@ -2901,6 +2940,9 @@ class LaGraph:
         event_head_ratio=1.0,
         event_head_points=0,
         max_channel_ranking=None,
+        source_channel_scores=None,
+        propagation_channel_scores=None,
+        causal_channel_scores=None,
     ):
         events = []
         for event_id, (start, end) in enumerate(segments, start=1):
@@ -2922,6 +2964,21 @@ class LaGraph:
             event_base_scores = base_channel_scores[score_start:score_end].mean(axis=0)
             event_graph_scores = graph_channel_scores[score_start:score_end].mean(axis=0)
             event_mechanism_scores = mechanism_channel_scores[score_start:score_end].mean(axis=0)
+            event_source_scores = (
+                source_channel_scores[score_start:score_end].mean(axis=0)
+                if source_channel_scores is not None
+                else event_raw_scores
+            )
+            event_propagation_scores = (
+                propagation_channel_scores[score_start:score_end].mean(axis=0)
+                if propagation_channel_scores is not None
+                else event_graph_scores
+            )
+            event_causal_scores = (
+                causal_channel_scores[score_start:score_end].mean(axis=0)
+                if causal_channel_scores is not None
+                else np.zeros_like(event_raw_scores)
+            )
             event_mechanism_residual_scores = np.zeros_like(event_mechanism_scores)
             if mechanism_residual_window > 0 and mechanism_residual_weight > 0.0 and start > 0:
                 baseline_start = max(0, start - mechanism_residual_window)
@@ -2940,6 +2997,9 @@ class LaGraph:
                     "base_score": float(event_base_scores[idx]),
                     "graph_score": float(event_graph_scores[idx]),
                     "mechanism_score": float(event_mechanism_scores[idx]),
+                    "source_score": float(event_source_scores[idx]),
+                    "propagation_score": float(event_propagation_scores[idx]),
+                    "causal_score": float(event_causal_scores[idx]),
                     "mechanism_residual_score": float(event_mechanism_residual_scores[idx]),
                     "contrast_score": float(event_contrast_scores[idx]),
                 }
@@ -3026,8 +3086,18 @@ class LaGraph:
             mechanism_channel_scores = np.zeros_like(base_channel_scores)
         else:
             mechanism_channel_scores = mechanism_channel_scores[score_slice]
+        causal_channel_scores = getattr(self, "_last_causal_channel_scores", None)
+        if causal_channel_scores is None:
+            causal_channel_scores = np.zeros_like(base_channel_scores)
+        else:
+            causal_channel_scores = causal_channel_scores[score_slice]
         graph_weight = float(getattr(self.config, "rca_graph_weight", 0.0) or 0.0)
         mechanism_weight = float(getattr(self.config, "rca_mechanism_weight", 0.0) or 0.0)
+        use_source_propagation = bool(getattr(self.config, "rca_use_source_propagation", False))
+        source_weight = float(getattr(self.config, "rca_source_weight", 0.75) or 0.75)
+        propagation_weight = float(getattr(self.config, "rca_propagation_weight", 0.25) or 0.25)
+        source_mechanism_weight = float(getattr(self.config, "rca_source_mechanism_weight", 0.0) or 0.0)
+        causal_weight = float(getattr(self.config, "rca_causal_weight", 0.0) or 0.0)
         contrast_window = int(getattr(self.config, "rca_contrast_window", 0) or 0)
         contrast_weight = float(getattr(self.config, "rca_contrast_weight", 0.0) or 0.0)
         mechanism_residual_window = int(getattr(self.config, "rca_mechanism_residual_window", 0) or 0)
@@ -3037,11 +3107,25 @@ class LaGraph:
         export_lite = bool(getattr(self.config, "rca_export_lite", False))
         export_top_k = int(getattr(self.config, "rca_export_top_k", 20) or 20)
         max_channel_ranking = export_top_k if export_lite else None
-        channel_scores = (
-            base_channel_scores
-            + graph_weight * graph_channel_scores
-            + mechanism_weight * mechanism_channel_scores
-        )
+        source_channel_scores = None
+        propagation_channel_scores = None
+        if use_source_propagation:
+            source_channel_scores = (
+                base_channel_scores
+                + source_mechanism_weight * mechanism_channel_scores
+                + causal_weight * causal_channel_scores
+            )
+            propagation_channel_scores = graph_channel_scores
+            channel_scores = (
+                source_weight * source_channel_scores
+                + propagation_weight * propagation_channel_scores
+            )
+        else:
+            channel_scores = (
+                base_channel_scores
+                + graph_weight * graph_channel_scores
+                + mechanism_weight * mechanism_channel_scores
+            )
         feature_names = list(self._last_channel_names)
         events = self._build_rca_events(
             self._label_segments(labels),
@@ -3057,6 +3141,9 @@ class LaGraph:
             event_head_ratio,
             event_head_points,
             max_channel_ranking=max_channel_ranking,
+            source_channel_scores=source_channel_scores,
+            propagation_channel_scores=propagation_channel_scores,
+            causal_channel_scores=causal_channel_scores,
         )
         pred_key, pred_mask = self._select_rca_prediction_mask(predict_labels, len(labels))
         predicted_events_by_key = {}
@@ -3088,6 +3175,9 @@ class LaGraph:
                     event_head_ratio,
                     event_head_points,
                     max_channel_ranking=max_channel_ranking,
+                    source_channel_scores=source_channel_scores,
+                    propagation_channel_scores=propagation_channel_scores,
+                    causal_channel_scores=causal_channel_scores,
                 )
         elif isinstance(predict_labels, dict):
             for key, prediction in predict_labels.items():
@@ -3110,6 +3200,9 @@ class LaGraph:
                     event_head_ratio,
                     event_head_points,
                     max_channel_ranking=max_channel_ranking,
+                    source_channel_scores=source_channel_scores,
+                    propagation_channel_scores=propagation_channel_scores,
+                    causal_channel_scores=causal_channel_scores,
                 )
         elif predict_labels is not None:
             mask = self._normalize_prediction_mask(predict_labels, len(labels))
@@ -3130,6 +3223,9 @@ class LaGraph:
                 event_head_ratio,
                 event_head_points,
                 max_channel_ranking=max_channel_ranking,
+                source_channel_scores=source_channel_scores,
+                propagation_channel_scores=propagation_channel_scores,
+                causal_channel_scores=causal_channel_scores,
             )
         predicted_events = predicted_events_by_key.get(pred_key, [])
         if not predicted_events and pred_mask is not None:
@@ -3147,6 +3243,9 @@ class LaGraph:
                 event_head_ratio,
                 event_head_points,
                 max_channel_ranking=max_channel_ranking,
+                source_channel_scores=source_channel_scores,
+                propagation_channel_scores=propagation_channel_scores,
+                causal_channel_scores=causal_channel_scores,
             )
 
         from datetime import datetime
@@ -3157,14 +3256,26 @@ class LaGraph:
         output_dir = os.path.join(ROOT_PATH, "result", "rca", safe_name)
         os.makedirs(output_dir, exist_ok=True)
         output_path = os.path.join(output_dir, f"{timestamp}_rca.json")
+        score_method = (
+            "event-level source/propagation RCA: "
+            "source=(base residual + mechanism prior deviation + lagged causal deviation), "
+            "propagation=graph-propagated residual"
+            if use_source_propagation
+            else "mean channel-wise normalized reconstruction error plus graph-propagated, mechanism-violation, and local-contrast attribution"
+        )
         payload = {
             "series_name": series_name,
             "dataset_name": self.dataset_name,
-            "score_method": "mean channel-wise normalized reconstruction error plus graph-propagated, mechanism-violation, and local-contrast attribution",
+            "score_method": score_method,
             "rca_export_lite": export_lite,
             "rca_export_top_k": export_top_k if export_lite else None,
             "rca_graph_weight": graph_weight,
             "rca_mechanism_weight": mechanism_weight,
+            "rca_use_source_propagation": use_source_propagation,
+            "rca_source_weight": source_weight,
+            "rca_propagation_weight": propagation_weight,
+            "rca_source_mechanism_weight": source_mechanism_weight,
+            "rca_causal_weight": causal_weight,
             "rca_offset": int(rca_offset),
             "rca_graph_direction": str(getattr(self.config, "rca_graph_direction", "outgoing") or "outgoing"),
             "rca_contrast_window": contrast_window,

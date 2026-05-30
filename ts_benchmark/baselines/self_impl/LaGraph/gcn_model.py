@@ -978,6 +978,7 @@ class SparseGCN(nn.Module):
         causal_score = None
         causal_mechanism_loss = None
         causal_pred = None
+        causal_channel_error = None
         channel_mechanism_score = None
         channel_mechanism_loss = None
         channel_mechanism_error = None
@@ -990,6 +991,11 @@ class SparseGCN(nn.Module):
             causal_pred, causal_score, _ = self.lagged_causal_graph(causal_input)
             valid_start = self.lagged_causal_graph.max_lag
             if L > valid_start:
+                causal_channel_error = F.smooth_l1_loss(
+                    causal_pred,
+                    causal_input,
+                    reduction="none",
+                )
                 causal_mechanism_loss = F.smooth_l1_loss(
                     causal_pred[:, valid_start:, :],
                     causal_input[:, valid_start:, :],
@@ -1122,6 +1128,8 @@ class SparseGCN(nn.Module):
             aux_losses['channel_prior_align_loss'] = self.channel_graph.get_prior_align_loss()
         if causal_score is not None:
             aux_losses['causal_score'] = causal_score
+        if causal_channel_error is not None:
+            aux_losses['causal_channel_error'] = causal_channel_error
         if causal_mechanism_loss is not None:
             aux_losses['causal_mechanism_loss'] = causal_mechanism_loss
             aux_losses['causal_sparse_loss'] = self.lagged_causal_graph.get_sparsity_loss()
