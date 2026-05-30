@@ -423,6 +423,7 @@ class SparseGCN(nn.Module):
                  vq_score_weight=0.3,
                  score_topk_k=None,
                  use_synthetic_anomaly_head=False,
+                 use_synthetic_rca_head=False,
                  use_synthetic_score=False,
                  synthetic_score_weight=0.1,
                  synthetic_score_eps=1e-6,
@@ -480,6 +481,7 @@ class SparseGCN(nn.Module):
         self.use_direct_vq_score = use_direct_vq_score
         self.score_topk_k = score_topk_k
         self.use_synthetic_anomaly_head = use_synthetic_anomaly_head
+        self.use_synthetic_rca_head = bool(use_synthetic_rca_head)
         self.use_synthetic_score = use_synthetic_score
         self.synthetic_score_weight = float(synthetic_score_weight)
         self.synthetic_score_eps = float(synthetic_score_eps)
@@ -742,6 +744,17 @@ class SparseGCN(nn.Module):
         else:
             self.synthetic_anomaly_head = None
 
+        if self.use_synthetic_rca_head:
+            hidden = max(64, d_model)
+            self.synthetic_rca_head = nn.Sequential(
+                nn.Linear(d_model * 2, hidden),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden, c_out),
+            )
+        else:
+            self.synthetic_rca_head = None
+
         self.use_freq_loss = False
         self.lambda_freq = 0.0
         self.use_contrastive = False
@@ -769,6 +782,7 @@ class SparseGCN(nn.Module):
         self._set_trainable(self.state_aware_fusion, self.use_state_aware_fusion)
         self._set_trainable(self.lagged_causal_graph, self.use_lagged_causal_graph)
         self._set_trainable(self.synthetic_anomaly_head, self.use_synthetic_anomaly_head)
+        self._set_trainable(self.synthetic_rca_head, self.use_synthetic_rca_head)
         self._set_trainable(self.vq_bottleneck, self.use_vq_bypass)
         self._set_trainable(self.multi_scale_scorer, self.use_multi_scale_scorer)
         self._set_trainable(self.mechanism_context_fusion, self.use_mechanism_coupled_decoder)
@@ -1108,6 +1122,16 @@ class SparseGCN(nn.Module):
         synthetic_logits = None
         if self.synthetic_anomaly_head is not None:
             synthetic_logits = self.synthetic_anomaly_head(resid_enc).squeeze(-1)
+        synthetic_rca_logits = None
+        if self.synthetic_rca_head is not None:
+            pooled = torch.cat(
+                [
+                    resid_enc.mean(dim=1),
+                    resid_enc.amax(dim=1),
+                ],
+                dim=-1,
+            )
+            synthetic_rca_logits = self.synthetic_rca_head(pooled)
 
         # 步骤 6: 投影回 c_out
         resid_out = self.proj_out(resid_enc)  # (B, L, C)
@@ -1145,6 +1169,8 @@ class SparseGCN(nn.Module):
             aux_losses['mechanism_predictive_blend_weight'] = mechanism_predictive_blend_weight.detach()
         if synthetic_logits is not None:
             aux_losses['synthetic_logits'] = synthetic_logits
+        if synthetic_rca_logits is not None:
+            aux_losses['synthetic_rca_logits'] = synthetic_rca_logits
         if graph_fusion_gate is not None:
             aux_losses['graph_fusion_gate_mean'] = graph_fusion_gate.detach().mean()
             aux_losses['graph_fusion_residual_weight'] = torch.sigmoid(

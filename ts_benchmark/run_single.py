@@ -175,6 +175,7 @@ def main():
             "causal-gated-source",
             "causal-source-rca",
             "causal-source-robust-rca",
+            "synthetic-responsibility-rca",
             "onset-source-rca",
             "channel-only",
             "temporal-only",
@@ -455,6 +456,18 @@ def main():
         help="Number of hardest non-root variables used by synthetic RCA ranking loss",
     )
     parser.add_argument(
+        "--synthetic-rca-bce-weight",
+        type=float,
+        default=None,
+        help="Weight for BCE part of synthetic variable-responsibility training.",
+    )
+    parser.add_argument(
+        "--synthetic-rca-rank-weight",
+        type=float,
+        default=None,
+        help="Weight for ranking part of synthetic variable-responsibility training.",
+    )
+    parser.add_argument(
         "--synthetic-score-weight",
         type=float,
         default=None,
@@ -562,6 +575,12 @@ def main():
         type=float,
         default=None,
         help="Weight for lagged causal deviation inside the RCA source score.",
+    )
+    parser.add_argument(
+        "--rca-synthetic-weight",
+        type=float,
+        default=None,
+        help="Weight for learned synthetic-responsibility score inside RCA rankings.",
     )
     parser.add_argument(
         "--rca-onset-weight",
@@ -1129,6 +1148,45 @@ def main():
             "rca_propagation_weight": 0.0,
             "rca_source_mechanism_weight": 0.0,
             "rca_causal_weight": 1.0,
+            "rca_event_head_ratio": 1.0,
+            "rca_event_head_points": 0,
+            "rca_prediction_key": "15",
+        },
+        "synthetic-responsibility-rca": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_lagged_causal_graph": True,
+            "causal_lags": [1, 3, 6, 12],
+            "causal_topk": 5,
+            "causal_detach_backbone": False,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "use_mechanism_predictive_head": True,
+            "mechanism_predictive_blend_init": 0.30,
+            "lambda_channel_mechanism": 0.05,
+            "lambda_causal_mechanism": 0.01,
+            "lambda_causal_sparse": 0.001,
+            "use_channel_mechanism_score": True,
+            "channel_mechanism_score_weight": 0.30,
+            "use_synthetic_rca_head": True,
+            "use_synthetic_rca_loss": True,
+            "lambda_synthetic_rca": 0.08,
+            "synthetic_aux_interval": 2,
+            "synthetic_rca_margin": 0.15,
+            "synthetic_rca_topk": 8,
+            "synthetic_rca_min_roots": 1,
+            "synthetic_rca_max_roots": 3,
+            "synthetic_rca_bce_weight": 1.0,
+            "synthetic_rca_rank_weight": 0.5,
+            "rca_use_source_propagation": True,
+            "rca_graph_weight": 1.0,
+            "rca_mechanism_weight": 0.0,
+            "rca_source_weight": 1.0,
+            "rca_source_base_weight": 0.4,
+            "rca_propagation_weight": 0.0,
+            "rca_source_mechanism_weight": 0.0,
+            "rca_causal_weight": 0.2,
+            "rca_synthetic_weight": 1.0,
             "rca_event_head_ratio": 1.0,
             "rca_event_head_points": 0,
             "rca_prediction_key": "15",
@@ -1755,6 +1813,10 @@ def main():
         score_hyper_params["synthetic_rca_margin"] = max(float(args.synthetic_rca_margin), 0.0)
     if args.synthetic_rca_topk is not None:
         score_hyper_params["synthetic_rca_topk"] = max(1, int(args.synthetic_rca_topk))
+    if args.synthetic_rca_bce_weight is not None:
+        score_hyper_params["synthetic_rca_bce_weight"] = max(0.0, float(args.synthetic_rca_bce_weight))
+    if args.synthetic_rca_rank_weight is not None:
+        score_hyper_params["synthetic_rca_rank_weight"] = max(0.0, float(args.synthetic_rca_rank_weight))
     if args.synthetic_score_weight is not None:
         score_hyper_params["synthetic_score_weight"] = max(0.0, args.synthetic_score_weight)
     if args.reconstruction_loss is not None:
@@ -1783,6 +1845,8 @@ def main():
         score_hyper_params["rca_source_mechanism_weight"] = max(0.0, float(args.rca_source_mechanism_weight))
     if args.rca_causal_weight is not None:
         score_hyper_params["rca_causal_weight"] = max(0.0, float(args.rca_causal_weight))
+    if args.rca_synthetic_weight is not None:
+        score_hyper_params["rca_synthetic_weight"] = max(0.0, float(args.rca_synthetic_weight))
     if args.rca_onset_weight is not None:
         score_hyper_params["rca_onset_weight"] = max(0.0, float(args.rca_onset_weight))
     if args.rca_onset_baseline_window is not None:

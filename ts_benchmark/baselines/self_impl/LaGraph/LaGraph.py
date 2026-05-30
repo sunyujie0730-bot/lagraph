@@ -82,6 +82,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "score_topk_k": None,
     "use_synthetic_anomaly_aux": False,
     "use_synthetic_anomaly_head": False,
+    "use_synthetic_rca_head": False,
     "use_synthetic_score": False,
     "lambda_synthetic_anomaly": 0.0,
     "synthetic_aux_interval": 1,
@@ -91,6 +92,8 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "synthetic_rca_topk": 5,
     "synthetic_rca_min_roots": 1,
     "synthetic_rca_max_roots": 3,
+    "synthetic_rca_bce_weight": 1.0,
+    "synthetic_rca_rank_weight": 1.0,
     "synthetic_score_weight": 0.1,
     "synthetic_score_eps": 1e-6,
     "synthetic_min_len": 4,
@@ -180,6 +183,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_propagation_weight": 0.25,
     "rca_source_mechanism_weight": 0.0,
     "rca_causal_weight": 0.0,
+    "rca_synthetic_weight": 0.0,
     "rca_graph_direction": "outgoing",
     "rca_contrast_window": 0,
     "rca_contrast_weight": 0.0,
@@ -858,6 +862,7 @@ class LaGraph:
         self._last_graph_channel_scores = None
         self._last_mechanism_channel_scores = None
         self._last_causal_channel_scores = None
+        self._last_synthetic_rca_channel_scores = None
         self._last_channel_names = None
 
         # ★ P0-2: POT 阈值估计器
@@ -1364,10 +1369,12 @@ class LaGraph:
         if (lambda_synth <= 0 and lambda_rca <= 0) or not normal_aux_losses:
             return input_data.new_tensor(0.0)
         normal_logits = normal_aux_losses.get("synthetic_logits")
+        normal_rca_logits = normal_aux_losses.get("synthetic_rca_logits")
 
         synth_data, synth_mask, synth_channel_mask = self._make_synthetic_anomaly_batch(input_data)
         synth_rec, _, _, _, _, synth_aux, _ = self.model(synth_data)
         synth_logits = synth_aux.get("synthetic_logits") if synth_aux else None
+        synth_rca_logits = synth_aux.get("synthetic_rca_logits") if synth_aux else None
         total_loss = input_data.new_tensor(0.0)
 
         if use_aux and lambda_synth > 0 and normal_logits is not None and synth_logits is not None:
@@ -1383,16 +1390,41 @@ class LaGraph:
             total_loss = total_loss + lambda_synth * (synth_loss + 0.25 * normal_loss)
 
         if use_rca and lambda_rca > 0:
-            channel_err = None
-            if synth_aux:
-                channel_err = synth_aux.get("channel_mechanism_error")
-            if channel_err is None:
-                channel_err = F.l1_loss(synth_rec, synth_data, reduction="none")
-            channel_scores = channel_err.mean(dim=1)
-            total_loss = total_loss + lambda_rca * self._synthetic_rca_ranking_loss(
-                channel_scores,
-                synth_channel_mask,
-            )
+            bce_weight = float(getattr(self.config, "synthetic_rca_bce_weight", 1.0) or 1.0)
+            rank_weight = float(getattr(self.config, "synthetic_rca_rank_weight", 1.0) or 1.0)
+            rca_loss = input_data.new_tensor(0.0)
+            if synth_rca_logits is not None:
+                pos = synth_channel_mask.sum().clamp_min(1.0)
+                neg = (synth_channel_mask.numel() - synth_channel_mask.sum()).clamp_min(1.0)
+                pos_weight = (neg / pos).clamp(1.0, 20.0)
+                bce_loss = F.binary_cross_entropy_with_logits(
+                    synth_rca_logits,
+                    synth_channel_mask,
+                    pos_weight=pos_weight,
+                )
+                if normal_rca_logits is not None:
+                    normal_rca_target = torch.zeros_like(normal_rca_logits)
+                    bce_loss = bce_loss + 0.25 * F.binary_cross_entropy_with_logits(
+                        normal_rca_logits,
+                        normal_rca_target,
+                    )
+                rca_loss = rca_loss + bce_weight * bce_loss
+                rca_loss = rca_loss + rank_weight * self._synthetic_rca_ranking_loss(
+                    torch.sigmoid(synth_rca_logits),
+                    synth_channel_mask,
+                )
+            else:
+                channel_err = None
+                if synth_aux:
+                    channel_err = synth_aux.get("channel_mechanism_error")
+                if channel_err is None:
+                    channel_err = F.l1_loss(synth_rec, synth_data, reduction="none")
+                channel_scores = channel_err.mean(dim=1)
+                rca_loss = rca_loss + self._synthetic_rca_ranking_loss(
+                    channel_scores,
+                    synth_channel_mask,
+                )
+            total_loss = total_loss + lambda_rca * rca_loss
 
         return total_loss
 
@@ -1820,6 +1852,7 @@ class LaGraph:
             vq_score_weight=getattr(self.config, "vq_score_weight", 0.3),
             score_topk_k=getattr(self.config, "score_topk_k", None),
             use_synthetic_anomaly_head=getattr(self.config, "use_synthetic_anomaly_head", False),
+            use_synthetic_rca_head=getattr(self.config, "use_synthetic_rca_head", False),
             use_synthetic_score=getattr(self.config, "use_synthetic_score", False),
             synthetic_score_weight=getattr(self.config, "synthetic_score_weight", 0.1),
             synthetic_score_eps=getattr(self.config, "synthetic_score_eps", 1e-6),
@@ -2083,6 +2116,7 @@ class LaGraph:
             vq_score_weight=getattr(self.config, "vq_score_weight", 0.3),
             score_topk_k=getattr(self.config, "score_topk_k", None),
             use_synthetic_anomaly_head=getattr(self.config, "use_synthetic_anomaly_head", False),
+            use_synthetic_rca_head=getattr(self.config, "use_synthetic_rca_head", False),
             use_synthetic_score=getattr(self.config, "use_synthetic_score", False),
             synthetic_score_weight=getattr(self.config, "synthetic_score_weight", 0.1),
             synthetic_score_eps=getattr(self.config, "synthetic_score_eps", 1e-6),
@@ -2575,12 +2609,24 @@ class LaGraph:
             causal_err = aux_losses.get("causal_channel_error")
         if causal_err is None:
             causal_err = torch.zeros_like(channel_err)
+        synthetic_rca_err = None
+        if aux_losses:
+            synthetic_rca_logits = aux_losses.get("synthetic_rca_logits")
+            if synthetic_rca_logits is not None:
+                synthetic_rca_err = torch.sigmoid(synthetic_rca_logits).unsqueeze(1).expand(
+                    -1,
+                    channel_err.shape[1],
+                    -1,
+                )
+        if synthetic_rca_err is None:
+            synthetic_rca_err = torch.zeros_like(channel_err)
         return (
             score.cpu().numpy(),
             channel_err.cpu().numpy(),
             graph_err.cpu().numpy(),
             mechanism_err.cpu().numpy(),
             causal_err.cpu().numpy(),
+            synthetic_rca_err.cpu().numpy(),
         )
 
     def _graph_propagated_channel_error(self, channel_err, A_adaptive):
@@ -2710,6 +2756,7 @@ class LaGraph:
         graph_channel_sums = None
         mechanism_channel_sums = None
         causal_channel_sums = None
+        synthetic_rca_channel_sums = None
         channel_counts = None
         window_cursor = 0
         if export_rca:
@@ -2717,6 +2764,7 @@ class LaGraph:
             graph_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             mechanism_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             causal_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
+            synthetic_rca_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             channel_counts = np.zeros(total_length, dtype=np.float64)
 
         for i, (input_data, labels) in enumerate(test_loader):
@@ -2728,6 +2776,7 @@ class LaGraph:
                     graph_channel_err,
                     mechanism_channel_err,
                     causal_channel_err,
+                    synthetic_rca_channel_err,
                 ) = self._detect_forward_with_channels(input_data)
                 self._add_window_channel_scores(channel_sums, channel_counts, channel_err, window_cursor)
                 self._add_window_channel_scores(
@@ -2748,6 +2797,13 @@ class LaGraph:
                     causal_channel_sums,
                     channel_counts,
                     causal_channel_err,
+                    window_cursor,
+                    update_counts=False,
+                )
+                self._add_window_channel_scores(
+                    synthetic_rca_channel_sums,
+                    channel_counts,
+                    synthetic_rca_channel_err,
                     window_cursor,
                     update_counts=False,
                 )
@@ -2787,12 +2843,19 @@ class LaGraph:
                 out=np.zeros_like(causal_channel_sums),
                 where=channel_counts[:, None] > 0,
             ).astype(np.float32)
+            self._last_synthetic_rca_channel_scores = np.divide(
+                synthetic_rca_channel_sums,
+                channel_counts[:, None],
+                out=np.zeros_like(synthetic_rca_channel_sums),
+                where=channel_counts[:, None] > 0,
+            ).astype(np.float32)
             self._last_channel_names = list(test_data.columns)
         else:
             self._last_channel_scores = None
             self._last_graph_channel_scores = None
             self._last_mechanism_channel_scores = None
             self._last_causal_channel_scores = None
+            self._last_synthetic_rca_channel_scores = None
             self._last_channel_names = None
 
         test_windows = np.concatenate(test_window_list, axis=0)
@@ -2983,6 +3046,7 @@ class LaGraph:
         source_channel_scores=None,
         propagation_channel_scores=None,
         causal_channel_scores=None,
+        synthetic_channel_scores=None,
         onset_weight=0.0,
         onset_baseline_window=200,
         onset_z=2.0,
@@ -3022,6 +3086,11 @@ class LaGraph:
                 if causal_channel_scores is not None
                 else np.zeros_like(event_raw_scores)
             )
+            event_synthetic_scores = (
+                synthetic_channel_scores[score_start:score_end].mean(axis=0)
+                if synthetic_channel_scores is not None
+                else np.zeros_like(event_raw_scores)
+            )
             onset_source_scores = source_channel_scores if source_channel_scores is not None else base_channel_scores
             event_onset_scores = np.zeros_like(event_raw_scores)
             if onset_weight > 0.0:
@@ -3054,6 +3123,7 @@ class LaGraph:
                     "source_score": float(event_source_scores[idx]),
                     "propagation_score": float(event_propagation_scores[idx]),
                     "causal_score": float(event_causal_scores[idx]),
+                    "synthetic_rca_score": float(event_synthetic_scores[idx]),
                     "onset_score": float(event_onset_scores[idx]),
                     "mechanism_residual_score": float(event_mechanism_residual_scores[idx]),
                     "contrast_score": float(event_contrast_scores[idx]),
@@ -3146,6 +3216,11 @@ class LaGraph:
             causal_channel_scores = np.zeros_like(base_channel_scores)
         else:
             causal_channel_scores = causal_channel_scores[score_slice]
+        synthetic_channel_scores = getattr(self, "_last_synthetic_rca_channel_scores", None)
+        if synthetic_channel_scores is None:
+            synthetic_channel_scores = np.zeros_like(base_channel_scores)
+        else:
+            synthetic_channel_scores = synthetic_channel_scores[score_slice]
         def _cfg_float(name, default):
             value = getattr(self.config, name, default)
             return float(default if value is None else value)
@@ -3162,6 +3237,7 @@ class LaGraph:
         propagation_weight = _cfg_float("rca_propagation_weight", 0.25)
         source_mechanism_weight = _cfg_float("rca_source_mechanism_weight", 0.0)
         causal_weight = _cfg_float("rca_causal_weight", 0.0)
+        synthetic_weight = _cfg_float("rca_synthetic_weight", 0.0)
         contrast_window = _cfg_int("rca_contrast_window", 0)
         contrast_weight = _cfg_float("rca_contrast_weight", 0.0)
         mechanism_residual_window = _cfg_int("rca_mechanism_residual_window", 0)
@@ -3181,6 +3257,7 @@ class LaGraph:
                 source_base_weight * base_channel_scores
                 + source_mechanism_weight * mechanism_channel_scores
                 + causal_weight * causal_channel_scores
+                + synthetic_weight * synthetic_channel_scores
             )
             propagation_channel_scores = graph_channel_scores
             channel_scores = (
@@ -3192,6 +3269,7 @@ class LaGraph:
                 base_channel_scores
                 + graph_weight * graph_channel_scores
                 + mechanism_weight * mechanism_channel_scores
+                + synthetic_weight * synthetic_channel_scores
             )
         feature_names = list(self._last_channel_names)
         events = self._build_rca_events(
@@ -3211,6 +3289,7 @@ class LaGraph:
             source_channel_scores=source_channel_scores,
             propagation_channel_scores=propagation_channel_scores,
             causal_channel_scores=causal_channel_scores,
+            synthetic_channel_scores=synthetic_channel_scores,
             onset_weight=onset_weight,
             onset_baseline_window=onset_baseline_window,
             onset_z=onset_z,
@@ -3245,13 +3324,14 @@ class LaGraph:
                     event_head_ratio,
                     event_head_points,
                     max_channel_ranking=max_channel_ranking,
-                        source_channel_scores=source_channel_scores,
-                        propagation_channel_scores=propagation_channel_scores,
-                        causal_channel_scores=causal_channel_scores,
-                        onset_weight=onset_weight,
-                        onset_baseline_window=onset_baseline_window,
-                        onset_z=onset_z,
-                    )
+                    source_channel_scores=source_channel_scores,
+                    propagation_channel_scores=propagation_channel_scores,
+                    causal_channel_scores=causal_channel_scores,
+                    synthetic_channel_scores=synthetic_channel_scores,
+                    onset_weight=onset_weight,
+                    onset_baseline_window=onset_baseline_window,
+                    onset_z=onset_z,
+                )
         elif isinstance(predict_labels, dict):
             for key, prediction in predict_labels.items():
                 key_name = self._rca_prediction_key_name(key)
@@ -3276,6 +3356,7 @@ class LaGraph:
                     source_channel_scores=source_channel_scores,
                     propagation_channel_scores=propagation_channel_scores,
                     causal_channel_scores=causal_channel_scores,
+                    synthetic_channel_scores=synthetic_channel_scores,
                     onset_weight=onset_weight,
                     onset_baseline_window=onset_baseline_window,
                     onset_z=onset_z,
@@ -3302,6 +3383,7 @@ class LaGraph:
                 source_channel_scores=source_channel_scores,
                 propagation_channel_scores=propagation_channel_scores,
                 causal_channel_scores=causal_channel_scores,
+                synthetic_channel_scores=synthetic_channel_scores,
                 onset_weight=onset_weight,
                 onset_baseline_window=onset_baseline_window,
                 onset_z=onset_z,
@@ -3325,6 +3407,7 @@ class LaGraph:
                 source_channel_scores=source_channel_scores,
                 propagation_channel_scores=propagation_channel_scores,
                 causal_channel_scores=causal_channel_scores,
+                synthetic_channel_scores=synthetic_channel_scores,
                 onset_weight=onset_weight,
                 onset_baseline_window=onset_baseline_window,
                 onset_z=onset_z,
@@ -3340,7 +3423,7 @@ class LaGraph:
         output_path = os.path.join(output_dir, f"{timestamp}_rca.json")
         score_method = (
             "event-level source/propagation RCA: "
-            "source=(weighted base residual + mechanism prior deviation + lagged causal deviation), "
+            "source=(weighted base residual + mechanism prior deviation + lagged causal deviation + synthetic responsibility), "
             "propagation=graph-propagated residual, "
             "onset=early local-baseline crossing"
             if use_source_propagation
@@ -3360,6 +3443,7 @@ class LaGraph:
             "rca_propagation_weight": propagation_weight,
             "rca_source_mechanism_weight": source_mechanism_weight,
             "rca_causal_weight": causal_weight,
+            "rca_synthetic_weight": synthetic_weight,
             "rca_offset": int(rca_offset),
             "rca_graph_direction": str(getattr(self.config, "rca_graph_direction", "outgoing") or "outgoing"),
             "rca_contrast_window": contrast_window,
