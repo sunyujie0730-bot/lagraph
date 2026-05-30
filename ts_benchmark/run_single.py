@@ -176,6 +176,7 @@ def main():
             "causal-source-rca",
             "causal-source-robust-rca",
             "synthetic-responsibility-rca",
+            "counterfactual-source-rca",
             "onset-source-rca",
             "channel-only",
             "temporal-only",
@@ -581,6 +582,24 @@ def main():
         type=float,
         default=None,
         help="Weight for learned synthetic-responsibility score inside RCA rankings.",
+    )
+    parser.add_argument(
+        "--rca-counterfactual-weight",
+        type=float,
+        default=None,
+        help="Weight for event-local counterfactual responsibility inside RCA rankings.",
+    )
+    parser.add_argument(
+        "--rca-counterfactual-candidates",
+        type=int,
+        default=None,
+        help="Top-K channels tested by event-local counterfactual RCA.",
+    )
+    parser.add_argument(
+        "--rca-counterfactual-max-windows",
+        type=int,
+        default=None,
+        help="Maximum sampled windows per event for counterfactual RCA.",
     )
     parser.add_argument(
         "--rca-onset-weight",
@@ -1189,6 +1208,43 @@ def main():
             "rca_source_mechanism_weight": 0.0,
             "rca_causal_weight": 0.2,
             "rca_synthetic_weight": 1.0,
+            "rca_event_head_ratio": 1.0,
+            "rca_event_head_points": 0,
+            "rca_prediction_key": "15",
+            "rca_event_local_export": True,
+            "rca_event_local_margin": 100,
+        },
+        "counterfactual-source-rca": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_lagged_causal_graph": True,
+            "causal_lags": [1, 3, 6, 12],
+            "causal_topk": 5,
+            "causal_detach_backbone": False,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "use_mechanism_predictive_head": True,
+            "mechanism_predictive_blend_init": 0.30,
+            "lambda_channel_mechanism": 0.05,
+            "lambda_causal_mechanism": 0.01,
+            "lambda_causal_sparse": 0.001,
+            "use_channel_mechanism_score": True,
+            "channel_mechanism_score_weight": 0.30,
+            "eval_batch_size": 256,
+            "rca_use_source_propagation": True,
+            "rca_graph_weight": 1.0,
+            "rca_mechanism_weight": 0.0,
+            "rca_source_weight": 1.0,
+            "rca_source_base_weight": 0.2,
+            "rca_propagation_weight": 0.0,
+            "rca_source_mechanism_weight": 0.0,
+            "rca_causal_weight": 0.2,
+            "rca_synthetic_weight": 0.0,
+            "rca_counterfactual_weight": 1.0,
+            "rca_counterfactual_candidates": 12,
+            "rca_counterfactual_max_windows": 32,
+            "rca_counterfactual_batch_candidates": 4,
+            "rca_counterfactual_baseline_window": 300,
             "rca_event_head_ratio": 1.0,
             "rca_event_head_points": 0,
             "rca_prediction_key": "15",
@@ -1851,6 +1907,12 @@ def main():
         score_hyper_params["rca_causal_weight"] = max(0.0, float(args.rca_causal_weight))
     if args.rca_synthetic_weight is not None:
         score_hyper_params["rca_synthetic_weight"] = max(0.0, float(args.rca_synthetic_weight))
+    if args.rca_counterfactual_weight is not None:
+        score_hyper_params["rca_counterfactual_weight"] = max(0.0, float(args.rca_counterfactual_weight))
+    if args.rca_counterfactual_candidates is not None:
+        score_hyper_params["rca_counterfactual_candidates"] = max(1, int(args.rca_counterfactual_candidates))
+    if args.rca_counterfactual_max_windows is not None:
+        score_hyper_params["rca_counterfactual_max_windows"] = max(1, int(args.rca_counterfactual_max_windows))
     if args.rca_onset_weight is not None:
         score_hyper_params["rca_onset_weight"] = max(0.0, float(args.rca_onset_weight))
     if args.rca_onset_baseline_window is not None:

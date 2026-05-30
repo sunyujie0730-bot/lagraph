@@ -186,6 +186,11 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_source_mechanism_weight": 0.0,
     "rca_causal_weight": 0.0,
     "rca_synthetic_weight": 0.0,
+    "rca_counterfactual_weight": 0.0,
+    "rca_counterfactual_candidates": 12,
+    "rca_counterfactual_max_windows": 32,
+    "rca_counterfactual_batch_candidates": 4,
+    "rca_counterfactual_baseline_window": 300,
     "rca_graph_direction": "outgoing",
     "rca_contrast_window": 0,
     "rca_contrast_weight": 0.0,
@@ -2847,6 +2852,130 @@ class LaGraph:
         )
         return True
 
+    @torch.no_grad()
+    def _compute_counterfactual_channel_scores(
+        self,
+        test_data,
+        labels,
+        pred_mask,
+        rca_offset,
+        candidate_channel_scores,
+        event_head_ratio,
+        event_head_points,
+    ):
+        scaled_test = self._transform_input_frame(test_data)
+        values = scaled_test.values.astype(np.float32, copy=False)
+        total_length, n_channels = values.shape
+        label_length = int(len(labels))
+        if total_length <= 0 or label_length <= 0 or n_channels <= 0:
+            return np.zeros((label_length, n_channels), dtype=np.float32)
+
+        segments = []
+        seen = set()
+        for mask in (labels, pred_mask):
+            if mask is None:
+                continue
+            for start, end in self._label_segments(np.asarray(mask).reshape(-1).astype(int)):
+                key = (int(start), int(end))
+                if key not in seen and end > start:
+                    seen.add(key)
+                    segments.append(key)
+        if not segments:
+            return np.zeros((label_length, n_channels), dtype=np.float32)
+
+        win_size = int(self.config.win_size)
+        max_start = max(0, total_length - win_size)
+        candidate_topk = min(
+            n_channels,
+            max(1, int(getattr(self.config, "rca_counterfactual_candidates", 12) or 12)),
+        )
+        max_windows = max(1, int(getattr(self.config, "rca_counterfactual_max_windows", 32) or 32))
+        batch_candidates = max(1, int(getattr(self.config, "rca_counterfactual_batch_candidates", 4) or 4))
+        baseline_window = max(1, int(getattr(self.config, "rca_counterfactual_baseline_window", 300) or 300))
+        output = np.zeros((label_length, n_channels), dtype=np.float32)
+        window_offsets = np.arange(win_size, dtype=np.int64)
+        total_windows = 0
+
+        self.model.eval()
+        for start, end in segments:
+            score_start, score_end = self._rca_event_score_bounds(
+                start,
+                end,
+                event_head_ratio,
+                event_head_points,
+            )
+            score_start = max(0, min(label_length, int(score_start)))
+            if score_start >= label_length:
+                continue
+            score_end = max(score_start + 1, min(label_length, int(score_end)))
+            full_score_start = int(rca_offset) + score_start
+            full_score_end = int(rca_offset) + score_end
+            if full_score_start >= total_length or full_score_end <= 0:
+                continue
+            full_score_start = max(0, full_score_start)
+            full_score_end = min(total_length, full_score_end)
+            if full_score_end <= full_score_start:
+                continue
+
+            window_start_min = max(0, full_score_start - win_size + 1)
+            window_start_max = min(max_start, full_score_end - 1)
+            if window_start_max < window_start_min:
+                continue
+            starts = np.arange(window_start_min, window_start_max + 1, dtype=np.int64)
+            if len(starts) > max_windows:
+                sampled = np.linspace(0, len(starts) - 1, max_windows)
+                starts = starts[np.unique(np.round(sampled).astype(np.int64))]
+            if len(starts) == 0:
+                continue
+
+            point_index = starts[:, None] + window_offsets[None, :]
+            event_mask = (point_index >= full_score_start) & (point_index < full_score_end)
+            valid_rows = event_mask.any(axis=1)
+            starts = starts[valid_rows]
+            event_mask = event_mask[valid_rows]
+            if len(starts) == 0:
+                continue
+
+            windows = np.stack([values[s:s + win_size] for s in starts], axis=0)
+            input_data = torch.as_tensor(windows, dtype=torch.float32, device=self.device)
+            base_window_scores = self._detect_forward(input_data)
+            mask_float = event_mask.astype(np.float32)
+            denom = np.maximum(mask_float.sum(axis=1), 1.0)
+            base_event_scores = (base_window_scores * mask_float).sum(axis=1) / denom
+
+            event_candidate_scores = candidate_channel_scores[score_start:score_end].mean(axis=0)
+            candidates = np.argsort(-event_candidate_scores)[:candidate_topk].astype(np.int64)
+            baseline_start = max(0, full_score_start - baseline_window)
+            if baseline_start < full_score_start:
+                baseline_values = np.median(values[baseline_start:full_score_start], axis=0)
+            else:
+                baseline_values = np.zeros(n_channels, dtype=np.float32)
+
+            n_windows = len(windows)
+            event_scores = np.zeros(n_channels, dtype=np.float32)
+            for cursor in range(0, len(candidates), batch_candidates):
+                cand_batch = candidates[cursor:cursor + batch_candidates]
+                cf_windows = np.repeat(windows, len(cand_batch), axis=0).copy()
+                for local_idx, channel_idx in enumerate(cand_batch):
+                    block = cf_windows[local_idx * n_windows:(local_idx + 1) * n_windows, :, channel_idx]
+                    block[event_mask] = baseline_values[channel_idx]
+                cf_input = torch.as_tensor(cf_windows, dtype=torch.float32, device=self.device)
+                cf_window_scores = self._detect_forward(cf_input)
+                cf_window_scores = cf_window_scores.reshape(len(cand_batch), n_windows, win_size)
+                cf_event_scores = (cf_window_scores * mask_float[None, :, :]).sum(axis=2) / denom[None, :]
+                drops = np.maximum(base_event_scores[None, :] - cf_event_scores, 0.0).mean(axis=1)
+                event_scores[cand_batch] = drops.astype(np.float32)
+
+            if np.any(event_scores > 0):
+                output[score_start:score_end] = np.maximum(output[score_start:score_end], event_scores)
+            total_windows += int(len(starts) * max(1, len(candidates)))
+
+        print(
+            f"  [RCA] Counterfactual channel scoring: events={len(segments)}, "
+            f"candidate_window_evals={total_windows:,}, topk={candidate_topk}, max_windows={max_windows}"
+        )
+        return output
+
     def detect_score(self, train: pd.DataFrame) -> np.ndarray:
         if not self.trained:
             raise RuntimeError("Model not trained yet. Call detect_fit first.")
@@ -3225,6 +3354,7 @@ class LaGraph:
         propagation_channel_scores=None,
         causal_channel_scores=None,
         synthetic_channel_scores=None,
+        counterfactual_channel_scores=None,
         onset_weight=0.0,
         onset_baseline_window=200,
         onset_z=2.0,
@@ -3269,6 +3399,11 @@ class LaGraph:
                 if synthetic_channel_scores is not None
                 else np.zeros_like(event_raw_scores)
             )
+            event_counterfactual_scores = (
+                counterfactual_channel_scores[score_start:score_end].mean(axis=0)
+                if counterfactual_channel_scores is not None
+                else np.zeros_like(event_raw_scores)
+            )
             onset_source_scores = source_channel_scores if source_channel_scores is not None else base_channel_scores
             event_onset_scores = np.zeros_like(event_raw_scores)
             if onset_weight > 0.0:
@@ -3302,6 +3437,7 @@ class LaGraph:
                     "propagation_score": float(event_propagation_scores[idx]),
                     "causal_score": float(event_causal_scores[idx]),
                     "synthetic_rca_score": float(event_synthetic_scores[idx]),
+                    "counterfactual_score": float(event_counterfactual_scores[idx]),
                     "onset_score": float(event_onset_scores[idx]),
                     "mechanism_residual_score": float(event_mechanism_residual_scores[idx]),
                     "contrast_score": float(event_contrast_scores[idx]),
@@ -3439,6 +3575,7 @@ class LaGraph:
         source_mechanism_weight = _cfg_float("rca_source_mechanism_weight", 0.0)
         causal_weight = _cfg_float("rca_causal_weight", 0.0)
         synthetic_weight = _cfg_float("rca_synthetic_weight", 0.0)
+        counterfactual_weight = _cfg_float("rca_counterfactual_weight", 0.0)
         contrast_window = _cfg_int("rca_contrast_window", 0)
         contrast_weight = _cfg_float("rca_contrast_weight", 0.0)
         mechanism_residual_window = _cfg_int("rca_mechanism_residual_window", 0)
@@ -3453,12 +3590,30 @@ class LaGraph:
         max_channel_ranking = export_top_k if export_lite else None
         source_channel_scores = None
         propagation_channel_scores = None
+        counterfactual_channel_scores = np.zeros_like(base_channel_scores)
+        counterfactual_candidate_scores = (
+            source_base_weight * base_channel_scores
+            + source_mechanism_weight * mechanism_channel_scores
+            + causal_weight * causal_channel_scores
+            + synthetic_weight * synthetic_channel_scores
+        )
+        if counterfactual_weight > 0.0:
+            counterfactual_channel_scores = self._compute_counterfactual_channel_scores(
+                test_data,
+                labels,
+                pred_mask,
+                rca_offset,
+                counterfactual_candidate_scores,
+                event_head_ratio,
+                event_head_points,
+            )
         if use_source_propagation:
             source_channel_scores = (
                 source_base_weight * base_channel_scores
                 + source_mechanism_weight * mechanism_channel_scores
                 + causal_weight * causal_channel_scores
                 + synthetic_weight * synthetic_channel_scores
+                + counterfactual_weight * counterfactual_channel_scores
             )
             propagation_channel_scores = graph_channel_scores
             channel_scores = (
@@ -3471,6 +3626,7 @@ class LaGraph:
                 + graph_weight * graph_channel_scores
                 + mechanism_weight * mechanism_channel_scores
                 + synthetic_weight * synthetic_channel_scores
+                + counterfactual_weight * counterfactual_channel_scores
             )
         feature_names = list(self._last_channel_names)
         events = self._build_rca_events(
@@ -3491,6 +3647,7 @@ class LaGraph:
             propagation_channel_scores=propagation_channel_scores,
             causal_channel_scores=causal_channel_scores,
             synthetic_channel_scores=synthetic_channel_scores,
+            counterfactual_channel_scores=counterfactual_channel_scores,
             onset_weight=onset_weight,
             onset_baseline_window=onset_baseline_window,
             onset_z=onset_z,
@@ -3516,6 +3673,7 @@ class LaGraph:
                     propagation_channel_scores=propagation_channel_scores,
                     causal_channel_scores=causal_channel_scores,
                     synthetic_channel_scores=synthetic_channel_scores,
+                    counterfactual_channel_scores=counterfactual_channel_scores,
                     onset_weight=onset_weight,
                     onset_baseline_window=onset_baseline_window,
                     onset_z=onset_z,
@@ -3545,6 +3703,7 @@ class LaGraph:
                     propagation_channel_scores=propagation_channel_scores,
                     causal_channel_scores=causal_channel_scores,
                     synthetic_channel_scores=synthetic_channel_scores,
+                    counterfactual_channel_scores=counterfactual_channel_scores,
                     onset_weight=onset_weight,
                     onset_baseline_window=onset_baseline_window,
                     onset_z=onset_z,
@@ -3572,6 +3731,7 @@ class LaGraph:
                 propagation_channel_scores=propagation_channel_scores,
                 causal_channel_scores=causal_channel_scores,
                 synthetic_channel_scores=synthetic_channel_scores,
+                counterfactual_channel_scores=counterfactual_channel_scores,
                 onset_weight=onset_weight,
                 onset_baseline_window=onset_baseline_window,
                 onset_z=onset_z,
@@ -3596,6 +3756,7 @@ class LaGraph:
                 propagation_channel_scores=propagation_channel_scores,
                 causal_channel_scores=causal_channel_scores,
                 synthetic_channel_scores=synthetic_channel_scores,
+                counterfactual_channel_scores=counterfactual_channel_scores,
                 onset_weight=onset_weight,
                 onset_baseline_window=onset_baseline_window,
                 onset_z=onset_z,
@@ -3611,7 +3772,7 @@ class LaGraph:
         output_path = os.path.join(output_dir, f"{timestamp}_rca.json")
         score_method = (
             "event-level source/propagation RCA: "
-            "source=(weighted base residual + mechanism prior deviation + lagged causal deviation + synthetic responsibility), "
+            "source=(weighted base residual + mechanism prior deviation + lagged causal deviation + synthetic responsibility + event-local counterfactual responsibility), "
             "propagation=graph-propagated residual, "
             "onset=early local-baseline crossing"
             if use_source_propagation
@@ -3632,6 +3793,11 @@ class LaGraph:
             "rca_source_mechanism_weight": source_mechanism_weight,
             "rca_causal_weight": causal_weight,
             "rca_synthetic_weight": synthetic_weight,
+            "rca_counterfactual_weight": counterfactual_weight,
+            "rca_counterfactual_candidates": _cfg_int("rca_counterfactual_candidates", 12),
+            "rca_counterfactual_max_windows": _cfg_int("rca_counterfactual_max_windows", 32),
+            "rca_counterfactual_batch_candidates": _cfg_int("rca_counterfactual_batch_candidates", 4),
+            "rca_counterfactual_baseline_window": _cfg_int("rca_counterfactual_baseline_window", 300),
             "rca_offset": int(rca_offset),
             "rca_graph_direction": str(getattr(self.config, "rca_graph_direction", "outgoing") or "outgoing"),
             "rca_contrast_window": contrast_window,
