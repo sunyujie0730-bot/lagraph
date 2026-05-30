@@ -1191,6 +1191,8 @@ def main():
             "rca_event_head_ratio": 1.0,
             "rca_event_head_points": 0,
             "rca_prediction_key": "15",
+            "rca_event_local_export": True,
+            "rca_event_local_margin": 100,
         },
         "onset-source-rca": {
             "use_channel_graph": True,

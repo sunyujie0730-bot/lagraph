@@ -196,6 +196,8 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_onset_baseline_window": 200,
     "rca_onset_z": 2.0,
     "rca_prediction_key": "pot",
+    "rca_event_local_export": False,
+    "rca_event_local_margin": 100,
     # --- v11.4 P0-2: POT 阈值参数 ---
     "pot_risk": 1e-4,            # POT EVT 风险水平
     "pot_num_quantiles": 1000,   # POT 分位数数量
@@ -2711,6 +2713,136 @@ class LaGraph:
         np.add.at(channel_diff, starts, values)
         np.add.at(channel_diff, ends, -values)
 
+    @staticmethod
+    def _merge_intervals(intervals):
+        intervals = sorted((int(s), int(e)) for s, e in intervals if int(e) > int(s))
+        if not intervals:
+            return []
+        merged = [list(intervals[0])]
+        for start, end in intervals[1:]:
+            if start <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], end)
+            else:
+                merged.append([start, end])
+        return [(start, end) for start, end in merged]
+
+    def _compute_event_local_rca_channel_scores(self, test_data, labels, pred_mask=None, rca_offset=0):
+        scaled_test = self._transform_input_frame(test_data)
+        total_length, n_channels = scaled_test.shape
+        win_size = int(self.config.win_size)
+        if total_length <= 0 or win_size <= 0:
+            return False
+
+        event_segments = []
+        event_segments.extend(self._label_segments(np.asarray(labels).astype(int)))
+        if pred_mask is not None:
+            event_segments.extend(self._label_segments(np.asarray(pred_mask).astype(int)))
+        if not event_segments:
+            return False
+
+        margin = int(getattr(self.config, "rca_event_local_margin", win_size) or 0)
+        point_regions = []
+        for start, end in event_segments:
+            full_start = int(start) + int(rca_offset)
+            full_end = int(end) + int(rca_offset)
+            point_regions.append(
+                (
+                    max(0, full_start - margin),
+                    min(total_length, full_end + margin),
+                )
+            )
+        point_regions = self._merge_intervals(point_regions)
+
+        max_start = max(0, total_length - win_size)
+        start_regions = []
+        for start, end in point_regions:
+            start_min = max(0, start - win_size + 1)
+            start_max = min(max_start, end - 1)
+            if start_max >= start_min:
+                start_regions.append((start_min, start_max + 1))
+        start_regions = self._merge_intervals(start_regions)
+        if not start_regions:
+            return False
+
+        channel_sums = np.zeros((total_length, n_channels), dtype=np.float64)
+        graph_channel_sums = np.zeros_like(channel_sums)
+        mechanism_channel_sums = np.zeros_like(channel_sums)
+        causal_channel_sums = np.zeros_like(channel_sums)
+        synthetic_rca_channel_diff = np.zeros((total_length + 1, n_channels), dtype=np.float64)
+        channel_counts = np.zeros(total_length, dtype=np.float64)
+
+        eval_batch_size = min(int(self.config.batch_size), 64)
+        self.model.eval()
+        for start_region, end_region in start_regions:
+            cursor = int(start_region)
+            while cursor < int(end_region):
+                batch_end = min(cursor + eval_batch_size, int(end_region))
+                windows = np.stack(
+                    [scaled_test[start:start + win_size] for start in range(cursor, batch_end)],
+                    axis=0,
+                )
+                input_data = torch.as_tensor(windows, dtype=torch.float32, device=self.device)
+                (
+                    _,
+                    channel_err,
+                    graph_channel_err,
+                    mechanism_channel_err,
+                    causal_channel_err,
+                    synthetic_rca_channel_err,
+                ) = self._detect_forward_with_channels(input_data)
+                self._add_window_channel_score_group(
+                    [channel_sums, graph_channel_sums, mechanism_channel_sums, causal_channel_sums],
+                    channel_counts,
+                    [channel_err, graph_channel_err, mechanism_channel_err, causal_channel_err],
+                    cursor,
+                )
+                self._add_window_constant_channel_scores(
+                    synthetic_rca_channel_diff,
+                    synthetic_rca_channel_err,
+                    cursor,
+                    win_size,
+                )
+                cursor = batch_end
+
+        self._last_channel_scores = np.divide(
+            channel_sums,
+            channel_counts[:, None],
+            out=np.zeros_like(channel_sums),
+            where=channel_counts[:, None] > 0,
+        ).astype(np.float32)
+        self._last_graph_channel_scores = np.divide(
+            graph_channel_sums,
+            channel_counts[:, None],
+            out=np.zeros_like(graph_channel_sums),
+            where=channel_counts[:, None] > 0,
+        ).astype(np.float32)
+        self._last_mechanism_channel_scores = np.divide(
+            mechanism_channel_sums,
+            channel_counts[:, None],
+            out=np.zeros_like(mechanism_channel_sums),
+            where=channel_counts[:, None] > 0,
+        ).astype(np.float32)
+        self._last_causal_channel_scores = np.divide(
+            causal_channel_sums,
+            channel_counts[:, None],
+            out=np.zeros_like(causal_channel_sums),
+            where=channel_counts[:, None] > 0,
+        ).astype(np.float32)
+        synthetic_rca_channel_sums = np.cumsum(synthetic_rca_channel_diff[:-1], axis=0)
+        self._last_synthetic_rca_channel_scores = np.divide(
+            synthetic_rca_channel_sums,
+            channel_counts[:, None],
+            out=np.zeros_like(synthetic_rca_channel_sums),
+            where=channel_counts[:, None] > 0,
+        ).astype(np.float32)
+        self._last_channel_names = list(test_data.columns)
+        covered = int((channel_counts > 0).sum())
+        print(
+            f"  [RCA] Event-local channel scoring: regions={len(point_regions)}, "
+            f"windows={sum(e - s for s, e in start_regions):,}, covered_points={covered:,}/{total_length:,}"
+        )
+        return True
+
     def detect_score(self, train: pd.DataFrame) -> np.ndarray:
         if not self.trained:
             raise RuntimeError("Model not trained yet. Call detect_fit first.")
@@ -2802,6 +2934,8 @@ class LaGraph:
 
         test_window_list = []
         export_rca = bool(getattr(self.config, "export_rca", False))
+        event_local_rca = export_rca and bool(getattr(self.config, "rca_event_local_export", False))
+        dense_rca_export = export_rca and not event_local_rca
         channel_sums = None
         graph_channel_sums = None
         mechanism_channel_sums = None
@@ -2809,7 +2943,7 @@ class LaGraph:
         synthetic_rca_channel_diff = None
         channel_counts = None
         window_cursor = 0
-        if export_rca:
+        if dense_rca_export:
             channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             graph_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             mechanism_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
@@ -2819,7 +2953,7 @@ class LaGraph:
 
         for i, (input_data, labels) in enumerate(test_loader):
             input_data = input_data.float().to(self.device)
-            if export_rca:
+            if dense_rca_export:
                 (
                     cri,
                     channel_err,
@@ -2851,7 +2985,7 @@ class LaGraph:
             dummy = np.zeros(total_length, dtype=np.int32)
             return {r: dummy for r in self.config.anomaly_ratio}, np.zeros(total_length)
 
-        if export_rca and channel_sums is not None:
+        if dense_rca_export and channel_sums is not None:
             self._last_channel_scores = np.divide(
                 channel_sums,
                 channel_counts[:, None],
@@ -2890,7 +3024,7 @@ class LaGraph:
             self._last_mechanism_channel_scores = None
             self._last_causal_channel_scores = None
             self._last_synthetic_rca_channel_scores = None
-            self._last_channel_names = None
+            self._last_channel_names = list(test_data.columns) if event_local_rca else None
 
         test_windows = np.concatenate(test_window_list, axis=0)
         test_energy = self._aggregate_window_scores(test_windows, total_length)
@@ -3210,8 +3344,7 @@ class LaGraph:
     def export_root_cause_report(self, series_name, test_data, test_label, predict_labels=None, scores=None):
         if not bool(getattr(self.config, "export_rca", False)):
             return None
-        if self._last_channel_scores is None or self._last_channel_names is None:
-            return None
+        event_local_rca = bool(getattr(self.config, "rca_event_local_export", False))
 
         labels = test_label.to_numpy().reshape(-1).astype(int)
         rca_offset = 0
@@ -3234,6 +3367,30 @@ class LaGraph:
         elif len(labels) < len(test_data):
             labels = np.pad(labels, (0, len(test_data) - len(labels)), mode="constant")
         score_slice = slice(rca_offset, rca_offset + len(labels)) if rca_offset > 0 else slice(0, len(labels))
+        pred_key, pred_mask = self._select_rca_prediction_mask(predict_labels, len(labels))
+        if pred_mask is not None and rca_offset > 0:
+            requested_prediction = None
+            if isinstance(predict_labels, dict):
+                for key, prediction in predict_labels.items():
+                    if self._rca_prediction_key_name(key) == pred_key:
+                        requested_prediction = prediction
+                        break
+            elif predict_labels is not None:
+                requested_prediction = predict_labels
+            if requested_prediction is not None:
+                raw_mask = self._normalize_prediction_mask(requested_prediction, len(test_data))
+                pred_mask = raw_mask[rca_offset:rca_offset + len(labels)]
+
+        if (self._last_channel_scores is None or self._last_channel_names is None) and event_local_rca:
+            self._compute_event_local_rca_channel_scores(
+                test_data,
+                labels,
+                pred_mask=pred_mask,
+                rca_offset=rca_offset,
+            )
+        if self._last_channel_scores is None or self._last_channel_names is None:
+            return None
+
         base_channel_scores = self._last_channel_scores[score_slice]
         graph_channel_scores = self._last_graph_channel_scores
         if graph_channel_scores is None:
@@ -3328,22 +3485,9 @@ class LaGraph:
             onset_baseline_window=onset_baseline_window,
             onset_z=onset_z,
         )
-        pred_key, pred_mask = self._select_rca_prediction_mask(predict_labels, len(labels))
         predicted_events_by_key = {}
         if export_lite:
             if pred_mask is not None:
-                if rca_offset > 0 and isinstance(predict_labels, dict):
-                    requested_prediction = None
-                    for key, prediction in predict_labels.items():
-                        if self._rca_prediction_key_name(key) == pred_key:
-                            requested_prediction = prediction
-                            break
-                    if requested_prediction is not None:
-                        raw_mask = self._normalize_prediction_mask(requested_prediction, len(test_data))
-                        pred_mask = raw_mask[rca_offset:rca_offset + len(labels)]
-                elif rca_offset > 0 and predict_labels is not None and not isinstance(predict_labels, dict):
-                    raw_mask = self._normalize_prediction_mask(predict_labels, len(test_data))
-                    pred_mask = raw_mask[rca_offset:rca_offset + len(labels)]
                 predicted_events_by_key[pred_key] = self._build_rca_events(
                     self._label_segments(pred_mask),
                     channel_scores,
