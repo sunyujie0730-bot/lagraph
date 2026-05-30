@@ -176,6 +176,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_mechanism_weight": 0.0,
     "rca_use_source_propagation": False,
     "rca_source_weight": 0.75,
+    "rca_source_base_weight": 1.0,
     "rca_propagation_weight": 0.25,
     "rca_source_mechanism_weight": 0.0,
     "rca_causal_weight": 0.0,
@@ -1099,6 +1100,7 @@ class LaGraph:
                 "rca_mechanism_weight": getattr(self.config, "rca_mechanism_weight", None),
                 "rca_use_source_propagation": getattr(self.config, "rca_use_source_propagation", None),
                 "rca_source_weight": getattr(self.config, "rca_source_weight", None),
+                "rca_source_base_weight": getattr(self.config, "rca_source_base_weight", None),
                 "rca_propagation_weight": getattr(self.config, "rca_propagation_weight", None),
                 "rca_source_mechanism_weight": getattr(self.config, "rca_source_mechanism_weight", None),
                 "rca_causal_weight": getattr(self.config, "rca_causal_weight", None),
@@ -3156,6 +3158,7 @@ class LaGraph:
         mechanism_weight = _cfg_float("rca_mechanism_weight", 0.0)
         use_source_propagation = bool(getattr(self.config, "rca_use_source_propagation", False))
         source_weight = _cfg_float("rca_source_weight", 0.75)
+        source_base_weight = _cfg_float("rca_source_base_weight", 1.0)
         propagation_weight = _cfg_float("rca_propagation_weight", 0.25)
         source_mechanism_weight = _cfg_float("rca_source_mechanism_weight", 0.0)
         causal_weight = _cfg_float("rca_causal_weight", 0.0)
@@ -3175,7 +3178,7 @@ class LaGraph:
         propagation_channel_scores = None
         if use_source_propagation:
             source_channel_scores = (
-                base_channel_scores
+                source_base_weight * base_channel_scores
                 + source_mechanism_weight * mechanism_channel_scores
                 + causal_weight * causal_channel_scores
             )
@@ -3337,7 +3340,7 @@ class LaGraph:
         output_path = os.path.join(output_dir, f"{timestamp}_rca.json")
         score_method = (
             "event-level source/propagation RCA: "
-            "source=(base residual + mechanism prior deviation + lagged causal deviation), "
+            "source=(weighted base residual + mechanism prior deviation + lagged causal deviation), "
             "propagation=graph-propagated residual, "
             "onset=early local-baseline crossing"
             if use_source_propagation
@@ -3353,6 +3356,7 @@ class LaGraph:
             "rca_mechanism_weight": mechanism_weight,
             "rca_use_source_propagation": use_source_propagation,
             "rca_source_weight": source_weight,
+            "rca_source_base_weight": source_base_weight,
             "rca_propagation_weight": propagation_weight,
             "rca_source_mechanism_weight": source_mechanism_weight,
             "rca_causal_weight": causal_weight,
