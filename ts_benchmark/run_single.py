@@ -920,6 +920,7 @@ def main():
             "rca_causal_weight": 0.0,
             "rca_event_head_ratio": 0.30,
             "rca_event_head_points": 30,
+            "rca_prediction_key": "15",
         },
         "normal-mechanism-source": {
             "use_channel_graph": True,
@@ -949,6 +950,7 @@ def main():
             "rca_causal_weight": 0.0,
             "rca_event_head_ratio": 0.30,
             "rca_event_head_points": 30,
+            "rca_prediction_key": "15",
         },
         "graph-coupled-source": {
             "use_channel_graph": True,
@@ -977,6 +979,7 @@ def main():
             "rca_causal_weight": 0.0,
             "rca_event_head_ratio": 0.30,
             "rca_event_head_points": 30,
+            "rca_prediction_key": "15",
         },
         "gated-dual-source": {
             "use_channel_graph": True,
@@ -1009,6 +1012,7 @@ def main():
             "rca_causal_weight": 0.0,
             "rca_event_head_ratio": 0.30,
             "rca_event_head_points": 30,
+            "rca_prediction_key": "15",
         },
         "causal-gated-source": {
             "use_channel_graph": True,
@@ -1041,6 +1045,7 @@ def main():
             "rca_causal_weight": 0.05,
             "rca_event_head_ratio": 0.30,
             "rca_event_head_points": 30,
+            "rca_prediction_key": "15",
         },
         "channel-only": {
             "use_channel_graph": True,
