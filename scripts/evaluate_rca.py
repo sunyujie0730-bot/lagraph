@@ -52,6 +52,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--component-graph-weight", type=float, default=0.0)
     parser.add_argument("--component-mechanism-weight", type=float, default=0.0)
     parser.add_argument("--component-causal-weight", type=float, default=0.0)
+    parser.add_argument("--component-source-gate-weight", type=float, default=0.0)
     parser.add_argument("--component-synthetic-weight", type=float, default=0.0)
     parser.add_argument("--component-counterfactual-weight", type=float, default=0.0)
     parser.add_argument("--component-onset-weight", type=float, default=0.0)
@@ -178,6 +179,7 @@ def component_ranking_names(
     graph_weight: float,
     mechanism_weight: float,
     causal_weight: float,
+    source_gate_weight: float,
     synthetic_weight: float,
     counterfactual_weight: float,
     onset_weight: float,
@@ -196,6 +198,7 @@ def component_ranking_names(
                 + graph_weight * float(item.get("graph_score", 0.0))
                 + mechanism_weight * float(item.get("mechanism_score", 0.0))
                 + causal_weight * float(item.get("causal_score", 0.0))
+                + source_gate_weight * float(item.get("source_gate_score", 0.0))
                 + synthetic_weight * float(item.get("synthetic_rca_score", 0.0))
                 + counterfactual_weight * float(item.get("counterfactual_score", 0.0))
                 + onset_weight * float(item.get("onset_score", 0.0))
@@ -213,6 +216,7 @@ def component_ranking_names(
             + graph_weight * float(item.get("graph_score", 0.0))
             + mechanism_weight * float(item.get("mechanism_score", 0.0))
             + causal_weight * float(item.get("causal_score", 0.0))
+            + source_gate_weight * float(item.get("source_gate_score", 0.0))
             + synthetic_weight * float(item.get("synthetic_rca_score", 0.0))
             + counterfactual_weight * float(item.get("counterfactual_score", 0.0))
             + onset_weight * float(item.get("onset_score", 0.0))
@@ -289,6 +293,7 @@ def ranking_for_event(pred_event: dict | None, args: argparse.Namespace) -> list
             args.component_graph_weight,
             args.component_mechanism_weight,
             args.component_causal_weight,
+            args.component_source_gate_weight,
             args.component_synthetic_weight,
             args.component_counterfactual_weight,
             args.component_onset_weight,
