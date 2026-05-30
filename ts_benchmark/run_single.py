@@ -1171,6 +1171,7 @@ def main():
             "use_synthetic_rca_head": True,
             "use_synthetic_rca_loss": True,
             "use_latest_checkpoint": True,
+            "eval_batch_size": 256,
             "lambda_synthetic_rca": 0.08,
             "synthetic_aux_interval": 2,
             "synthetic_rca_margin": 0.15,

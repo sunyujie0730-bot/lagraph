@@ -53,6 +53,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "d_model": 128,
     "num_epochs": 100,
     "batch_size": 256,
+    "eval_batch_size": 64,
     "patience": 15,
     "use_latest_checkpoint": False,
     "topk": 5,
@@ -2771,7 +2772,10 @@ class LaGraph:
         synthetic_rca_channel_diff = np.zeros((total_length + 1, n_channels), dtype=np.float64)
         channel_counts = np.zeros(total_length, dtype=np.float64)
 
-        eval_batch_size = min(int(self.config.batch_size), 64)
+        eval_batch_size = min(
+            int(self.config.batch_size),
+            int(getattr(self.config, "eval_batch_size", 64) or 64),
+        )
         self.model.eval()
         for start_region, end_region in start_regions:
             cursor = int(start_region)
@@ -2857,7 +2861,10 @@ class LaGraph:
             torch.cuda.empty_cache()
         self.model.to(self.device)
 
-        eval_batch_size = min(self.config.batch_size, 64)
+        eval_batch_size = min(
+            int(self.config.batch_size),
+            int(getattr(self.config, "eval_batch_size", 64) or 64),
+        )
         if torch.cuda.is_available():
             free_gb = torch.cuda.mem_get_info(self.device)[0] / 1024**3
             if free_gb < 2.0:
@@ -2913,7 +2920,10 @@ class LaGraph:
             self._get_raw_model().load_state_dict(self.early_stopping.check_point)
         self.model.to(self.device)
 
-        eval_batch_size = min(self.config.batch_size, 64)
+        eval_batch_size = min(
+            int(self.config.batch_size),
+            int(getattr(self.config, "eval_batch_size", 64) or 64),
+        )
         if torch.cuda.is_available():
             free_gb = torch.cuda.mem_get_info(self.device)[0] / 1024**3
             if free_gb < 2.0:
