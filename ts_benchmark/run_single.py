@@ -536,6 +536,22 @@ def main():
         help="Top-K channel ranking length kept when --rca-export-lite is enabled.",
     )
     parser.add_argument(
+        "--rca-event-local-export",
+        action="store_true",
+        help="Compute RCA channel scores only around true/predicted events to speed up large datasets.",
+    )
+    parser.add_argument(
+        "--rca-event-local-margin",
+        type=int,
+        default=None,
+        help="Point margin around true/predicted events used by --rca-event-local-export.",
+    )
+    parser.add_argument(
+        "--use-latest-checkpoint",
+        action="store_true",
+        help="Use the latest trained checkpoint for evaluation instead of the best validation-loss checkpoint.",
+    )
+    parser.add_argument(
         "--rca-graph-weight",
         type=float,
         default=None,
@@ -1939,6 +1955,12 @@ def main():
         score_hyper_params["rca_export_lite"] = True
     if args.rca_export_top_k is not None:
         score_hyper_params["rca_export_top_k"] = max(1, int(args.rca_export_top_k))
+    if args.rca_event_local_export:
+        score_hyper_params["rca_event_local_export"] = True
+    if args.rca_event_local_margin is not None:
+        score_hyper_params["rca_event_local_margin"] = max(0, int(args.rca_event_local_margin))
+    if args.use_latest_checkpoint:
+        score_hyper_params["use_latest_checkpoint"] = True
     if args.robust_input_preprocess:
         score_hyper_params["use_robust_input_preprocess"] = True
     if args.input_clip_lower_quantile is not None:
