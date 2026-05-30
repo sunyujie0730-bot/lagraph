@@ -114,6 +114,12 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "source_effect_rank_weight": 1.0,
     "source_effect_effect_rank_weight": 0.5,
     "source_effect_margin": 0.2,
+    "use_channel_masked_modeling": False,
+    "lambda_channel_masked": 0.0,
+    "channel_mask_interval": 8,
+    "channel_mask_ratio": 0.15,
+    "channel_mask_min_channels": 1,
+    "channel_mask_value": "zero",
     "use_parallel_graph_fusion": False,
     "graph_fusion_gate_mode": "sample",
     "graph_fusion_strategy": "parallel",
@@ -1099,6 +1105,10 @@ class LaGraph:
                 "use_source_effect_synthetic": getattr(self.config, "use_source_effect_synthetic", None),
                 "lambda_source_effect": getattr(self.config, "lambda_source_effect", None),
                 "source_effect_interval": getattr(self.config, "source_effect_interval", None),
+                "use_channel_masked_modeling": getattr(self.config, "use_channel_masked_modeling", None),
+                "lambda_channel_masked": getattr(self.config, "lambda_channel_masked", None),
+                "channel_mask_interval": getattr(self.config, "channel_mask_interval", None),
+                "channel_mask_ratio": getattr(self.config, "channel_mask_ratio", None),
                 "use_synthetic_score": getattr(self.config, "use_synthetic_score", None),
                 "synthetic_score_weight": getattr(self.config, "synthetic_score_weight", None),
                 "use_parallel_graph_fusion": getattr(self.config, "use_parallel_graph_fusion", None),
@@ -1594,6 +1604,45 @@ class LaGraph:
         pos_weight = (neg / pos).clamp(1.0, 20.0)
         loss = -(pos_weight * target * torch.log(probs) + (1.0 - target) * torch.log(1.0 - probs))
         return loss.mean()
+
+    def _channel_masked_modeling_loss(self, input_data, batch_idx=None):
+        if not bool(getattr(self.config, "use_channel_masked_modeling", False)):
+            return input_data.new_tensor(0.0)
+        lambda_channel_masked = float(getattr(self.config, "lambda_channel_masked", 0.0) or 0.0)
+        if lambda_channel_masked <= 0:
+            return input_data.new_tensor(0.0)
+        interval = int(getattr(self.config, "channel_mask_interval", 8) or 8)
+        if batch_idx is not None and interval > 1 and batch_idx % interval != 0:
+            return input_data.new_tensor(0.0)
+
+        B, L, C = input_data.shape
+        ratio = float(getattr(self.config, "channel_mask_ratio", 0.15) or 0.15)
+        min_channels = int(getattr(self.config, "channel_mask_min_channels", 1) or 1)
+        n_mask = min(C, max(min_channels, int(round(C * ratio))))
+        if n_mask <= 0:
+            return input_data.new_tensor(0.0)
+
+        masked = input_data.detach().clone()
+        channel_mask = torch.zeros(B, C, device=input_data.device, dtype=input_data.dtype)
+        mask_value = str(getattr(self.config, "channel_mask_value", "zero") or "zero").lower()
+        for b in range(B):
+            channels = torch.randperm(C, device=input_data.device)[:n_mask]
+            channel_mask[b, channels] = 1.0
+            if mask_value == "mean":
+                fill = input_data[b].mean(dim=0, keepdim=True)[:, channels]
+                masked[b, :, channels] = fill.expand(L, -1)
+            else:
+                masked[b, :, channels] = 0.0
+
+        rec, _, _, _, _, _, _ = self.model(masked)
+        mask = channel_mask[:, None, :]
+        denom = mask.sum().clamp_min(1.0) * max(1, L)
+        masked_loss = F.smooth_l1_loss(
+            rec * mask,
+            input_data * mask,
+            reduction="sum",
+        ) / denom
+        return lambda_channel_masked * masked_loss
 
     def _source_effect_synthetic_loss(self, input_data, batch_idx=None):
         if not bool(getattr(self.config, "use_source_effect_synthetic", False)):
@@ -2242,6 +2291,7 @@ class LaGraph:
                         loss = loss + lambda_vq * aux_losses['vq_loss']
                     loss = loss + self._synthetic_anomaly_aux_loss(input_data, aux_losses, batch_idx=i)
                     loss = loss + self._source_effect_synthetic_loss(input_data, batch_idx=i)
+                    loss = loss + self._channel_masked_modeling_loss(input_data, batch_idx=i)
 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
@@ -2460,6 +2510,7 @@ class LaGraph:
                     loss = loss + self.config.lambda_locality_l1 * aux_losses['sparse_loss']
                 loss = self._add_temporal_graph_regularization(loss, aux_losses)
                 loss = loss + self._source_effect_synthetic_loss(input_data, batch_idx=i)
+                loss = loss + self._channel_masked_modeling_loss(input_data, batch_idx=i)
 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)

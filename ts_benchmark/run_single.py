@@ -177,6 +177,7 @@ def main():
             "causal-source-robust-rca",
             "source-gated-causal-rca",
             "source-effect-rca",
+            "mechanism-masked-rca",
             "synthetic-responsibility-rca",
             "counterfactual-source-rca",
             "onset-source-rca",
@@ -475,6 +476,30 @@ def main():
         type=float,
         default=None,
         help="Override synthetic anomaly head score fusion weight",
+    )
+    parser.add_argument(
+        "--lambda-channel-masked",
+        type=float,
+        default=None,
+        help="Override masked-channel mechanism modeling loss weight",
+    )
+    parser.add_argument(
+        "--channel-mask-interval",
+        type=int,
+        default=None,
+        help="Run masked-channel mechanism modeling every N training batches",
+    )
+    parser.add_argument(
+        "--channel-mask-ratio",
+        type=float,
+        default=None,
+        help="Fraction of channels masked per training sample for mechanism modeling",
+    )
+    parser.add_argument(
+        "--channel-mask-value",
+        choices=["zero", "mean"],
+        default=None,
+        help="Fill value for masked channels during mechanism modeling",
     )
     parser.add_argument(
         "--reconstruction-loss",
@@ -1277,6 +1302,44 @@ def main():
             "rca_event_local_export": True,
             "rca_event_local_margin": 100,
         },
+        "mechanism-masked-rca": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_lagged_causal_graph": False,
+            "use_vq_bypass": True,
+            "vq_cooldown_epochs": 2,
+            "use_multi_scale_scorer": False,
+            "use_channel_corr_prior": True,
+            "channel_corr_prior_topk": 5,
+            "lambda_channel_prior_align": 0.01,
+            "use_mechanism_predictive_head": True,
+            "mechanism_predictive_blend_init": 0.30,
+            "use_mechanism_coupled_decoder": True,
+            "mechanism_coupling_init": 0.15,
+            "lambda_channel_mechanism": 0.05,
+            "use_channel_masked_modeling": True,
+            "lambda_channel_masked": 0.05,
+            "channel_mask_interval": 8,
+            "channel_mask_ratio": 0.15,
+            "channel_mask_min_channels": 1,
+            "channel_mask_value": "zero",
+            "use_channel_mechanism_score": True,
+            "channel_mechanism_score_weight": 0.30,
+            "eval_batch_size": 256,
+            "rca_use_source_propagation": True,
+            "rca_graph_weight": 1.0,
+            "rca_mechanism_weight": 0.0,
+            "rca_source_weight": 1.0,
+            "rca_source_base_weight": 1.0,
+            "rca_propagation_weight": 0.0,
+            "rca_source_mechanism_weight": 0.0,
+            "rca_causal_weight": 0.0,
+            "rca_event_head_ratio": 1.0,
+            "rca_event_head_points": 0,
+            "rca_prediction_key": "15",
+            "rca_event_local_export": True,
+            "rca_event_local_margin": 100,
+        },
         "synthetic-responsibility-rca": {
             "use_channel_graph": True,
             "use_temporal_graph": True,
@@ -1985,6 +2048,15 @@ def main():
         score_hyper_params["synthetic_rca_rank_weight"] = max(0.0, float(args.synthetic_rca_rank_weight))
     if args.synthetic_score_weight is not None:
         score_hyper_params["synthetic_score_weight"] = max(0.0, args.synthetic_score_weight)
+    if args.lambda_channel_masked is not None:
+        score_hyper_params["lambda_channel_masked"] = max(0.0, float(args.lambda_channel_masked))
+        score_hyper_params["use_channel_masked_modeling"] = score_hyper_params["lambda_channel_masked"] > 0.0
+    if args.channel_mask_interval is not None:
+        score_hyper_params["channel_mask_interval"] = max(1, int(args.channel_mask_interval))
+    if args.channel_mask_ratio is not None:
+        score_hyper_params["channel_mask_ratio"] = min(max(float(args.channel_mask_ratio), 1e-6), 1.0)
+    if args.channel_mask_value is not None:
+        score_hyper_params["channel_mask_value"] = args.channel_mask_value
     if args.reconstruction_loss is not None:
         score_hyper_params["reconstruction_loss_type"] = args.reconstruction_loss
     if args.smooth_l1_beta is not None:
