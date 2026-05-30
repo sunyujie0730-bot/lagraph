@@ -2617,24 +2617,25 @@ class LaGraph:
             causal_err = aux_losses.get("causal_channel_error")
         if causal_err is None:
             causal_err = torch.zeros_like(channel_err)
-        synthetic_rca_err = None
+        synthetic_rca_window_scores = None
         if aux_losses:
             synthetic_rca_logits = aux_losses.get("synthetic_rca_logits")
             if synthetic_rca_logits is not None:
-                synthetic_rca_err = torch.sigmoid(synthetic_rca_logits).unsqueeze(1).expand(
-                    -1,
-                    channel_err.shape[1],
-                    -1,
-                )
-        if synthetic_rca_err is None:
-            synthetic_rca_err = torch.zeros_like(channel_err)
+                synthetic_rca_window_scores = torch.sigmoid(synthetic_rca_logits)
+        if synthetic_rca_window_scores is None:
+            synthetic_rca_window_scores = torch.zeros(
+                channel_err.shape[0],
+                channel_err.shape[-1],
+                device=channel_err.device,
+                dtype=channel_err.dtype,
+            )
         return (
             score.cpu().numpy(),
             channel_err.cpu().numpy(),
             graph_err.cpu().numpy(),
             mechanism_err.cpu().numpy(),
             causal_err.cpu().numpy(),
-            synthetic_rca_err.cpu().numpy(),
+            synthetic_rca_window_scores.cpu().numpy(),
         )
 
     def _graph_propagated_channel_error(self, channel_err, A_adaptive):
@@ -2670,6 +2671,45 @@ class LaGraph:
             channel_sums[sl] += window_channels[:n, offset, :]
             if update_counts:
                 point_counts[sl] += 1.0
+
+    @staticmethod
+    def _add_window_channel_score_group(channel_sums_list, point_counts, window_channels_list, start_index):
+        pairs = [
+            (channel_sums, window_channels)
+            for channel_sums, window_channels in zip(channel_sums_list, window_channels_list)
+            if channel_sums is not None and window_channels is not None and len(window_channels) > 0
+        ]
+        if not pairs:
+            return
+        n_windows, win_size, _ = pairs[0][1].shape
+        total_length = pairs[0][0].shape[0]
+        for offset in range(win_size):
+            point_start = start_index + offset
+            if point_start >= total_length:
+                break
+            n = min(n_windows, total_length - point_start)
+            if n <= 0:
+                continue
+            sl = slice(point_start, point_start + n)
+            for channel_sums, window_channels in pairs:
+                channel_sums[sl] += window_channels[:n, offset, :]
+            point_counts[sl] += 1.0
+
+    @staticmethod
+    def _add_window_constant_channel_scores(channel_diff, window_channels, start_index, win_size):
+        if channel_diff is None or window_channels is None or len(window_channels) == 0:
+            return
+        n_windows, _ = window_channels.shape
+        total_length = channel_diff.shape[0] - 1
+        starts = start_index + np.arange(n_windows)
+        valid = starts < total_length
+        if not np.any(valid):
+            return
+        starts = starts[valid]
+        ends = np.minimum(starts + int(win_size), total_length)
+        values = window_channels[valid]
+        np.add.at(channel_diff, starts, values)
+        np.add.at(channel_diff, ends, -values)
 
     def detect_score(self, train: pd.DataFrame) -> np.ndarray:
         if not self.trained:
@@ -2766,7 +2806,7 @@ class LaGraph:
         graph_channel_sums = None
         mechanism_channel_sums = None
         causal_channel_sums = None
-        synthetic_rca_channel_sums = None
+        synthetic_rca_channel_diff = None
         channel_counts = None
         window_cursor = 0
         if export_rca:
@@ -2774,7 +2814,7 @@ class LaGraph:
             graph_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             mechanism_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             causal_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
-            synthetic_rca_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
+            synthetic_rca_channel_diff = np.zeros((total_length + 1, scaled_test.shape[1]), dtype=np.float64)
             channel_counts = np.zeros(total_length, dtype=np.float64)
 
         for i, (input_data, labels) in enumerate(test_loader):
@@ -2788,34 +2828,17 @@ class LaGraph:
                     causal_channel_err,
                     synthetic_rca_channel_err,
                 ) = self._detect_forward_with_channels(input_data)
-                self._add_window_channel_scores(channel_sums, channel_counts, channel_err, window_cursor)
-                self._add_window_channel_scores(
-                    graph_channel_sums,
+                self._add_window_channel_score_group(
+                    [channel_sums, graph_channel_sums, mechanism_channel_sums, causal_channel_sums],
                     channel_counts,
-                    graph_channel_err,
+                    [channel_err, graph_channel_err, mechanism_channel_err, causal_channel_err],
                     window_cursor,
-                    update_counts=False,
                 )
-                self._add_window_channel_scores(
-                    mechanism_channel_sums,
-                    channel_counts,
-                    mechanism_channel_err,
-                    window_cursor,
-                    update_counts=False,
-                )
-                self._add_window_channel_scores(
-                    causal_channel_sums,
-                    channel_counts,
-                    causal_channel_err,
-                    window_cursor,
-                    update_counts=False,
-                )
-                self._add_window_channel_scores(
-                    synthetic_rca_channel_sums,
-                    channel_counts,
+                self._add_window_constant_channel_scores(
+                    synthetic_rca_channel_diff,
                     synthetic_rca_channel_err,
                     window_cursor,
-                    update_counts=False,
+                    int(channel_err.shape[1]),
                 )
                 window_cursor += int(channel_err.shape[0])
             else:
@@ -2853,6 +2876,7 @@ class LaGraph:
                 out=np.zeros_like(causal_channel_sums),
                 where=channel_counts[:, None] > 0,
             ).astype(np.float32)
+            synthetic_rca_channel_sums = np.cumsum(synthetic_rca_channel_diff[:-1], axis=0)
             self._last_synthetic_rca_channel_scores = np.divide(
                 synthetic_rca_channel_sums,
                 channel_counts[:, None],
