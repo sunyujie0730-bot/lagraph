@@ -3091,19 +3091,27 @@ class LaGraph:
             causal_channel_scores = np.zeros_like(base_channel_scores)
         else:
             causal_channel_scores = causal_channel_scores[score_slice]
-        graph_weight = float(getattr(self.config, "rca_graph_weight", 0.0) or 0.0)
-        mechanism_weight = float(getattr(self.config, "rca_mechanism_weight", 0.0) or 0.0)
+        def _cfg_float(name, default):
+            value = getattr(self.config, name, default)
+            return float(default if value is None else value)
+
+        def _cfg_int(name, default):
+            value = getattr(self.config, name, default)
+            return int(default if value is None else value)
+
+        graph_weight = _cfg_float("rca_graph_weight", 0.0)
+        mechanism_weight = _cfg_float("rca_mechanism_weight", 0.0)
         use_source_propagation = bool(getattr(self.config, "rca_use_source_propagation", False))
-        source_weight = float(getattr(self.config, "rca_source_weight", 0.75) or 0.75)
-        propagation_weight = float(getattr(self.config, "rca_propagation_weight", 0.25) or 0.25)
-        source_mechanism_weight = float(getattr(self.config, "rca_source_mechanism_weight", 0.0) or 0.0)
-        causal_weight = float(getattr(self.config, "rca_causal_weight", 0.0) or 0.0)
-        contrast_window = int(getattr(self.config, "rca_contrast_window", 0) or 0)
-        contrast_weight = float(getattr(self.config, "rca_contrast_weight", 0.0) or 0.0)
-        mechanism_residual_window = int(getattr(self.config, "rca_mechanism_residual_window", 0) or 0)
-        mechanism_residual_weight = float(getattr(self.config, "rca_mechanism_residual_weight", 0.0) or 0.0)
-        event_head_ratio = float(getattr(self.config, "rca_event_head_ratio", 1.0) or 1.0)
-        event_head_points = int(getattr(self.config, "rca_event_head_points", 0) or 0)
+        source_weight = _cfg_float("rca_source_weight", 0.75)
+        propagation_weight = _cfg_float("rca_propagation_weight", 0.25)
+        source_mechanism_weight = _cfg_float("rca_source_mechanism_weight", 0.0)
+        causal_weight = _cfg_float("rca_causal_weight", 0.0)
+        contrast_window = _cfg_int("rca_contrast_window", 0)
+        contrast_weight = _cfg_float("rca_contrast_weight", 0.0)
+        mechanism_residual_window = _cfg_int("rca_mechanism_residual_window", 0)
+        mechanism_residual_weight = _cfg_float("rca_mechanism_residual_weight", 0.0)
+        event_head_ratio = _cfg_float("rca_event_head_ratio", 1.0)
+        event_head_points = _cfg_int("rca_event_head_points", 0)
         export_lite = bool(getattr(self.config, "rca_export_lite", False))
         export_top_k = int(getattr(self.config, "rca_export_top_k", 20) or 20)
         max_channel_ranking = export_top_k if export_lite else None
