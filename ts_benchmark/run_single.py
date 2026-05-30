@@ -173,6 +173,7 @@ def main():
             "graph-coupled-source",
             "gated-dual-source",
             "causal-gated-source",
+            "onset-source-rca",
             "channel-only",
             "temporal-only",
             "state-aware",
@@ -553,6 +554,24 @@ def main():
         type=float,
         default=None,
         help="Weight for lagged causal deviation inside the RCA source score.",
+    )
+    parser.add_argument(
+        "--rca-onset-weight",
+        type=float,
+        default=None,
+        help="Weight for early local-baseline crossing in event-level RCA rankings.",
+    )
+    parser.add_argument(
+        "--rca-onset-baseline-window",
+        type=int,
+        default=None,
+        help="Number of points before each event used to estimate onset baselines.",
+    )
+    parser.add_argument(
+        "--rca-onset-z",
+        type=float,
+        default=None,
+        help="Robust z threshold used to decide whether a variable has crossed its onset baseline.",
     )
     parser.add_argument(
         "--rca-graph-direction",
@@ -1045,6 +1064,39 @@ def main():
             "rca_causal_weight": 0.05,
             "rca_event_head_ratio": 0.30,
             "rca_event_head_points": 30,
+            "rca_prediction_key": "15",
+        },
+        "onset-source-rca": {
+            "use_channel_graph": True,
+            "use_temporal_graph": True,
+            "use_lagged_causal_graph": True,
+            "causal_lags": [1, 3, 6, 12],
+            "causal_topk": 5,
+            "causal_detach_backbone": False,
+            "use_vq_bypass": True,
+            "use_multi_scale_scorer": False,
+            "use_channel_corr_prior": True,
+            "channel_corr_prior_topk": 5,
+            "lambda_channel_prior_align": 0.01,
+            "use_mechanism_predictive_head": True,
+            "mechanism_predictive_blend_init": 0.30,
+            "lambda_channel_mechanism": 0.05,
+            "lambda_causal_mechanism": 0.01,
+            "lambda_causal_sparse": 0.001,
+            "use_channel_mechanism_score": True,
+            "channel_mechanism_score_weight": 0.30,
+            "rca_use_source_propagation": True,
+            "rca_graph_weight": 1.0,
+            "rca_mechanism_weight": 0.0,
+            "rca_source_weight": 1.0,
+            "rca_propagation_weight": 0.0,
+            "rca_source_mechanism_weight": 0.15,
+            "rca_causal_weight": 0.0,
+            "rca_onset_weight": 0.5,
+            "rca_onset_baseline_window": 300,
+            "rca_onset_z": 2.0,
+            "rca_event_head_ratio": 1.0,
+            "rca_event_head_points": 0,
             "rca_prediction_key": "15",
         },
         "channel-only": {
@@ -1662,6 +1714,12 @@ def main():
         score_hyper_params["rca_source_mechanism_weight"] = max(0.0, float(args.rca_source_mechanism_weight))
     if args.rca_causal_weight is not None:
         score_hyper_params["rca_causal_weight"] = max(0.0, float(args.rca_causal_weight))
+    if args.rca_onset_weight is not None:
+        score_hyper_params["rca_onset_weight"] = max(0.0, float(args.rca_onset_weight))
+    if args.rca_onset_baseline_window is not None:
+        score_hyper_params["rca_onset_baseline_window"] = max(1, int(args.rca_onset_baseline_window))
+    if args.rca_onset_z is not None:
+        score_hyper_params["rca_onset_z"] = max(0.0, float(args.rca_onset_z))
     if args.rca_graph_direction is not None:
         score_hyper_params["rca_graph_direction"] = args.rca_graph_direction
     if args.rca_contrast_window is not None:

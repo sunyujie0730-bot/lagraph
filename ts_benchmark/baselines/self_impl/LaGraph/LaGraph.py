@@ -186,6 +186,9 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_mechanism_residual_weight": 0.0,
     "rca_event_head_ratio": 1.0,
     "rca_event_head_points": 0,
+    "rca_onset_weight": 0.0,
+    "rca_onset_baseline_window": 200,
+    "rca_onset_z": 2.0,
     "rca_prediction_key": "pot",
     # --- v11.4 P0-2: POT 阈值参数 ---
     "pot_risk": 1e-4,            # POT EVT 风险水平
@@ -1099,6 +1102,9 @@ class LaGraph:
                 "rca_propagation_weight": getattr(self.config, "rca_propagation_weight", None),
                 "rca_source_mechanism_weight": getattr(self.config, "rca_source_mechanism_weight", None),
                 "rca_causal_weight": getattr(self.config, "rca_causal_weight", None),
+                "rca_onset_weight": getattr(self.config, "rca_onset_weight", None),
+                "rca_onset_baseline_window": getattr(self.config, "rca_onset_baseline_window", None),
+                "rca_onset_z": getattr(self.config, "rca_onset_z", None),
                 "use_state_aware_fusion": getattr(self.config, "use_state_aware_fusion", None),
                 "state_aware_num_states": getattr(self.config, "state_aware_num_states", None),
                 "state_aware_graph_gate_init": getattr(self.config, "state_aware_graph_gate_init", None),
@@ -2925,6 +2931,38 @@ class LaGraph:
             pred = np.pad(pred, (0, length - len(pred)), mode="constant")
         return pred
 
+    @staticmethod
+    def _event_onset_scores(score_matrix, start, end, baseline_window=200, onset_z=2.0):
+        """Score variables that cross their normal local baseline earlier within an event."""
+        if score_matrix is None or end <= start or start <= 0:
+            width = score_matrix.shape[1] if score_matrix is not None and score_matrix.ndim == 2 else 0
+            return np.zeros(width, dtype=np.float32)
+
+        event_scores = score_matrix[start:end]
+        if event_scores.size == 0:
+            return np.zeros(score_matrix.shape[1], dtype=np.float32)
+
+        baseline_start = max(0, start - max(1, int(baseline_window)))
+        baseline_scores = score_matrix[baseline_start:start]
+        if baseline_scores.size == 0:
+            return np.zeros(score_matrix.shape[1], dtype=np.float32)
+
+        center = np.median(baseline_scores, axis=0)
+        mad = 1.4826 * np.median(np.abs(baseline_scores - center), axis=0)
+        std = np.std(baseline_scores, axis=0)
+        scale = np.where(mad > 1e-6, mad, std)
+        scale = np.maximum(scale, 1e-6)
+
+        threshold = center + float(onset_z) * scale
+        above = event_scores >= threshold
+        has_onset = above.any(axis=0)
+        first_idx = np.argmax(above, axis=0)
+        length = max(1, event_scores.shape[0])
+        early_factor = np.where(has_onset, 1.0 - (first_idx / float(length)), 0.0)
+        peak_delta = np.maximum(event_scores.max(axis=0) - center, 0.0) / scale
+        onset_scores = np.where(has_onset, early_factor * np.log1p(peak_delta), 0.0)
+        return np.nan_to_num(onset_scores, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+
     def _build_rca_events(
         self,
         segments,
@@ -2943,6 +2981,9 @@ class LaGraph:
         source_channel_scores=None,
         propagation_channel_scores=None,
         causal_channel_scores=None,
+        onset_weight=0.0,
+        onset_baseline_window=200,
+        onset_z=2.0,
     ):
         events = []
         for event_id, (start, end) in enumerate(segments, start=1):
@@ -2979,6 +3020,17 @@ class LaGraph:
                 if causal_channel_scores is not None
                 else np.zeros_like(event_raw_scores)
             )
+            onset_source_scores = source_channel_scores if source_channel_scores is not None else base_channel_scores
+            event_onset_scores = np.zeros_like(event_raw_scores)
+            if onset_weight > 0.0:
+                event_onset_scores = self._event_onset_scores(
+                    onset_source_scores,
+                    start,
+                    end,
+                    baseline_window=onset_baseline_window,
+                    onset_z=onset_z,
+                )
+                event_scores = event_scores + onset_weight * event_onset_scores
             event_mechanism_residual_scores = np.zeros_like(event_mechanism_scores)
             if mechanism_residual_window > 0 and mechanism_residual_weight > 0.0 and start > 0:
                 baseline_start = max(0, start - mechanism_residual_window)
@@ -3000,6 +3052,7 @@ class LaGraph:
                     "source_score": float(event_source_scores[idx]),
                     "propagation_score": float(event_propagation_scores[idx]),
                     "causal_score": float(event_causal_scores[idx]),
+                    "onset_score": float(event_onset_scores[idx]),
                     "mechanism_residual_score": float(event_mechanism_residual_scores[idx]),
                     "contrast_score": float(event_contrast_scores[idx]),
                 }
@@ -3112,6 +3165,9 @@ class LaGraph:
         mechanism_residual_weight = _cfg_float("rca_mechanism_residual_weight", 0.0)
         event_head_ratio = _cfg_float("rca_event_head_ratio", 1.0)
         event_head_points = _cfg_int("rca_event_head_points", 0)
+        onset_weight = _cfg_float("rca_onset_weight", 0.0)
+        onset_baseline_window = _cfg_int("rca_onset_baseline_window", 200)
+        onset_z = _cfg_float("rca_onset_z", 2.0)
         export_lite = bool(getattr(self.config, "rca_export_lite", False))
         export_top_k = int(getattr(self.config, "rca_export_top_k", 20) or 20)
         max_channel_ranking = export_top_k if export_lite else None
@@ -3152,6 +3208,9 @@ class LaGraph:
             source_channel_scores=source_channel_scores,
             propagation_channel_scores=propagation_channel_scores,
             causal_channel_scores=causal_channel_scores,
+            onset_weight=onset_weight,
+            onset_baseline_window=onset_baseline_window,
+            onset_z=onset_z,
         )
         pred_key, pred_mask = self._select_rca_prediction_mask(predict_labels, len(labels))
         predicted_events_by_key = {}
@@ -3183,10 +3242,13 @@ class LaGraph:
                     event_head_ratio,
                     event_head_points,
                     max_channel_ranking=max_channel_ranking,
-                    source_channel_scores=source_channel_scores,
-                    propagation_channel_scores=propagation_channel_scores,
-                    causal_channel_scores=causal_channel_scores,
-                )
+                        source_channel_scores=source_channel_scores,
+                        propagation_channel_scores=propagation_channel_scores,
+                        causal_channel_scores=causal_channel_scores,
+                        onset_weight=onset_weight,
+                        onset_baseline_window=onset_baseline_window,
+                        onset_z=onset_z,
+                    )
         elif isinstance(predict_labels, dict):
             for key, prediction in predict_labels.items():
                 key_name = self._rca_prediction_key_name(key)
@@ -3211,6 +3273,9 @@ class LaGraph:
                     source_channel_scores=source_channel_scores,
                     propagation_channel_scores=propagation_channel_scores,
                     causal_channel_scores=causal_channel_scores,
+                    onset_weight=onset_weight,
+                    onset_baseline_window=onset_baseline_window,
+                    onset_z=onset_z,
                 )
         elif predict_labels is not None:
             mask = self._normalize_prediction_mask(predict_labels, len(labels))
@@ -3234,6 +3299,9 @@ class LaGraph:
                 source_channel_scores=source_channel_scores,
                 propagation_channel_scores=propagation_channel_scores,
                 causal_channel_scores=causal_channel_scores,
+                onset_weight=onset_weight,
+                onset_baseline_window=onset_baseline_window,
+                onset_z=onset_z,
             )
         predicted_events = predicted_events_by_key.get(pred_key, [])
         if not predicted_events and pred_mask is not None:
@@ -3254,6 +3322,9 @@ class LaGraph:
                 source_channel_scores=source_channel_scores,
                 propagation_channel_scores=propagation_channel_scores,
                 causal_channel_scores=causal_channel_scores,
+                onset_weight=onset_weight,
+                onset_baseline_window=onset_baseline_window,
+                onset_z=onset_z,
             )
 
         from datetime import datetime
@@ -3267,7 +3338,8 @@ class LaGraph:
         score_method = (
             "event-level source/propagation RCA: "
             "source=(base residual + mechanism prior deviation + lagged causal deviation), "
-            "propagation=graph-propagated residual"
+            "propagation=graph-propagated residual, "
+            "onset=early local-baseline crossing"
             if use_source_propagation
             else "mean channel-wise normalized reconstruction error plus graph-propagated, mechanism-violation, and local-contrast attribution"
         )
@@ -3292,6 +3364,9 @@ class LaGraph:
             "rca_mechanism_residual_weight": mechanism_residual_weight,
             "rca_event_head_ratio": event_head_ratio,
             "rca_event_head_points": event_head_points,
+            "rca_onset_weight": onset_weight,
+            "rca_onset_baseline_window": onset_baseline_window,
+            "rca_onset_z": onset_z,
             "rca_prediction_key": pred_key,
             "feature_names": feature_names,
             "events": events,
