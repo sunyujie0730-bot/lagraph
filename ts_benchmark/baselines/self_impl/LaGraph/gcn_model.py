@@ -1215,6 +1215,7 @@ class SparseGCN(nn.Module):
             aux_losses['mechanism_predictive_blend_weight'] = mechanism_predictive_blend_weight.detach()
         if source_gate is not None:
             aux_losses['source_gate'] = source_gate.detach()
+            aux_losses['source_gate_prob'] = source_gate
             aux_losses['source_gate_score'] = source_gate_score
             aux_losses['source_gate_sparse_loss'] = source_gate.mean()
         if synthetic_logits is not None:

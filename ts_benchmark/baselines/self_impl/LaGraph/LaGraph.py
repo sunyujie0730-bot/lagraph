@@ -100,6 +100,20 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "synthetic_score_eps": 1e-6,
     "synthetic_min_len": 4,
     "synthetic_max_len": 20,
+    "use_source_effect_synthetic": False,
+    "lambda_source_effect": 0.0,
+    "source_effect_interval": 4,
+    "source_effect_min_len": 8,
+    "source_effect_max_len": 30,
+    "source_effect_min_roots": 1,
+    "source_effect_max_roots": 2,
+    "source_effect_neighbor_topk": 3,
+    "source_effect_strength": 0.35,
+    "source_effect_delay_max": 6,
+    "source_effect_bce_weight": 1.0,
+    "source_effect_rank_weight": 1.0,
+    "source_effect_effect_rank_weight": 0.5,
+    "source_effect_margin": 0.2,
     "use_parallel_graph_fusion": False,
     "graph_fusion_gate_mode": "sample",
     "graph_fusion_strategy": "parallel",
@@ -878,6 +892,7 @@ class LaGraph:
         self._last_source_gate_channel_scores = None
         self._last_synthetic_rca_channel_scores = None
         self._last_channel_names = None
+        self._channel_corr_prior = None
 
         # ★ P0-2: POT 阈值估计器
         self._pot_estimator = POTThresholdEstimator(
@@ -1081,6 +1096,9 @@ class LaGraph:
                 "use_synthetic_anomaly_aux": getattr(self.config, "use_synthetic_anomaly_aux", None),
                 "lambda_synthetic_anomaly": getattr(self.config, "lambda_synthetic_anomaly", None),
                 "synthetic_aux_interval": getattr(self.config, "synthetic_aux_interval", None),
+                "use_source_effect_synthetic": getattr(self.config, "use_source_effect_synthetic", None),
+                "lambda_source_effect": getattr(self.config, "lambda_source_effect", None),
+                "source_effect_interval": getattr(self.config, "source_effect_interval", None),
                 "use_synthetic_score": getattr(self.config, "use_synthetic_score", None),
                 "synthetic_score_weight": getattr(self.config, "synthetic_score_weight", None),
                 "use_parallel_graph_fusion": getattr(self.config, "use_parallel_graph_fusion", None),
@@ -1380,6 +1398,99 @@ class LaGraph:
 
         return x, mask, channel_mask
 
+    @torch.no_grad()
+    def _make_source_effect_synthetic_batch(self, input_data: torch.Tensor):
+        x = input_data.detach().clone()
+        B, L, C = x.shape
+        device = x.device
+        event_mask = torch.zeros(B, L, device=device, dtype=torch.float32)
+        source_channel_mask = torch.zeros(B, C, device=device, dtype=torch.float32)
+        effect_channel_mask = torch.zeros(B, C, device=device, dtype=torch.float32)
+
+        min_len = int(getattr(self.config, "source_effect_min_len", 8) or 8)
+        max_len = int(getattr(self.config, "source_effect_max_len", 30) or 30)
+        min_len = min(max(1, min_len), max(1, L))
+        max_len = min(max(min_len, max_len), max(1, L))
+        min_roots = int(getattr(self.config, "source_effect_min_roots", 1) or 1)
+        max_roots = int(getattr(self.config, "source_effect_max_roots", 2) or 2)
+        min_roots = min(max(1, min_roots), C)
+        max_roots = min(max(min_roots, max_roots), C)
+        neighbor_topk = min(max(0, int(getattr(self.config, "source_effect_neighbor_topk", 3) or 0)), C)
+        effect_strength = float(getattr(self.config, "source_effect_strength", 0.35) or 0.35)
+        delay_max = max(0, int(getattr(self.config, "source_effect_delay_max", 6) or 0))
+        prior = getattr(self, "_channel_corr_prior", None)
+        if prior is not None:
+            prior = np.asarray(prior, dtype=np.float32)
+            if prior.shape != (C, C):
+                prior = None
+
+        for b in range(B):
+            n_roots = int(torch.randint(min_roots, max_roots + 1, (1,), device=device).item())
+            roots = torch.randperm(C, device=device)[:n_roots]
+            roots_cpu = [int(v) for v in roots.detach().cpu().tolist()]
+
+            seg_len = int(torch.randint(min_len, max_len + 1, (1,), device=device).item())
+            start_hi = max(1, L - seg_len + 1)
+            start = int(torch.randint(0, start_hi, (1,), device=device).item())
+            end = min(L, start + seg_len)
+
+            scale = input_data[b, :, roots].std(dim=0).clamp_min(0.2)
+            sign = torch.where(
+                torch.rand(n_roots, device=device) < 0.5,
+                -torch.ones(n_roots, device=device),
+                torch.ones(n_roots, device=device),
+            )
+            amp = sign * scale * torch.empty(n_roots, device=device).uniform_(1.5, 4.0)
+            typ = int(torch.randint(0, 4, (1,), device=device).item())
+            if typ == 0:
+                x[b, start:end, roots] = x[b, start:end, roots] + amp
+            elif typ == 1:
+                ramp = torch.linspace(0.0, 1.0, end - start, device=device).unsqueeze(-1)
+                x[b, start:end, roots] = x[b, start:end, roots] + ramp * amp
+            elif typ == 2:
+                factor = torch.empty(n_roots, device=device).uniform_(0.3, 2.5)
+                x[b, start:end, roots] = x[b, start:end, roots] * factor
+            else:
+                spike_count = max(1, min(end - start, seg_len // 4))
+                local_idx = torch.randperm(end - start, device=device)[:spike_count] + start
+                x[b, local_idx[:, None], roots] = x[b, local_idx[:, None], roots] + amp
+
+            neighbors = []
+            if prior is not None and neighbor_topk > 0:
+                scores = prior[roots_cpu].max(axis=0)
+                scores[roots_cpu] = 0.0
+                top_idx = np.argsort(-scores)[:neighbor_topk]
+                neighbors = [int(idx) for idx in top_idx if scores[idx] > 0]
+            if not neighbors and neighbor_topk > 0:
+                candidates = [idx for idx in range(C) if idx not in set(roots_cpu)]
+                if candidates:
+                    perm = torch.randperm(len(candidates), device=device)[:neighbor_topk].detach().cpu().tolist()
+                    neighbors = [candidates[int(idx)] for idx in perm]
+
+            if neighbors:
+                effects = torch.as_tensor(neighbors, device=device, dtype=torch.long)
+                max_delay = min(delay_max, max(0, end - start - 1))
+                delay = int(torch.randint(1, max_delay + 2, (1,), device=device).item()) if max_delay > 0 else 0
+                eff_start = min(end, start + delay)
+                if eff_start < end:
+                    eff_scale = input_data[b, :, effects].std(dim=0).clamp_min(0.2)
+                    eff_sign = torch.where(
+                        torch.rand(effects.numel(), device=device) < 0.5,
+                        -torch.ones(effects.numel(), device=device),
+                        torch.ones(effects.numel(), device=device),
+                    )
+                    eff_amp = eff_sign * eff_scale * torch.empty(effects.numel(), device=device).uniform_(0.8, 2.0)
+                    eff_amp = eff_amp * effect_strength
+                    eff_ramp = torch.linspace(0.0, 1.0, end - eff_start, device=device).unsqueeze(-1)
+                    x[b, eff_start:end, effects] = x[b, eff_start:end, effects] + eff_ramp * eff_amp
+                    effect_channel_mask[b, effects] = 1.0
+
+            event_mask[b, start:end] = 1.0
+            source_channel_mask[b, roots] = 1.0
+            effect_channel_mask[b, roots] = 0.0
+
+        return x, event_mask, source_channel_mask, effect_channel_mask
+
     def _synthetic_anomaly_aux_loss(self, input_data, normal_aux_losses, batch_idx=None):
         use_aux = bool(getattr(self.config, "use_synthetic_anomaly_aux", False))
         use_rca = bool(getattr(self.config, "use_synthetic_rca_loss", False))
@@ -1451,6 +1562,83 @@ class LaGraph:
             total_loss = total_loss + lambda_rca * rca_loss
 
         return total_loss
+
+    def _source_effect_ranking_loss(self, channel_scores, source_mask, effect_mask):
+        margin = float(getattr(self.config, "source_effect_margin", 0.2) or 0.2)
+        losses = []
+        for b in range(channel_scores.shape[0]):
+            roots = source_mask[b] > 0.5
+            non_roots = ~roots
+            if roots.sum() == 0 or non_roots.sum() == 0:
+                continue
+            pos_score = channel_scores[b, roots].mean()
+            neg_scores = channel_scores[b, non_roots]
+            k = min(5, neg_scores.numel())
+            hard_neg = torch.topk(neg_scores, k=k).values.mean()
+            losses.append(F.relu(channel_scores.new_tensor(margin) + hard_neg - pos_score))
+
+            effects = (effect_mask[b] > 0.5) & non_roots
+            if effects.sum() > 0:
+                effect_scores = channel_scores[b, effects]
+                k_eff = min(3, effect_scores.numel())
+                hard_effect = torch.topk(effect_scores, k=k_eff).values.mean()
+                losses.append(F.relu(channel_scores.new_tensor(margin) + hard_effect - pos_score))
+        if not losses:
+            return channel_scores.new_tensor(0.0)
+        return torch.stack(losses).mean()
+
+    def _weighted_channel_bce(self, probs, target):
+        probs = probs.clamp(1e-5, 1.0 - 1e-5)
+        pos = target.sum().clamp_min(1.0)
+        neg = (target.numel() - target.sum()).clamp_min(1.0)
+        pos_weight = (neg / pos).clamp(1.0, 20.0)
+        loss = -(pos_weight * target * torch.log(probs) + (1.0 - target) * torch.log(1.0 - probs))
+        return loss.mean()
+
+    def _source_effect_synthetic_loss(self, input_data, batch_idx=None):
+        if not bool(getattr(self.config, "use_source_effect_synthetic", False)):
+            return input_data.new_tensor(0.0)
+        interval = int(getattr(self.config, "source_effect_interval", 4) or 4)
+        if batch_idx is not None and interval > 1 and batch_idx % interval != 0:
+            return input_data.new_tensor(0.0)
+        lambda_source_effect = float(getattr(self.config, "lambda_source_effect", 0.0) or 0.0)
+        if lambda_source_effect <= 0:
+            return input_data.new_tensor(0.0)
+
+        synth_data, event_mask, source_mask, effect_mask = self._make_source_effect_synthetic_batch(input_data)
+        synth_rec, _, _, _, _, synth_aux, _ = self.model(synth_data)
+        if not synth_aux:
+            return input_data.new_tensor(0.0)
+
+        mask_sum = event_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
+        gate_prob = synth_aux.get("source_gate_prob")
+        gate_channel_scores = None
+        if gate_prob is not None:
+            gate_channel_scores = (gate_prob * event_mask.unsqueeze(-1)).sum(dim=1) / mask_sum
+
+        source_score = synth_aux.get("source_gate_score")
+        if source_score is not None:
+            channel_scores = (source_score * event_mask.unsqueeze(-1)).sum(dim=1) / mask_sum
+        else:
+            channel_err = F.l1_loss(synth_rec, synth_data, reduction="none")
+            channel_scores = (channel_err * event_mask.unsqueeze(-1)).sum(dim=1) / mask_sum
+
+        bce_weight = float(getattr(self.config, "source_effect_bce_weight", 1.0) or 1.0)
+        rank_weight = float(getattr(self.config, "source_effect_rank_weight", 1.0) or 1.0)
+        effect_rank_weight = float(getattr(self.config, "source_effect_effect_rank_weight", 0.5) or 0.5)
+
+        total = input_data.new_tensor(0.0)
+        if gate_channel_scores is not None:
+            total = total + bce_weight * self._weighted_channel_bce(gate_channel_scores, source_mask)
+        if rank_weight > 0:
+            total = total + rank_weight * self._synthetic_rca_ranking_loss(channel_scores, source_mask)
+        if effect_rank_weight > 0:
+            total = total + effect_rank_weight * self._source_effect_ranking_loss(
+                channel_scores,
+                source_mask,
+                effect_mask,
+            )
+        return lambda_source_effect * total
 
     def _synthetic_rca_ranking_loss(self, channel_scores, channel_mask):
         margin = float(getattr(self.config, "synthetic_rca_margin", 0.2) or 0.2)
@@ -1926,6 +2114,7 @@ class LaGraph:
                 train_df,
                 topk=getattr(self.config, "channel_corr_prior_topk", 5),
             )
+            self._channel_corr_prior = prior
             self.model.set_channel_static_prior(prior)
             print(
                 f"  [ChannelPrior] normal correlation prior set "
@@ -2052,6 +2241,7 @@ class LaGraph:
                     if use_vq_bypass and aux_losses and 'vq_loss' in aux_losses:
                         loss = loss + lambda_vq * aux_losses['vq_loss']
                     loss = loss + self._synthetic_anomaly_aux_loss(input_data, aux_losses, batch_idx=i)
+                    loss = loss + self._source_effect_synthetic_loss(input_data, batch_idx=i)
 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
@@ -2269,6 +2459,7 @@ class LaGraph:
                 if aux_losses and 'sparse_loss' in aux_losses:
                     loss = loss + self.config.lambda_locality_l1 * aux_losses['sparse_loss']
                 loss = self._add_temporal_graph_regularization(loss, aux_losses)
+                loss = loss + self._source_effect_synthetic_loss(input_data, batch_idx=i)
 
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
@@ -2390,6 +2581,9 @@ class LaGraph:
                 "use_synthetic_anomaly_aux": getattr(self.config, "use_synthetic_anomaly_aux", None),
                 "lambda_synthetic_anomaly": getattr(self.config, "lambda_synthetic_anomaly", None),
                 "synthetic_aux_interval": getattr(self.config, "synthetic_aux_interval", None),
+                "use_source_effect_synthetic": getattr(self.config, "use_source_effect_synthetic", None),
+                "lambda_source_effect": getattr(self.config, "lambda_source_effect", None),
+                "source_effect_interval": getattr(self.config, "source_effect_interval", None),
                 "use_synthetic_score": getattr(self.config, "use_synthetic_score", None),
                 "synthetic_score_weight": getattr(self.config, "synthetic_score_weight", None),
                 "score_smoothing_window": getattr(self.config, "score_smoothing_window", None),
