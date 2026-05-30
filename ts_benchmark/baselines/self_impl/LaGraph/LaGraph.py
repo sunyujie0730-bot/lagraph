@@ -54,6 +54,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "num_epochs": 100,
     "batch_size": 256,
     "patience": 15,
+    "use_latest_checkpoint": False,
     "topk": 5,
     "anomaly_ratio": [0.5, 1.0, 2, 5, 10, 15],
     # --- 自适应图参数 ---
@@ -896,6 +897,13 @@ class LaGraph:
     def __repr__(self) -> str:
         return "LaGraph-v11.4"
 
+    def _should_load_best_checkpoint(self) -> bool:
+        return (
+            self.early_stopping is not None
+            and self.early_stopping.check_point is not None
+            and not bool(getattr(self.config, "use_latest_checkpoint", False))
+        )
+
     def _fit_input_preprocessor(self, train_frame: pd.DataFrame) -> None:
         values = train_frame.values.astype(np.float64, copy=False)
         if getattr(self.config, "use_robust_input_preprocess", False):
@@ -1455,7 +1463,7 @@ class LaGraph:
             return
 
         print("\n  [ScoreNorm] Fitting channel-wise reconstruction error stats...")
-        if self.early_stopping is not None and self.early_stopping.check_point is not None:
+        if self._should_load_best_checkpoint():
             raw_model.load_state_dict(self.early_stopping.check_point)
         self.model.to(self.device)
         self.model.eval()
@@ -1503,7 +1511,7 @@ class LaGraph:
             return
 
         print("\n  [GraphShift] Fitting normal channel-graph statistics...")
-        if self.early_stopping is not None and self.early_stopping.check_point is not None:
+        if self._should_load_best_checkpoint():
             raw_model.load_state_dict(self.early_stopping.check_point)
         self.model.to(self.device)
         self.model.eval()
@@ -1565,7 +1573,7 @@ class LaGraph:
             return
 
         print("\n  [CausalLag] Fitting lagged-mechanism score statistics...")
-        if self.early_stopping is not None and self.early_stopping.check_point is not None:
+        if self._should_load_best_checkpoint():
             raw_model.load_state_dict(self.early_stopping.check_point)
         self.model.to(self.device)
         self.model.eval()
@@ -1613,7 +1621,7 @@ class LaGraph:
             return
 
         print("\n  [ChannelMechanism] Fitting normal mechanism-violation score statistics...")
-        if self.early_stopping is not None and self.early_stopping.check_point is not None:
+        if self._should_load_best_checkpoint():
             raw_model.load_state_dict(self.early_stopping.check_point)
         self.model.to(self.device)
         self.model.eval()
@@ -1660,7 +1668,7 @@ class LaGraph:
             return
 
         print("\n  [SynthAux] Fitting synthetic-head score statistics...")
-        if self.early_stopping is not None and self.early_stopping.check_point is not None:
+        if self._should_load_best_checkpoint():
             raw_model.load_state_dict(self.early_stopping.check_point)
         self.model.to(self.device)
         self.model.eval()
@@ -1756,7 +1764,7 @@ class LaGraph:
 
         self._single_gpu_train(train_scaled, valid_scaled)
 
-        if self.early_stopping is not None and self.early_stopping.check_point is not None:
+        if self._should_load_best_checkpoint():
             self._get_raw_model().load_state_dict(self.early_stopping.check_point)
 
         self.trained = True
@@ -2666,7 +2674,8 @@ class LaGraph:
     def detect_score(self, train: pd.DataFrame) -> np.ndarray:
         if not self.trained:
             raise RuntimeError("Model not trained yet. Call detect_fit first.")
-        self._get_raw_model().load_state_dict(self.early_stopping.check_point)
+        if self._should_load_best_checkpoint():
+            self._get_raw_model().load_state_dict(self.early_stopping.check_point)
 
         import gc
         torch.cuda.synchronize(self.device)
@@ -2728,7 +2737,8 @@ class LaGraph:
         """
         if not self.trained:
             raise RuntimeError("Model not trained yet. Call detect_fit first.")
-        self._get_raw_model().load_state_dict(self.early_stopping.check_point)
+        if self._should_load_best_checkpoint():
+            self._get_raw_model().load_state_dict(self.early_stopping.check_point)
         self.model.to(self.device)
 
         eval_batch_size = min(self.config.batch_size, 64)
