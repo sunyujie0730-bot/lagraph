@@ -221,6 +221,8 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_contrast_weight": 0.0,
     "rca_mechanism_residual_window": 0,
     "rca_mechanism_residual_weight": 0.0,
+    "rca_event_component_normalize": False,
+    "rca_graph_penalty_weight": 0.0,
     "rca_event_head_ratio": 1.0,
     "rca_event_head_points": 0,
     "rca_onset_weight": 0.0,
@@ -3641,6 +3643,20 @@ class LaGraph:
         onset_scores = np.where(has_onset, early_factor * np.log1p(peak_delta), 0.0)
         return np.nan_to_num(onset_scores, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
 
+    @staticmethod
+    def _normalize_event_component(values):
+        """Normalize one event-level RCA component across channels to avoid scale domination."""
+        arr = np.asarray(values, dtype=np.float32)
+        if arr.size == 0:
+            return arr
+        arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+        lo = float(np.min(arr))
+        hi = float(np.max(arr))
+        span = hi - lo
+        if span <= 1e-8:
+            return np.zeros_like(arr, dtype=np.float32)
+        return ((arr - lo) / span).astype(np.float32)
+
     def _build_rca_events(
         self,
         segments,
@@ -3662,9 +3678,22 @@ class LaGraph:
         source_gate_channel_scores=None,
         synthetic_channel_scores=None,
         counterfactual_channel_scores=None,
+        use_source_propagation=False,
+        graph_weight=0.0,
+        mechanism_weight=0.0,
+        source_weight=0.75,
+        source_base_weight=1.0,
+        propagation_weight=0.25,
+        source_mechanism_weight=0.0,
+        causal_weight=0.0,
+        synthetic_weight=0.0,
+        source_gate_weight=0.0,
+        counterfactual_weight=0.0,
         onset_weight=0.0,
         onset_baseline_window=200,
         onset_z=2.0,
+        event_component_normalize=False,
+        graph_penalty_weight=0.0,
     ):
         events = []
         for event_id, (start, end) in enumerate(segments, start=1):
@@ -3736,6 +3765,43 @@ class LaGraph:
                     0.0,
                 )
                 event_scores = event_scores + mechanism_residual_weight * event_mechanism_residual_scores
+            if event_component_normalize:
+                base_norm = self._normalize_event_component(event_base_scores)
+                graph_norm = self._normalize_event_component(event_graph_scores)
+                mechanism_norm = self._normalize_event_component(event_mechanism_scores)
+                causal_norm = self._normalize_event_component(event_causal_scores)
+                source_gate_norm = self._normalize_event_component(event_source_gate_scores)
+                synthetic_norm = self._normalize_event_component(event_synthetic_scores)
+                counterfactual_norm = self._normalize_event_component(event_counterfactual_scores)
+                onset_norm = self._normalize_event_component(event_onset_scores)
+                mechanism_residual_norm = self._normalize_event_component(event_mechanism_residual_scores)
+                contrast_norm = self._normalize_event_component(event_contrast_scores)
+                source_norm = (
+                    source_base_weight * base_norm
+                    + source_mechanism_weight * mechanism_norm
+                    + causal_weight * causal_norm
+                    + source_gate_weight * source_gate_norm
+                    + synthetic_weight * synthetic_norm
+                    + counterfactual_weight * counterfactual_norm
+                )
+                if use_source_propagation:
+                    event_scores = source_weight * source_norm + propagation_weight * graph_norm
+                else:
+                    event_scores = (
+                        base_norm
+                        + graph_weight * graph_norm
+                        + mechanism_weight * mechanism_norm
+                        + source_gate_weight * source_gate_norm
+                        + synthetic_weight * synthetic_norm
+                        + counterfactual_weight * counterfactual_norm
+                    )
+                event_scores = (
+                    event_scores
+                    + onset_weight * onset_norm
+                    + mechanism_residual_weight * mechanism_residual_norm
+                    + contrast_weight * contrast_norm
+                    - graph_penalty_weight * graph_norm
+                )
             order = np.argsort(-event_scores)
             channel_ranking = [
                 {
@@ -3904,6 +3970,8 @@ class LaGraph:
         onset_weight = _cfg_float("rca_onset_weight", 0.0)
         onset_baseline_window = _cfg_int("rca_onset_baseline_window", 200)
         onset_z = _cfg_float("rca_onset_z", 2.0)
+        event_component_normalize = bool(getattr(self.config, "rca_event_component_normalize", False))
+        graph_penalty_weight = _cfg_float("rca_graph_penalty_weight", 0.0)
         export_lite = bool(getattr(self.config, "rca_export_lite", False))
         export_top_k = int(getattr(self.config, "rca_export_top_k", 20) or 20)
         max_channel_ranking = export_top_k if export_lite else None
@@ -3971,9 +4039,22 @@ class LaGraph:
             source_gate_channel_scores=source_gate_channel_scores,
             synthetic_channel_scores=synthetic_channel_scores,
             counterfactual_channel_scores=counterfactual_channel_scores,
+            use_source_propagation=use_source_propagation,
+            graph_weight=graph_weight,
+            mechanism_weight=mechanism_weight,
+            source_weight=source_weight,
+            source_base_weight=source_base_weight,
+            propagation_weight=propagation_weight,
+            source_mechanism_weight=source_mechanism_weight,
+            causal_weight=causal_weight,
+            synthetic_weight=synthetic_weight,
+            source_gate_weight=source_gate_weight,
+            counterfactual_weight=counterfactual_weight,
             onset_weight=onset_weight,
             onset_baseline_window=onset_baseline_window,
             onset_z=onset_z,
+            event_component_normalize=event_component_normalize,
+            graph_penalty_weight=graph_penalty_weight,
         )
         predicted_events_by_key = {}
         if export_lite:
@@ -3998,9 +4079,22 @@ class LaGraph:
                     source_gate_channel_scores=source_gate_channel_scores,
                     synthetic_channel_scores=synthetic_channel_scores,
                     counterfactual_channel_scores=counterfactual_channel_scores,
+                    use_source_propagation=use_source_propagation,
+                    graph_weight=graph_weight,
+                    mechanism_weight=mechanism_weight,
+                    source_weight=source_weight,
+                    source_base_weight=source_base_weight,
+                    propagation_weight=propagation_weight,
+                    source_mechanism_weight=source_mechanism_weight,
+                    causal_weight=causal_weight,
+                    synthetic_weight=synthetic_weight,
+                    source_gate_weight=source_gate_weight,
+                    counterfactual_weight=counterfactual_weight,
                     onset_weight=onset_weight,
                     onset_baseline_window=onset_baseline_window,
                     onset_z=onset_z,
+                    event_component_normalize=event_component_normalize,
+                    graph_penalty_weight=graph_penalty_weight,
                 )
         elif isinstance(predict_labels, dict):
             for key, prediction in predict_labels.items():
@@ -4029,9 +4123,22 @@ class LaGraph:
                     source_gate_channel_scores=source_gate_channel_scores,
                     synthetic_channel_scores=synthetic_channel_scores,
                     counterfactual_channel_scores=counterfactual_channel_scores,
+                    use_source_propagation=use_source_propagation,
+                    graph_weight=graph_weight,
+                    mechanism_weight=mechanism_weight,
+                    source_weight=source_weight,
+                    source_base_weight=source_base_weight,
+                    propagation_weight=propagation_weight,
+                    source_mechanism_weight=source_mechanism_weight,
+                    causal_weight=causal_weight,
+                    synthetic_weight=synthetic_weight,
+                    source_gate_weight=source_gate_weight,
+                    counterfactual_weight=counterfactual_weight,
                     onset_weight=onset_weight,
                     onset_baseline_window=onset_baseline_window,
                     onset_z=onset_z,
+                    event_component_normalize=event_component_normalize,
+                    graph_penalty_weight=graph_penalty_weight,
                 )
         elif predict_labels is not None:
             mask = self._normalize_prediction_mask(predict_labels, len(labels))
@@ -4058,9 +4165,22 @@ class LaGraph:
                 source_gate_channel_scores=source_gate_channel_scores,
                 synthetic_channel_scores=synthetic_channel_scores,
                 counterfactual_channel_scores=counterfactual_channel_scores,
+                use_source_propagation=use_source_propagation,
+                graph_weight=graph_weight,
+                mechanism_weight=mechanism_weight,
+                source_weight=source_weight,
+                source_base_weight=source_base_weight,
+                propagation_weight=propagation_weight,
+                source_mechanism_weight=source_mechanism_weight,
+                causal_weight=causal_weight,
+                synthetic_weight=synthetic_weight,
+                source_gate_weight=source_gate_weight,
+                counterfactual_weight=counterfactual_weight,
                 onset_weight=onset_weight,
                 onset_baseline_window=onset_baseline_window,
                 onset_z=onset_z,
+                event_component_normalize=event_component_normalize,
+                graph_penalty_weight=graph_penalty_weight,
             )
         predicted_events = predicted_events_by_key.get(pred_key, [])
         if not predicted_events and pred_mask is not None:
@@ -4084,9 +4204,22 @@ class LaGraph:
                 source_gate_channel_scores=source_gate_channel_scores,
                 synthetic_channel_scores=synthetic_channel_scores,
                 counterfactual_channel_scores=counterfactual_channel_scores,
+                use_source_propagation=use_source_propagation,
+                graph_weight=graph_weight,
+                mechanism_weight=mechanism_weight,
+                source_weight=source_weight,
+                source_base_weight=source_base_weight,
+                propagation_weight=propagation_weight,
+                source_mechanism_weight=source_mechanism_weight,
+                causal_weight=causal_weight,
+                synthetic_weight=synthetic_weight,
+                source_gate_weight=source_gate_weight,
+                counterfactual_weight=counterfactual_weight,
                 onset_weight=onset_weight,
                 onset_baseline_window=onset_baseline_window,
                 onset_z=onset_z,
+                event_component_normalize=event_component_normalize,
+                graph_penalty_weight=graph_penalty_weight,
             )
 
         from datetime import datetime
@@ -4132,6 +4265,8 @@ class LaGraph:
             "rca_contrast_weight": contrast_weight,
             "rca_mechanism_residual_window": mechanism_residual_window,
             "rca_mechanism_residual_weight": mechanism_residual_weight,
+            "rca_event_component_normalize": event_component_normalize,
+            "rca_graph_penalty_weight": graph_penalty_weight,
             "rca_event_head_ratio": event_head_ratio,
             "rca_event_head_points": event_head_points,
             "rca_onset_weight": onset_weight,
