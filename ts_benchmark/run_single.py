@@ -184,6 +184,7 @@ def main():
             "adaptive-source-sharp-rca",
             "hierarchical-source-rca",
             "soft-hierarchical-rca",
+            "mechanism-calibrated-rca",
             "source-preserving-rca",
             "synthetic-responsibility-rca",
             "counterfactual-source-rca",
@@ -2252,6 +2253,15 @@ def main():
         rca_hierarchical_group_topk=0,
         rca_hierarchical_group_boost=0.2,
         rca_hierarchical_outside_penalty=0.0,
+    )
+    arch_profiles["mechanism-calibrated-rca"] = dict(
+        arch_profiles["soft-hierarchical-rca"],
+        rca_source_base_weight=0.25,
+        rca_source_mechanism_weight=0.10,
+        rca_onset_weight=0.50,
+        rca_source_interaction_weight=2.0,
+        rca_graph_penalty_weight=0.10,
+        rca_hierarchical_group_boost=0.2,
     )
     arch_profiles["source-preserving-rca"] = dict(
         arch_profiles["soft-hierarchical-rca"],
