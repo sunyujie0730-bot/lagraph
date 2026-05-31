@@ -175,7 +175,6 @@ class AnomalyDetect(Strategy):
                     actual=actual_label.astype(float),
                     predicted=predict_label.astype(float)
                 )
-                print(single_series_results)
 
                 # ===== 步骤5: 序列化保存预测数据（用于事后分析） =====
                 # 用 base64 编码 pickle 序列化结果，方便存在CSV中
