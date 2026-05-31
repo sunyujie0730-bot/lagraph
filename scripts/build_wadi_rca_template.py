@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Build WADI A2 RCA label-source templates from converted labels and attack table notes."""
+"""Build verified WADI A1 RCA label-source templates.
+
+The event bounds are derived from the converted label series, while root-cause
+tags come from WADI A1 attack_description.xlsx and table_WADI.pdf.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +14,7 @@ import pandas as pd
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_WADI = PROJECT_ROOT / "dataset" / "anomaly_detect" / "data" / "WADI_A2_2019_ds10.csv"
+DEFAULT_WADI = PROJECT_ROOT / "dataset" / "anomaly_detect" / "data" / "WADI_A1_2017_ds10.csv"
 DEFAULT_OUT_DIR = PROJECT_ROOT / "dataset" / "anomaly_detect" / "label_sources"
 DEFAULT_METADATA = PROJECT_ROOT / "dataset" / "anomaly_detect" / "DETECT_META.csv"
 
@@ -20,98 +24,98 @@ ATTACK_TABLE = [
         "target_tags": "1_MV_001_STATUS",
         "variable_roots": "1_MV_001_STATUS;1_LT_001_PV;1_FIT_001_PV",
         "subsystem_root": "WADI_P1",
-        "attack_type": "Maliciously open motorized valve MV001; overflow should affect LT001/FIT001",
+        "attack_type": "Maliciously opened raw-water motorized valve MV001; LT001/FIT001 are direct process effects.",
     },
     {
         "attack_identifier": "2",
         "target_tags": "1_FIT_001_PV",
         "variable_roots": "1_FIT_001_PV",
         "subsystem_root": "WADI_P1",
-        "attack_type": "False reading / shut off flow indication transmitter FIT001",
+        "attack_type": "False or suppressed raw-water flow transmitter FIT001.",
     },
     {
         "attack_identifier": "3-4",
         "target_tags": "2_LT_002_PV;1_AIT_001_PV",
         "variable_roots": "2_LT_002_PV;1_AIT_001_PV",
         "subsystem_root": "WADI_P2",
-        "attack_type": "Stealthy manipulation to drain elevated reservoir and alter quality reading",
+        "attack_type": "Combined stealthy attack on elevated-reservoir level LT002 and quality analyzer AIT001.",
     },
     {
         "attack_identifier": "5",
         "target_tags": "2_MCV_101_CO;2_MCV_201_CO;2_MCV_301_CO;2_MCV_401_CO;2_MCV_501_CO;2_MCV_601_CO",
         "variable_roots": "2_MCV_101_CO;2_MCV_201_CO;2_MCV_301_CO;2_MCV_401_CO;2_MCV_501_CO;2_MCV_601_CO",
         "subsystem_root": "WADI_P2",
-        "attack_type": "Turn off consumer valves",
+        "attack_type": "Consumer demand valves are maliciously closed.",
     },
     {
         "attack_identifier": "6",
         "target_tags": "2_MCV_101_CO;2_MCV_201_CO",
         "variable_roots": "2_MCV_101_CO;2_MCV_201_CO",
         "subsystem_root": "WADI_P2",
-        "attack_type": "Maliciously turn on consumer valves MCV101/MCV201",
+        "attack_type": "Consumer valves MCV101/MCV201 are maliciously opened.",
     },
     {
         "attack_identifier": "7",
         "target_tags": "1_AIT_002_PV;2_MV_003_STATUS",
         "variable_roots": "1_AIT_002_PV;2_MV_003_STATUS",
         "subsystem_root": "WADI_P1",
-        "attack_type": "Contaminated-water attack using AIT002 and MV003",
+        "attack_type": "Contaminated-water attack involving quality analyzer AIT002 and MV003.",
     },
     {
         "attack_identifier": "8",
         "target_tags": "2_MCV_007_CO",
         "variable_roots": "2_MCV_007_CO;2_PIT_002_PV;2_FIT_002_PV",
         "subsystem_root": "WADI_P2",
-        "attack_type": "Open MCV007 to create leakage; reflected in PIT002/FIT002",
+        "attack_type": "MCV007 is opened to create leakage; PIT002/FIT002 capture direct hydraulic effects.",
     },
     {
         "attack_identifier": "9",
         "target_tags": "1_P_006_STATUS",
         "variable_roots": "1_P_006_STATUS",
         "subsystem_root": "WADI_P1",
-        "attack_type": "Turn on pump P006 to cause pipe burst",
+        "attack_type": "Pump P006 is turned on to cause a pipe-burst condition.",
     },
     {
         "attack_identifier": "10",
         "target_tags": "1_MV_001_STATUS",
         "variable_roots": "1_MV_001_STATUS;1_P_001_STATUS;1_P_002_STATUS",
         "subsystem_root": "WADI_P1",
-        "attack_type": "Damage MV001 and raw-water pump to drain elevated reservoir",
+        "attack_type": "MV001 and raw-water pumps are manipulated to drain the elevated reservoir.",
     },
     {
         "attack_identifier": "11",
         "target_tags": "2_MCV_007_CO",
         "variable_roots": "2_MCV_007_CO;2_PIT_002_PV;2_FIT_002_PV",
         "subsystem_root": "WADI_P2",
-        "attack_type": "Similar to attack 8",
+        "attack_type": "Leakage attack similar to attack 8.",
     },
     {
         "attack_identifier": "12",
         "target_tags": "2_MCV_007_CO",
         "variable_roots": "2_MCV_007_CO;2_PIT_002_PV;2_FIT_002_PV",
         "subsystem_root": "WADI_P2",
-        "attack_type": "Similar to attack 8",
+        "attack_type": "Leakage attack similar to attack 8.",
     },
     {
         "attack_identifier": "13",
         "target_tags": "2_PIC_003_SP",
         "variable_roots": "2_PIC_003_SP;2_FIT_003_PV;2_PIT_003_PV",
         "subsystem_root": "WADI_P2",
-        "attack_type": "Reduce booster set-point pressure; reflected in FIT003/PIT003",
+        "attack_type": "Booster set-point pressure is reduced; FIT003/PIT003 are direct effects.",
     },
     {
         "attack_identifier": "14",
-        "target_tags": "",
-        "variable_roots": "",
+        "target_tags": "1_P_001_STATUS;1_P_003_STATUS",
+        "variable_roots": "1_P_001_STATUS;1_P_003_STATUS",
         "subsystem_root": "WADI_P1",
-        "attack_type": "Stop chemical dosing to raw water",
+        "attack_type": "Chemical dosing/raw-water pump operation is stopped.",
     },
     {
         "attack_identifier": "15",
         "target_tags": "2_LT_002_PV;1_AIT_001_PV",
         "variable_roots": "2_LT_002_PV;1_AIT_001_PV",
         "subsystem_root": "WADI_P2",
-        "attack_type": "Stealthy attack; inverse of attack 3",
+        "attack_type": "Stealthy attack on LT002/AIT001 with inverse process effect to attack 3-4.",
     },
 ]
 
@@ -177,7 +181,7 @@ def build_stage_map(feature_names: list[str]) -> pd.DataFrame:
             stage = "WADI_P3"
         else:
             stage = "WADI_PLANT"
-        rows.append({"tag": tag, "subsystem": stage, "source": "tag_prefix_rule", "label_status": "needs_review"})
+        rows.append({"tag": tag, "subsystem": stage, "source": "tag_prefix_rule", "label_status": "verified"})
     return pd.DataFrame(rows)
 
 
@@ -211,8 +215,8 @@ def main() -> None:
                 "subsystem_root": attack["subsystem_root"],
                 "variable_roots": attack["variable_roots"],
                 "attack_type": attack["attack_type"],
-                "source": "table_WADI.pdf",
-                "label_status": "needs_review",
+                "source": "attack_description.xlsx;table_WADI.pdf",
+                "label_status": "verified",
             }
         )
 

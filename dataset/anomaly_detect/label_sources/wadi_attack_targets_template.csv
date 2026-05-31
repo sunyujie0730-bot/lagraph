@@ -1,15 +1,15 @@
 file,event_id,attack_identifier,event_start,event_end,target_tags,subsystem_root,variable_roots,attack_type,source,label_status
-WADI_A2_2019_ds10.csv,1,1,511,660,1_MV_001_STATUS,WADI_P1,1_MV_001_STATUS;1_LT_001_PV;1_FIT_001_PV,Maliciously open motorized valve MV001; overflow should affect LT001/FIT001,table_WADI.pdf,needs_review
-WADI_A2_2019_ds10.csv,2,2,5906,5964,1_FIT_001_PV,WADI_P1,1_FIT_001_PV,False reading / shut off flow indication transmitter FIT001,table_WADI.pdf,needs_review
-WADI_A2_2019_ds10.csv,3,3-4,6091,6264,2_LT_002_PV;1_AIT_001_PV,WADI_P2,2_LT_002_PV;1_AIT_001_PV,Stealthy manipulation to drain elevated reservoir and alter quality reading,table_WADI.pdf,needs_review
-WADI_A2_2019_ds10.csv,4,5,6305,6389,2_MCV_101_CO;2_MCV_201_CO;2_MCV_301_CO;2_MCV_401_CO;2_MCV_501_CO;2_MCV_601_CO,WADI_P2,2_MCV_101_CO;2_MCV_201_CO;2_MCV_301_CO;2_MCV_401_CO;2_MCV_501_CO;2_MCV_601_CO,Turn off consumer valves,table_WADI.pdf,needs_review
-WADI_A2_2019_ds10.csv,5,6,7078,7144,2_MCV_101_CO;2_MCV_201_CO,WADI_P2,2_MCV_101_CO;2_MCV_201_CO,Maliciously turn on consumer valves MCV101/MCV201,table_WADI.pdf,needs_review
-WADI_A2_2019_ds10.csv,6,7,7490,7559,1_AIT_002_PV;2_MV_003_STATUS,WADI_P1,1_AIT_002_PV;2_MV_003_STATUS,Contaminated-water attack using AIT002 and MV003,table_WADI.pdf,needs_review
-WADI_A2_2019_ds10.csv,7,8,8521,8578,2_MCV_007_CO,WADI_P2,2_MCV_007_CO;2_PIT_002_PV;2_FIT_002_PV,Open MCV007 to create leakage; reflected in PIT002/FIT002,table_WADI.pdf,needs_review
-WADI_A2_2019_ds10.csv,8,9,10846,10865,1_P_006_STATUS,WADI_P1,1_P_006_STATUS,Turn on pump P006 to cause pipe burst,table_WADI.pdf,needs_review
-WADI_A2_2019_ds10.csv,9,10,14731,14739,1_MV_001_STATUS,WADI_P1,1_MV_001_STATUS;1_P_001_STATUS;1_P_002_STATUS,Damage MV001 and raw-water pump to drain elevated reservoir,table_WADI.pdf,needs_review
-WADI_A2_2019_ds10.csv,10,11,14868,14948,2_MCV_007_CO,WADI_P2,2_MCV_007_CO;2_PIT_002_PV;2_FIT_002_PV,Similar to attack 8,table_WADI.pdf,needs_review
-WADI_A2_2019_ds10.csv,11,12,14975,15042,2_MCV_007_CO,WADI_P2,2_MCV_007_CO;2_PIT_002_PV;2_FIT_002_PV,Similar to attack 8,table_WADI.pdf,needs_review
-WADI_A2_2019_ds10.csv,12,13,15115,15150,2_PIC_003_SP,WADI_P2,2_PIC_003_SP;2_FIT_003_PV;2_PIT_003_PV,Reduce booster set-point pressure; reflected in FIT003/PIT003,table_WADI.pdf,needs_review
-WADI_A2_2019_ds10.csv,13,14,15217,15273,,WADI_P1,,Stop chemical dosing to raw water,table_WADI.pdf,needs_review
-WADI_A2_2019_ds10.csv,14,15,16360,16422,2_LT_002_PV;1_AIT_001_PV,WADI_P2,2_LT_002_PV;1_AIT_001_PV,Stealthy attack; inverse of attack 3,table_WADI.pdf,needs_review
+WADI_A1_2017_ds10.csv,1,1,510,661,1_MV_001_STATUS,WADI_P1,1_MV_001_STATUS;1_LT_001_PV;1_FIT_001_PV,Maliciously opened raw-water motorized valve MV001; LT001/FIT001 are direct process effects.,attack_description.xlsx;table_WADI.pdf,verified
+WADI_A1_2017_ds10.csv,2,2,5905,5964,1_FIT_001_PV,WADI_P1,1_FIT_001_PV,False or suppressed raw-water flow transmitter FIT001.,attack_description.xlsx;table_WADI.pdf,verified
+WADI_A1_2017_ds10.csv,3,3-4,6090,6264,2_LT_002_PV;1_AIT_001_PV,WADI_P2,2_LT_002_PV;1_AIT_001_PV,Combined stealthy attack on elevated-reservoir level LT002 and quality analyzer AIT001.,attack_description.xlsx;table_WADI.pdf,verified
+WADI_A1_2017_ds10.csv,4,5,6304,6389,2_MCV_101_CO;2_MCV_201_CO;2_MCV_301_CO;2_MCV_401_CO;2_MCV_501_CO;2_MCV_601_CO,WADI_P2,2_MCV_101_CO;2_MCV_201_CO;2_MCV_301_CO;2_MCV_401_CO;2_MCV_501_CO;2_MCV_601_CO,Consumer demand valves are maliciously closed.,attack_description.xlsx;table_WADI.pdf,verified
+WADI_A1_2017_ds10.csv,5,6,7077,7144,2_MCV_101_CO;2_MCV_201_CO,WADI_P2,2_MCV_101_CO;2_MCV_201_CO,Consumer valves MCV101/MCV201 are maliciously opened.,attack_description.xlsx;table_WADI.pdf,verified
+WADI_A1_2017_ds10.csv,6,7,7490,7559,1_AIT_002_PV;2_MV_003_STATUS,WADI_P1,1_AIT_002_PV;2_MV_003_STATUS,Contaminated-water attack involving quality analyzer AIT002 and MV003.,attack_description.xlsx;table_WADI.pdf,verified
+WADI_A1_2017_ds10.csv,7,8,8520,8578,2_MCV_007_CO,WADI_P2,2_MCV_007_CO;2_PIT_002_PV;2_FIT_002_PV,MCV007 is opened to create leakage; PIT002/FIT002 capture direct hydraulic effects.,attack_description.xlsx;table_WADI.pdf,verified
+WADI_A1_2017_ds10.csv,8,9,14730,14738,1_P_006_STATUS,WADI_P1,1_P_006_STATUS,Pump P006 is turned on to cause a pipe-burst condition.,attack_description.xlsx;table_WADI.pdf,verified
+WADI_A1_2017_ds10.csv,9,10,14868,14948,1_MV_001_STATUS,WADI_P1,1_MV_001_STATUS;1_P_001_STATUS;1_P_002_STATUS,MV001 and raw-water pumps are manipulated to drain the elevated reservoir.,attack_description.xlsx;table_WADI.pdf,verified
+WADI_A1_2017_ds10.csv,10,11,14980,15042,2_MCV_007_CO,WADI_P2,2_MCV_007_CO;2_PIT_002_PV;2_FIT_002_PV,Leakage attack similar to attack 8.,attack_description.xlsx;table_WADI.pdf,verified
+WADI_A1_2017_ds10.csv,11,12,15114,15150,2_MCV_007_CO,WADI_P2,2_MCV_007_CO;2_PIT_002_PV;2_FIT_002_PV,Leakage attack similar to attack 8.,attack_description.xlsx;table_WADI.pdf,verified
+WADI_A1_2017_ds10.csv,12,13,15165,15185,2_PIC_003_SP,WADI_P2,2_PIC_003_SP;2_FIT_003_PV;2_PIT_003_PV,Booster set-point pressure is reduced; FIT003/PIT003 are direct effects.,attack_description.xlsx;table_WADI.pdf,verified
+WADI_A1_2017_ds10.csv,13,14,15216,15273,1_P_001_STATUS;1_P_003_STATUS,WADI_P1,1_P_001_STATUS;1_P_003_STATUS,Chemical dosing/raw-water pump operation is stopped.,attack_description.xlsx;table_WADI.pdf,verified
+WADI_A1_2017_ds10.csv,14,15,16359,16422,2_LT_002_PV;1_AIT_001_PV,WADI_P2,2_LT_002_PV;1_AIT_001_PV,Stealthy attack on LT002/AIT001 with inverse process effect to attack 3-4.,attack_description.xlsx;table_WADI.pdf,verified

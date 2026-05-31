@@ -5,3 +5,4 @@ HAI_21_03_test3.csv,324002,HAI_21_03,large,other,False,,,,,,,216001,79,,,HAI,21.
 HAI_21_03_test4.csv,255602,HAI_21_03,large,other,False,,,,,,,216001,79,,,HAI,21.03,train=train1.csv.gz;test=test4.csv.gz;downsample=1
 HAI_21_03_test5.csv,308402,HAI_21_03,large,other,False,,,,,,,216001,79,,,HAI,21.03,train=train1.csv.gz;test=test5.csv.gz;downsample=1
 SWAT_A1A2_Physical_v1.csv,944919,SWAT_A1A2,large,second,False,,,,,,,495000,51,,,SWaT A1/A2,Dec 2015 Physical Normal_v1+Attack_v0,normal_v1_train+attack_v0_test;downsample=1
+WADI_A1_2017_ds10.csv,138242,WADI_A1,large,10second,False,,,,,,,120961,127,,,WADI,A1_9_Oct_2017,normal=WADI_14days.csv;attack=WADI_attackdata.csv;downsample=10;labels=attack_description.xlsx/table_WADI.pdf;min_train_std=0.0;drop_columns=

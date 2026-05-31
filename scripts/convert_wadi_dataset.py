@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
-"""Convert WADI A2 CSV files to LaGraph long CSV format."""
+"""Convert WADI A1/A2 raw CSV files to LaGraph long CSV format.
+
+The default mode targets the public WADI A1 2017 files:
+  - WADI_14days.csv
+  - WADI_attackdata.csv
+
+WADI A1 attack labels are not stored as a label column in the attack CSV, so
+the labels are reconstructed from the official attack-description table.
+"""
 
 from __future__ import annotations
 
 import argparse
-import csv
 import logging
+import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -13,21 +22,13 @@ import pandas as pd
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_RAW_DIR = (
-    PROJECT_ROOT
-    / "dataset"
-    / "anomaly_detect"
-    / "data"
-    / "raw"
-    / "WADI"
-    / "WaDi.A2_19_Nov_2019"
-)
+DEFAULT_RAW_DIR = Path(r"D:\WaDi.A1_9 Oct 2017\WADI.A1_9 Oct 2017")
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "dataset" / "anomaly_detect" / "data"
 DEFAULT_METADATA = PROJECT_ROOT / "dataset" / "anomaly_detect" / "DETECT_META.csv"
 
-NORMAL_FILE = "WADI_14days_new.csv"
-ATTACK_FILE = "WADI_attackdataLABLE.csv"
-LABEL_COLUMN = "Attack LABLE (1:No Attack, -1:Attack)"
+NORMAL_FILE_A1 = "WADI_14days.csv"
+ATTACK_FILE_A1 = "WADI_attackdata.csv"
+NORMAL_SKIPROWS_A1 = 4
 NON_FEATURE_COLUMNS = {"Row", "Date", "Time"}
 
 BASE_METADATA_COLUMNS = [
@@ -56,6 +57,34 @@ EXTRA_METADATA_COLUMNS = [
 ]
 
 
+@dataclass(frozen=True)
+class AttackWindow:
+    attack_id: str
+    start_second: int
+    end_second: int
+
+
+# Seconds are relative to the beginning of WADI_attackdata.csv
+# (2017-10-09 18:00:00). Attack 3 and 4 are a single overlapping event in the
+# official table and are kept as one RCA event.
+WADI_A1_ATTACK_WINDOWS = [
+    AttackWindow("1", 5100, 6616),
+    AttackWindow("2", 59050, 59640),
+    AttackWindow("3-4", 60900, 62640),
+    AttackWindow("5", 63040, 63890),
+    AttackWindow("6", 70770, 71440),
+    AttackWindow("7", 74897, 75595),
+    AttackWindow("8", 85200, 85780),
+    AttackWindow("9", 147300, 147387),
+    AttackWindow("10", 148674, 149480),
+    AttackWindow("11", 149791, 150420),
+    AttackWindow("12", 151140, 151500),
+    AttackWindow("13", 151650, 151852),
+    AttackWindow("14", 152160, 152736),
+    AttackWindow("15", 163590, 164220),
+]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw-dir", type=Path, default=DEFAULT_RAW_DIR)
@@ -74,39 +103,55 @@ def parse_args() -> argparse.Namespace:
         "--drop-columns",
         nargs="*",
         default=[],
-        help="Additional feature columns to exclude after reading the official WADI files.",
+        help="Additional cleaned feature columns to exclude.",
     )
     return parser.parse_args()
 
 
-def strip_columns(columns: list[str]) -> list[str]:
-    return [str(column).strip() for column in columns]
+def clean_column(column: str) -> str:
+    value = str(column).strip().strip('"')
+    if "\\" in value:
+        value = value.split("\\")[-1]
+    if "/" in value:
+        value = value.split("/")[-1]
+    value = value.strip()
+    value = re.sub(r"\s+", "_", value)
+    return value
 
 
-def read_attack_header(path: Path) -> list[str]:
-    with path.open("r", encoding="utf-8", errors="replace", newline="") as handle:
-        reader = csv.reader(handle)
-        next(reader)
-        return strip_columns(next(reader))
+def read_columns(path: Path, *, skiprows: int = 0) -> list[str]:
+    columns = pd.read_csv(path, nrows=0, skiprows=skiprows).columns.tolist()
+    cleaned = [clean_column(column) for column in columns]
+    duplicates = sorted({column for column in cleaned if cleaned.count(column) > 1})
+    if duplicates:
+        raise ValueError(f"Duplicate cleaned WADI columns in {path}: {duplicates}")
+    return cleaned
 
 
 def infer_columns(raw_dir: Path) -> tuple[list[str], list[str]]:
-    normal_path = raw_dir / NORMAL_FILE
-    attack_path = raw_dir / ATTACK_FILE
+    normal_path = raw_dir / NORMAL_FILE_A1
+    attack_path = raw_dir / ATTACK_FILE_A1
     if not normal_path.exists():
         raise FileNotFoundError(normal_path)
     if not attack_path.exists():
         raise FileNotFoundError(attack_path)
 
-    normal_columns = strip_columns(pd.read_csv(normal_path, nrows=0).columns.tolist())
-    attack_columns = read_attack_header(attack_path)
-    if attack_columns[-1] != LABEL_COLUMN:
-        raise ValueError(f"Unexpected WADI label column: {attack_columns[-1]!r}")
-    if normal_columns != attack_columns[:-1]:
-        raise ValueError("Normal and attack WADI feature columns do not match")
+    normal_columns = read_columns(normal_path, skiprows=NORMAL_SKIPROWS_A1)
+    attack_columns = read_columns(attack_path)
+    if normal_columns != attack_columns:
+        raise ValueError("Normal and attack WADI A1 columns do not match after cleaning")
 
     feature_columns = [column for column in normal_columns if column not in NON_FEATURE_COLUMNS]
+    if not feature_columns:
+        raise ValueError("No WADI feature columns found")
     return normal_columns, feature_columns
+
+
+def labels_from_attack_seconds(row_numbers: np.ndarray) -> np.ndarray:
+    labels = np.zeros(len(row_numbers), dtype=np.float32)
+    for window in WADI_A1_ATTACK_WINDOWS:
+        labels[(row_numbers >= window.start_second) & (row_numbers <= window.end_second)] = 1.0
+    return labels
 
 
 def read_part(
@@ -116,40 +161,44 @@ def read_part(
     *,
     downsample: int,
     chunk_size: int,
+    skiprows: int,
     attack: bool,
 ) -> tuple[pd.DataFrame, np.ndarray]:
     frames: list[pd.DataFrame] = []
     labels: list[np.ndarray] = []
     row_offset = 0
-    read_kwargs = {"chunksize": chunk_size, "low_memory": False}
-    if attack:
-        read_kwargs["skiprows"] = [0]
+    read_kwargs = {
+        "chunksize": chunk_size,
+        "low_memory": False,
+        "skiprows": skiprows,
+    }
 
     for chunk in pd.read_csv(path, **read_kwargs):
-        chunk.columns = strip_columns(chunk.columns.tolist())
-        if attack and LABEL_COLUMN not in chunk.columns:
-            chunk.columns = columns + [LABEL_COLUMN]
+        chunk.columns = [clean_column(column) for column in chunk.columns.tolist()]
+        if chunk.columns.tolist() != columns:
+            chunk.columns = columns
 
         row_numbers = np.arange(row_offset, row_offset + len(chunk))
         keep = (row_numbers % downsample) == 0
-        chunk = chunk.loc[keep].reset_index(drop=True)
+        selected_rows = row_numbers[keep]
+        chunk = chunk.loc[keep, feature_columns].copy().reset_index(drop=True)
 
-        if len(chunk) > 0:
-            frames.append(chunk.loc[:, feature_columns].copy())
+        if not chunk.empty:
+            values = chunk.apply(pd.to_numeric, errors="coerce")
+            frames.append(values)
             if attack:
-                raw_label = pd.to_numeric(chunk[LABEL_COLUMN], errors="coerce").fillna(1)
-                labels.append((raw_label.to_numpy() == -1).astype(np.float32))
+                labels.append(labels_from_attack_seconds(selected_rows))
             else:
                 labels.append(np.zeros(len(chunk), dtype=np.float32))
 
-        row_offset += len(keep)
+        row_offset += len(row_numbers)
 
     if not frames:
         raise ValueError(f"No rows selected from {path}")
 
     values = pd.concat(frames, ignore_index=True)
-    values = values.apply(pd.to_numeric, errors="coerce").ffill().bfill().fillna(0.0)
-    return values.astype(np.float32), np.concatenate(labels)
+    values = values.ffill().bfill().fillna(0.0).astype(np.float32)
+    return values, np.concatenate(labels)
 
 
 def write_long_csv(path: Path, values: pd.DataFrame, labels: np.ndarray) -> None:
@@ -221,24 +270,26 @@ def main() -> None:
     metadata_path = args.metadata.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    output_name = args.output_name or f"WADI_A2_2019_ds{args.downsample}.csv"
+    output_name = args.output_name or f"WADI_A1_2017_ds{args.downsample}.csv"
     output_path = output_dir / output_name
 
     columns, feature_columns = infer_columns(raw_dir)
     normal_values, normal_labels = read_part(
-        raw_dir / NORMAL_FILE,
+        raw_dir / NORMAL_FILE_A1,
         columns,
         feature_columns,
         downsample=args.downsample,
         chunk_size=args.chunk_size,
+        skiprows=NORMAL_SKIPROWS_A1,
         attack=False,
     )
     attack_values, attack_labels = read_part(
-        raw_dir / ATTACK_FILE,
+        raw_dir / ATTACK_FILE_A1,
         columns,
         feature_columns,
         downsample=args.downsample,
         chunk_size=args.chunk_size,
+        skiprows=0,
         attack=True,
     )
     normal_values, attack_values, selected_columns = filter_feature_columns(
@@ -255,9 +306,9 @@ def main() -> None:
     row = {
         "file_name": output_name,
         "length": int(len(values)),
-        "dataset_name": "WADI_A2",
+        "dataset_name": "WADI_A1",
         "size": "large" if len(values) > 10000 else "small",
-        "freq": "other",
+        "freq": f"{args.downsample}second",
         "if_univariate": False,
         "trend": "",
         "seasonal": "",
@@ -268,19 +319,21 @@ def main() -> None:
         "train_lens": int(len(normal_values)),
         "n_features": int(len(selected_columns)),
         "source_dataset": "WADI",
-        "source_version": "A2_19_Nov_2019",
+        "source_version": "A1_9_Oct_2017",
         "pattern": (
-            f"normal={NORMAL_FILE};attack={ATTACK_FILE};downsample={args.downsample};"
+            f"normal={NORMAL_FILE_A1};attack={ATTACK_FILE_A1};downsample={args.downsample};"
+            f"labels=attack_description.xlsx/table_WADI.pdf;"
             f"min_train_std={args.min_train_std};drop_columns={'+'.join(args.drop_columns)}"
         ),
     }
     update_metadata(metadata_path, row)
 
     logging.info(
-        "Converted %s: length=%s, train=%s, features=%s, anomalies=%s",
+        "Converted %s: length=%s, train=%s, test=%s, features=%s, anomaly_points=%s",
         output_name,
         row["length"],
         row["train_lens"],
+        int(len(attack_values)),
         row["n_features"],
         int(labels.sum()),
     )
