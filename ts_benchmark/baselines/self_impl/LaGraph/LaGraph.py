@@ -3741,6 +3741,10 @@ class LaGraph:
         onset_z=2.0,
         event_component_normalize=False,
         graph_penalty_weight=0.0,
+        hierarchical_mode="off",
+        hierarchical_group_topk=0,
+        hierarchical_group_boost=0.0,
+        hierarchical_outside_penalty=0.0,
     ):
         events = []
         for event_id, (start, end) in enumerate(segments, start=1):
@@ -3852,12 +3856,69 @@ class LaGraph:
                     + contrast_weight * contrast_norm
                     - graph_penalty_weight * graph_norm
                 )
-            order = np.argsort(-event_scores)
+            group_scores = {}
+            for name, value in zip(feature_names, event_scores):
+                group = self._root_cause_group_name(name)
+                group_scores[group] = max(group_scores.get(group, float("-inf")), float(value))
+            sorted_groups = sorted(group_scores.items(), key=lambda item: item[1], reverse=True)
+            group_rank = {name: int(rank + 1) for rank, (name, _) in enumerate(sorted_groups)}
+            group_values = np.asarray([value for _, value in sorted_groups], dtype=np.float64)
+            if group_values.size and float(group_values.max() - group_values.min()) > 1e-12:
+                group_norm = {
+                    name: float((value - group_values.min()) / (group_values.max() - group_values.min()))
+                    for name, value in sorted_groups
+                }
+            else:
+                group_norm = {name: 0.0 for name, _ in sorted_groups}
+
+            hierarchical_mode = str(hierarchical_mode or "off").lower()
+            hierarchical_scores = np.asarray(event_scores, dtype=np.float64).copy()
+            topk = max(0, int(hierarchical_group_topk or 0))
+            if hierarchical_mode == "soft":
+                top_groups = set(group_rank)
+                if topk > 0:
+                    top_groups = {name for name, rank in group_rank.items() if rank <= topk}
+                for idx, name in enumerate(feature_names):
+                    group = self._root_cause_group_name(name)
+                    hierarchical_scores[idx] += float(hierarchical_group_boost) * group_norm.get(group, 0.0)
+                    if topk > 0 and group not in top_groups:
+                        hierarchical_scores[idx] -= float(hierarchical_outside_penalty)
+                order = np.argsort(-hierarchical_scores)
+            elif hierarchical_mode == "strict":
+                order = np.asarray(
+                    sorted(
+                        range(len(feature_names)),
+                        key=lambda idx: (
+                            group_rank.get(self._root_cause_group_name(feature_names[idx]), 10**9),
+                            -float(event_scores[idx]),
+                        ),
+                    ),
+                    dtype=np.int64,
+                )
+            else:
+                order = np.argsort(-event_scores)
+
+            within_group_rank = {}
+            for group, _ in sorted_groups:
+                indices = [
+                    idx
+                    for idx, name in enumerate(feature_names)
+                    if self._root_cause_group_name(name) == group
+                ]
+                indices = sorted(indices, key=lambda idx: float(event_scores[idx]), reverse=True)
+                for rank, idx in enumerate(indices, start=1):
+                    within_group_rank[idx] = int(rank)
+
             channel_ranking = [
                 {
                     "rank": int(rank + 1),
                     "name": feature_names[idx],
                     "score": float(event_scores[idx]),
+                    "hierarchical_score": float(hierarchical_scores[idx]),
+                    "group": self._root_cause_group_name(feature_names[idx]),
+                    "group_rank": int(group_rank.get(self._root_cause_group_name(feature_names[idx]), 0)),
+                    "group_score": float(group_scores.get(self._root_cause_group_name(feature_names[idx]), 0.0)),
+                    "within_group_rank": int(within_group_rank.get(idx, 0)),
                     "base_score": float(event_base_scores[idx]),
                     "graph_score": float(event_graph_scores[idx]),
                     "mechanism_score": float(event_mechanism_scores[idx]),
@@ -3875,15 +3936,9 @@ class LaGraph:
             ]
             if max_channel_ranking is not None:
                 channel_ranking = channel_ranking[:max(1, int(max_channel_ranking))]
-            group_scores = {}
-            for name, value in zip(feature_names, event_scores):
-                group = self._root_cause_group_name(name)
-                group_scores[group] = max(group_scores.get(group, float("-inf")), float(value))
             group_ranking = [
                 {"rank": int(rank + 1), "name": name, "score": float(value)}
-                for rank, (name, value) in enumerate(
-                    sorted(group_scores.items(), key=lambda item: item[1], reverse=True)
-                )
+                for rank, (name, value) in enumerate(sorted_groups)
             ]
             events.append(
                 {
@@ -4023,6 +4078,10 @@ class LaGraph:
         onset_z = _cfg_float("rca_onset_z", 2.0)
         event_component_normalize = bool(getattr(self.config, "rca_event_component_normalize", False))
         graph_penalty_weight = _cfg_float("rca_graph_penalty_weight", 0.0)
+        hierarchical_mode = str(getattr(self.config, "rca_hierarchical_mode", "off") or "off")
+        hierarchical_group_topk = _cfg_int("rca_hierarchical_group_topk", 0)
+        hierarchical_group_boost = _cfg_float("rca_hierarchical_group_boost", 0.0)
+        hierarchical_outside_penalty = _cfg_float("rca_hierarchical_outside_penalty", 0.0)
         export_lite = bool(getattr(self.config, "rca_export_lite", False))
         export_top_k = int(getattr(self.config, "rca_export_top_k", 20) or 20)
         max_channel_ranking = export_top_k if export_lite else None
@@ -4107,6 +4166,10 @@ class LaGraph:
             onset_z=onset_z,
             event_component_normalize=event_component_normalize,
             graph_penalty_weight=graph_penalty_weight,
+            hierarchical_mode=hierarchical_mode,
+            hierarchical_group_topk=hierarchical_group_topk,
+            hierarchical_group_boost=hierarchical_group_boost,
+            hierarchical_outside_penalty=hierarchical_outside_penalty,
         )
         predicted_events_by_key = {}
         if export_lite:
@@ -4148,6 +4211,10 @@ class LaGraph:
                     onset_z=onset_z,
                     event_component_normalize=event_component_normalize,
                     graph_penalty_weight=graph_penalty_weight,
+                    hierarchical_mode=hierarchical_mode,
+                    hierarchical_group_topk=hierarchical_group_topk,
+                    hierarchical_group_boost=hierarchical_group_boost,
+                    hierarchical_outside_penalty=hierarchical_outside_penalty,
                 )
         elif isinstance(predict_labels, dict):
             for key, prediction in predict_labels.items():
@@ -4193,6 +4260,10 @@ class LaGraph:
                     onset_z=onset_z,
                     event_component_normalize=event_component_normalize,
                     graph_penalty_weight=graph_penalty_weight,
+                    hierarchical_mode=hierarchical_mode,
+                    hierarchical_group_topk=hierarchical_group_topk,
+                    hierarchical_group_boost=hierarchical_group_boost,
+                    hierarchical_outside_penalty=hierarchical_outside_penalty,
                 )
         elif predict_labels is not None:
             mask = self._normalize_prediction_mask(predict_labels, len(labels))
@@ -4236,6 +4307,10 @@ class LaGraph:
                 onset_z=onset_z,
                 event_component_normalize=event_component_normalize,
                 graph_penalty_weight=graph_penalty_weight,
+                hierarchical_mode=hierarchical_mode,
+                hierarchical_group_topk=hierarchical_group_topk,
+                hierarchical_group_boost=hierarchical_group_boost,
+                hierarchical_outside_penalty=hierarchical_outside_penalty,
             )
         predicted_events = predicted_events_by_key.get(pred_key, [])
         if not predicted_events and pred_mask is not None:
@@ -4276,6 +4351,10 @@ class LaGraph:
                 onset_z=onset_z,
                 event_component_normalize=event_component_normalize,
                 graph_penalty_weight=graph_penalty_weight,
+                hierarchical_mode=hierarchical_mode,
+                hierarchical_group_topk=hierarchical_group_topk,
+                hierarchical_group_boost=hierarchical_group_boost,
+                hierarchical_outside_penalty=hierarchical_outside_penalty,
             )
 
         from datetime import datetime
@@ -4324,6 +4403,10 @@ class LaGraph:
             "rca_mechanism_residual_weight": mechanism_residual_weight,
             "rca_event_component_normalize": event_component_normalize,
             "rca_graph_penalty_weight": graph_penalty_weight,
+            "rca_hierarchical_mode": hierarchical_mode,
+            "rca_hierarchical_group_topk": hierarchical_group_topk,
+            "rca_hierarchical_group_boost": hierarchical_group_boost,
+            "rca_hierarchical_outside_penalty": hierarchical_outside_penalty,
             "rca_event_head_ratio": event_head_ratio,
             "rca_event_head_points": event_head_points,
             "rca_onset_weight": onset_weight,

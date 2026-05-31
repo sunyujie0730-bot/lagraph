@@ -153,7 +153,6 @@ class AnomalyDetect(Strategy):
             single_series_results_list = []
             for ratio, predict_label in predict_labels.items():
                 remaining_length = len(actual_label) - len(predict_label)
-                print(remaining_length)
                 
                 # 如果预测序列比真实标签短，用0填充（保守处理：缺的地方都当没异常）
                 if remaining_length > 0:
