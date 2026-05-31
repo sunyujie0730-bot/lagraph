@@ -2259,8 +2259,8 @@ def main():
         source_gate_init=0.20,
         lambda_source_gate_sparse=0.0005,
         use_source_effect_synthetic=True,
-        lambda_source_effect=0.04,
-        source_effect_interval=16,
+        lambda_source_effect=0.02,
+        source_effect_interval=32,
         source_effect_min_len=8,
         source_effect_max_len=30,
         source_effect_min_roots=1,
@@ -2272,7 +2272,7 @@ def main():
         source_effect_rank_weight=1.0,
         source_effect_effect_rank_weight=0.5,
         source_effect_margin=0.15,
-        rca_source_gate_weight=0.25,
+        rca_source_gate_weight=0.0,
         rca_synthetic_weight=0.0,
     )
 
