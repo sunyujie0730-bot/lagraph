@@ -84,8 +84,9 @@ def root_cause_group_name(feature_name: str) -> str:
     name = feature_name.strip()
     if len(name) >= 2 and name[0] == "P" and name[1].isdigit():
         return name.split("_", 1)[0]
-    if re.match(r"^[123]_", name):
-        return f"WADI_P{name[0]}"
+    wadi_match = re.match(r"^([123])(?:[A-Z])?_", name)
+    if wadi_match:
+        return f"WADI_P{wadi_match.group(1)}"
     match = re.search(r"(\d{3})", name)
     if match:
         return f"P{match.group(1)[0]}"
