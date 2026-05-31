@@ -154,7 +154,7 @@ def root_cause_group_name(feature_name: str) -> str:
     if not isinstance(feature_name, str):
         return feature_name
     name = feature_name.strip()
-    if len(name) >= 2 and name[0] == "P" and name[1].isdigit():
+    if re.match(r"^P\d+_", name):
         return name.split("_", 1)[0]
     wadi_match = re.match(r"^([123])(?:[A-Z])?_", name)
     if wadi_match:

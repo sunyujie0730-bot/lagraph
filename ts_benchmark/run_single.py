@@ -183,6 +183,7 @@ def main():
             "onset-source-sharp-rca",
             "adaptive-source-sharp-rca",
             "hierarchical-source-rca",
+            "soft-hierarchical-rca",
             "synthetic-responsibility-rca",
             "counterfactual-source-rca",
             "onset-source-rca",
@@ -2243,6 +2244,15 @@ def main():
             "use_multi_scale_scorer": False,
         },
     }
+    arch_profiles["soft-hierarchical-rca"] = dict(
+        arch_profiles["hierarchical-source-rca"],
+        rca_hierarchical_mode="soft",
+        rca_hierarchical_group_aggregation="max",
+        rca_hierarchical_group_topk=0,
+        rca_hierarchical_group_boost=0.2,
+        rca_hierarchical_outside_penalty=0.0,
+    )
+
     arch_switches = arch_profiles[args.arch_profile]
     vq_hyper_params = {}
     if vq_cooldown_epochs is not None:

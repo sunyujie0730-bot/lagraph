@@ -58,7 +58,7 @@ def root_cause_group_name(feature_name: str) -> str:
     if not isinstance(feature_name, str):
         return feature_name
     name = feature_name.strip()
-    if len(name) >= 2 and name[0] == "P" and name[1].isdigit():
+    if re.match(r"^P\d+_", name):
         return name.split("_", 1)[0]
     wadi_match = re.match(r"^([123])(?:[A-Z])?_", name)
     if wadi_match:
@@ -125,7 +125,7 @@ def group_ranking(event: dict, aggregation: str = "exported", topk: int = 3) -> 
         scores: dict[str, list[float]] = {}
         for item in event.get("channel_ranking", []):
             name = item.get("name", "")
-            group = item.get("group") or root_cause_group_name(name)
+            group = root_cause_group_name(item.get("group") or name)
             scores.setdefault(group, []).append(float(item.get("score", 0.0)))
         group_scores = {}
         for group, values in scores.items():
@@ -145,7 +145,7 @@ def group_ranking(event: dict, aggregation: str = "exported", topk: int = 3) -> 
 
     scores: dict[str, float] = {}
     for item in event.get("channel_ranking", []):
-        group = item.get("group") or root_cause_group_name(item.get("name", ""))
+        group = root_cause_group_name(item.get("group") or item.get("name", ""))
         score = float(item.get("group_score", item.get("score", 0.0)))
         scores[group] = max(scores.get(group, float("-inf")), score)
     return [name for name, _ in sorted(scores.items(), key=lambda value: value[1], reverse=True)]
@@ -159,7 +159,7 @@ def conditional_variable_ranking(event: dict, root_groups: set[str]) -> list[str
     items = []
     for item in event.get("channel_ranking", []):
         name = item.get("name", "")
-        group = item.get("group") or root_cause_group_name(name)
+        group = root_cause_group_name(item.get("group") or name)
         if group in root_groups:
             items.append(item)
     items = sorted(
@@ -172,12 +172,17 @@ def conditional_variable_ranking(event: dict, root_groups: set[str]) -> list[str
     return [item.get("name", "") for item in items]
 
 
-def strict_hierarchical_variable_ranking(event: dict) -> list[str]:
+def strict_hierarchical_variable_ranking(
+    event: dict,
+    aggregation: str = "exported",
+    topk: int = 3,
+) -> list[str]:
+    group_order = group_ranking(event, aggregation, topk)
+    group_rank = {name: rank for rank, name in enumerate(group_order, start=1)}
     items = sorted(
         event.get("channel_ranking", []),
         key=lambda item: (
-            int(item.get("group_rank", 10**9)),
-            int(item.get("within_group_rank", 10**9)),
+            group_rank.get(root_cause_group_name(item.get("group") or item.get("name", "")), 10**9),
             -float(item.get("score", 0.0)),
         ),
     )
@@ -268,7 +273,11 @@ def main() -> None:
         if event and root_variables:
             flat_rank = flat_variable_ranking(event)
             conditional_rank = conditional_variable_ranking(event, root_groups)
-            hierarchical_rank = strict_hierarchical_variable_ranking(event)
+            hierarchical_rank = strict_hierarchical_variable_ranking(
+                event,
+                args.group_aggregation,
+                args.group_topk,
+            )
             row.update(metric_row(flat_rank, root_variables, args.k, "flat_variable"))
             row.update(metric_row(conditional_rank, root_variables, args.k, "conditional_variable"))
             row.update(metric_row(hierarchical_rank, root_variables, args.k, "hierarchical_variable"))
