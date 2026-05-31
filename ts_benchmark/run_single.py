@@ -184,6 +184,7 @@ def main():
             "adaptive-source-sharp-rca",
             "hierarchical-source-rca",
             "soft-hierarchical-rca",
+            "source-preserving-rca",
             "synthetic-responsibility-rca",
             "counterfactual-source-rca",
             "onset-source-rca",
@@ -2251,6 +2252,28 @@ def main():
         rca_hierarchical_group_topk=0,
         rca_hierarchical_group_boost=0.2,
         rca_hierarchical_outside_penalty=0.0,
+    )
+    arch_profiles["source-preserving-rca"] = dict(
+        arch_profiles["soft-hierarchical-rca"],
+        use_source_gate=True,
+        source_gate_init=0.20,
+        lambda_source_gate_sparse=0.0005,
+        use_source_effect_synthetic=True,
+        lambda_source_effect=0.04,
+        source_effect_interval=16,
+        source_effect_min_len=8,
+        source_effect_max_len=30,
+        source_effect_min_roots=1,
+        source_effect_max_roots=2,
+        source_effect_neighbor_topk=3,
+        source_effect_strength=0.35,
+        source_effect_delay_max=6,
+        source_effect_bce_weight=1.0,
+        source_effect_rank_weight=1.0,
+        source_effect_effect_rank_weight=0.5,
+        source_effect_margin=0.15,
+        rca_source_gate_weight=0.25,
+        rca_synthetic_weight=0.0,
     )
 
     arch_switches = arch_profiles[args.arch_profile]
