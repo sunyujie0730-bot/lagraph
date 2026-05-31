@@ -576,6 +576,23 @@ def main():
         help="Point margin around true/predicted events used by --rca-event-local-export.",
     )
     parser.add_argument(
+        "--rca-split-predicted-events",
+        action="store_true",
+        help="Split long predicted anomaly segments into local RCA windows without changing detection labels.",
+    )
+    parser.add_argument(
+        "--rca-split-max-event-len",
+        type=int,
+        default=None,
+        help="Maximum length of a local predicted RCA window when splitting long predicted events.",
+    )
+    parser.add_argument(
+        "--rca-split-stride",
+        type=int,
+        default=None,
+        help="Stride for local predicted RCA windows when splitting long predicted events.",
+    )
+    parser.add_argument(
         "--use-latest-checkpoint",
         action="store_true",
         help="Use the latest trained checkpoint for evaluation instead of the best validation-loss checkpoint.",
@@ -1040,6 +1057,9 @@ def main():
             "rca_prediction_key": "15",
             "rca_event_local_export": True,
             "rca_event_local_margin": 100,
+            "rca_split_predicted_events": True,
+            "rca_split_max_event_len": 120,
+            "rca_split_stride": 60,
         },
         "normal-mechanism-source": {
             "use_channel_graph": True,
@@ -1074,6 +1094,9 @@ def main():
             "rca_prediction_key": "15",
             "rca_event_local_export": True,
             "rca_event_local_margin": 100,
+            "rca_split_predicted_events": True,
+            "rca_split_max_event_len": 120,
+            "rca_split_stride": 60,
         },
         "graph-coupled-source": {
             "use_channel_graph": True,
@@ -1366,6 +1389,9 @@ def main():
             "rca_prediction_key": "15",
             "rca_event_local_export": True,
             "rca_event_local_margin": 100,
+            "rca_split_predicted_events": True,
+            "rca_split_max_event_len": 120,
+            "rca_split_stride": 60,
         },
         "mechanism-root-rca": {
             "use_channel_graph": True,
@@ -1411,6 +1437,9 @@ def main():
             "rca_prediction_key": "15",
             "rca_event_local_export": True,
             "rca_event_local_margin": 100,
+            "rca_split_predicted_events": True,
+            "rca_split_max_event_len": 120,
+            "rca_split_stride": 60,
         },
         "mechanism-root-sharp-rca": {
             "use_channel_graph": True,
@@ -1457,6 +1486,9 @@ def main():
             "rca_prediction_key": "15",
             "rca_event_local_export": True,
             "rca_event_local_margin": 100,
+            "rca_split_predicted_events": True,
+            "rca_split_max_event_len": 120,
+            "rca_split_stride": 60,
         },
         "synthetic-responsibility-rca": {
             "use_channel_graph": True,
@@ -2239,6 +2271,12 @@ def main():
         score_hyper_params["rca_event_local_export"] = True
     if args.rca_event_local_margin is not None:
         score_hyper_params["rca_event_local_margin"] = max(0, int(args.rca_event_local_margin))
+    if args.rca_split_predicted_events:
+        score_hyper_params["rca_split_predicted_events"] = True
+    if args.rca_split_max_event_len is not None:
+        score_hyper_params["rca_split_max_event_len"] = max(1, int(args.rca_split_max_event_len))
+    if args.rca_split_stride is not None:
+        score_hyper_params["rca_split_stride"] = max(1, int(args.rca_split_stride))
     if args.use_latest_checkpoint:
         score_hyper_params["use_latest_checkpoint"] = True
     if args.enable_visualization_hooks:

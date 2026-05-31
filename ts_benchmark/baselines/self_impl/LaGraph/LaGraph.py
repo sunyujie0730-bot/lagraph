@@ -25,6 +25,7 @@ v10-v11.3 历史:
 import copy
 import json
 import os
+import re
 import socket
 import subprocess
 import time
@@ -232,6 +233,9 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_prediction_key": "pot",
     "rca_event_local_export": False,
     "rca_event_local_margin": 100,
+    "rca_split_predicted_events": False,
+    "rca_split_max_event_len": 120,
+    "rca_split_stride": 60,
     # --- v11.4 P0-2: POT 阈值参数 ---
     "pot_risk": 1e-4,            # POT EVT 风险水平
     "pot_num_quantiles": 1000,   # POT 分位数数量
@@ -3564,9 +3568,15 @@ class LaGraph:
 
     @staticmethod
     def _root_cause_group_name(feature_name):
-        if isinstance(feature_name, str) and len(feature_name) >= 2 and feature_name[0] == "P" and feature_name[1].isdigit():
-            return feature_name.split("_", 1)[0]
-        return feature_name
+        if not isinstance(feature_name, str):
+            return feature_name
+        name = feature_name.strip()
+        if len(name) >= 2 and name[0] == "P" and name[1].isdigit():
+            return name.split("_", 1)[0]
+        wadi_match = re.match(r"^([123])(?:[A-Z])?_", name)
+        if wadi_match:
+            return f"WADI_P{wadi_match.group(1)}"
+        return name
 
     @staticmethod
     def _rca_prediction_key_name(key):
@@ -3611,6 +3621,41 @@ class LaGraph:
         if len(pred) < length:
             pred = np.pad(pred, (0, length - len(pred)), mode="constant")
         return pred
+
+    def _rca_predicted_segments(self, pred_mask):
+        """Return local predicted RCA windows without changing detection labels."""
+        segments = self._label_segments(pred_mask)
+        if not bool(getattr(self.config, "rca_split_predicted_events", False)):
+            return segments
+
+        max_len = max(1, int(getattr(self.config, "rca_split_max_event_len", 120) or 120))
+        stride = max(1, int(getattr(self.config, "rca_split_stride", max_len) or max_len))
+        split_segments = []
+        for start, end in segments:
+            length = int(end) - int(start)
+            if length <= max_len:
+                split_segments.append((int(start), int(end)))
+                continue
+
+            cursor = int(start)
+            while cursor < int(end):
+                window_end = min(int(end), cursor + max_len)
+                if window_end > cursor:
+                    split_segments.append((cursor, window_end))
+                if window_end >= int(end):
+                    break
+                cursor += stride
+            if split_segments and split_segments[-1][1] < int(end):
+                split_segments.append((max(int(start), int(end) - max_len), int(end)))
+
+        # Remove exact duplicates that can occur when stride/window align at the tail.
+        deduped = []
+        seen = set()
+        for segment in split_segments:
+            if segment not in seen:
+                deduped.append(segment)
+                seen.add(segment)
+        return deduped
 
     @staticmethod
     def _event_onset_scores(score_matrix, start, end, baseline_window=200, onset_z=2.0):
@@ -4067,7 +4112,7 @@ class LaGraph:
         if export_lite:
             if pred_mask is not None:
                 predicted_events_by_key[pred_key] = self._build_rca_events(
-                    self._label_segments(pred_mask),
+                    self._rca_predicted_segments(pred_mask),
                     channel_scores,
                     base_channel_scores,
                     graph_channel_scores,
@@ -4112,7 +4157,7 @@ class LaGraph:
                     raw_mask = self._normalize_prediction_mask(prediction, len(test_data))
                     mask = raw_mask[rca_offset:rca_offset + len(labels)]
                 predicted_events_by_key[key_name] = self._build_rca_events(
-                    self._label_segments(mask),
+                    self._rca_predicted_segments(mask),
                     channel_scores,
                     base_channel_scores,
                     graph_channel_scores,
@@ -4155,7 +4200,7 @@ class LaGraph:
                 raw_mask = self._normalize_prediction_mask(predict_labels, len(test_data))
                 mask = raw_mask[rca_offset:rca_offset + len(labels)]
             predicted_events_by_key["single"] = self._build_rca_events(
-                self._label_segments(mask),
+                self._rca_predicted_segments(mask),
                 channel_scores,
                 base_channel_scores,
                 graph_channel_scores,
@@ -4195,7 +4240,7 @@ class LaGraph:
         predicted_events = predicted_events_by_key.get(pred_key, [])
         if not predicted_events and pred_mask is not None:
             predicted_events = self._build_rca_events(
-                self._label_segments(pred_mask),
+                self._rca_predicted_segments(pred_mask),
                 channel_scores,
                 base_channel_scores,
                 graph_channel_scores,
@@ -4285,6 +4330,9 @@ class LaGraph:
             "rca_onset_baseline_window": onset_baseline_window,
             "rca_onset_z": onset_z,
             "rca_prediction_key": pred_key,
+            "rca_split_predicted_events": bool(getattr(self.config, "rca_split_predicted_events", False)),
+            "rca_split_max_event_len": _cfg_int("rca_split_max_event_len", 120),
+            "rca_split_stride": _cfg_int("rca_split_stride", 60),
             "feature_names": feature_names,
             "events": events,
             "predicted_events": predicted_events,
