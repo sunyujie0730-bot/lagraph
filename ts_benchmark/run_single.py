@@ -579,6 +579,11 @@ def main():
         help="Use the latest trained checkpoint for evaluation instead of the best validation-loss checkpoint.",
     )
     parser.add_argument(
+        "--enable-visualization-hooks",
+        action="store_true",
+        help="Enable diagnostic visualization hooks and vis_data.json export. Disabled by default for fast experiments.",
+    )
+    parser.add_argument(
         "--rca-graph-weight",
         type=float,
         default=None,
@@ -2143,6 +2148,8 @@ def main():
         score_hyper_params["rca_event_local_margin"] = max(0, int(args.rca_event_local_margin))
     if args.use_latest_checkpoint:
         score_hyper_params["use_latest_checkpoint"] = True
+    if args.enable_visualization_hooks:
+        score_hyper_params["enable_visualization_hooks"] = True
     if args.robust_input_preprocess:
         score_hyper_params["use_robust_input_preprocess"] = True
     if args.input_clip_lower_quantile is not None:

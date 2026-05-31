@@ -54,6 +54,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "num_epochs": 100,
     "batch_size": 256,
     "eval_batch_size": 64,
+    "enable_visualization_hooks": False,
     "patience": 15,
     "use_latest_checkpoint": False,
     "topk": 5,
@@ -2067,7 +2068,7 @@ class LaGraph:
                       f"(target_ratio={target_ratio*100:.1f}%)")
 
         # ★ P0-5: 设置可视化 hook
-        if self.model is not None:
+        if self.model is not None and bool(getattr(self.config, "enable_visualization_hooks", False)):
             self._vis_hook = VisualizationHook(self.model)
             self._vis_hook.register_hooks()
             print(f"\n  [VIS] Visualization hooks registered")
