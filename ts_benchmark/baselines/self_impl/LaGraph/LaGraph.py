@@ -3745,6 +3745,7 @@ class LaGraph:
         hierarchical_group_topk=0,
         hierarchical_group_boost=0.0,
         hierarchical_outside_penalty=0.0,
+        hierarchical_group_aggregation="max",
     ):
         events = []
         for event_id, (start, end) in enumerate(segments, start=1):
@@ -3856,10 +3857,21 @@ class LaGraph:
                     + contrast_weight * contrast_norm
                     - graph_penalty_weight * graph_norm
                 )
-            group_scores = {}
+            group_values_by_name = {}
             for name, value in zip(feature_names, event_scores):
                 group = self._root_cause_group_name(name)
-                group_scores[group] = max(group_scores.get(group, float("-inf")), float(value))
+                group_values_by_name.setdefault(group, []).append(float(value))
+            aggregation = str(hierarchical_group_aggregation or "max").lower()
+            group_scores = {}
+            for group, values in group_values_by_name.items():
+                values = sorted(values, reverse=True)
+                if aggregation == "mean":
+                    group_scores[group] = float(np.mean(values))
+                elif aggregation == "topk_mean":
+                    k = max(1, int(hierarchical_group_topk or 3))
+                    group_scores[group] = float(np.mean(values[: min(k, len(values))]))
+                else:
+                    group_scores[group] = float(values[0])
             sorted_groups = sorted(group_scores.items(), key=lambda item: item[1], reverse=True)
             group_rank = {name: int(rank + 1) for rank, (name, _) in enumerate(sorted_groups)}
             group_values = np.asarray([value for _, value in sorted_groups], dtype=np.float64)
@@ -4082,6 +4094,9 @@ class LaGraph:
         hierarchical_group_topk = _cfg_int("rca_hierarchical_group_topk", 0)
         hierarchical_group_boost = _cfg_float("rca_hierarchical_group_boost", 0.0)
         hierarchical_outside_penalty = _cfg_float("rca_hierarchical_outside_penalty", 0.0)
+        hierarchical_group_aggregation = str(
+            getattr(self.config, "rca_hierarchical_group_aggregation", "max") or "max"
+        )
         export_lite = bool(getattr(self.config, "rca_export_lite", False))
         export_top_k = int(getattr(self.config, "rca_export_top_k", 20) or 20)
         max_channel_ranking = export_top_k if export_lite else None
@@ -4170,6 +4185,7 @@ class LaGraph:
             hierarchical_group_topk=hierarchical_group_topk,
             hierarchical_group_boost=hierarchical_group_boost,
             hierarchical_outside_penalty=hierarchical_outside_penalty,
+            hierarchical_group_aggregation=hierarchical_group_aggregation,
         )
         predicted_events_by_key = {}
         if export_lite:
@@ -4215,6 +4231,7 @@ class LaGraph:
                     hierarchical_group_topk=hierarchical_group_topk,
                     hierarchical_group_boost=hierarchical_group_boost,
                     hierarchical_outside_penalty=hierarchical_outside_penalty,
+                    hierarchical_group_aggregation=hierarchical_group_aggregation,
                 )
         elif isinstance(predict_labels, dict):
             for key, prediction in predict_labels.items():
@@ -4264,6 +4281,7 @@ class LaGraph:
                     hierarchical_group_topk=hierarchical_group_topk,
                     hierarchical_group_boost=hierarchical_group_boost,
                     hierarchical_outside_penalty=hierarchical_outside_penalty,
+                    hierarchical_group_aggregation=hierarchical_group_aggregation,
                 )
         elif predict_labels is not None:
             mask = self._normalize_prediction_mask(predict_labels, len(labels))
@@ -4311,6 +4329,7 @@ class LaGraph:
                 hierarchical_group_topk=hierarchical_group_topk,
                 hierarchical_group_boost=hierarchical_group_boost,
                 hierarchical_outside_penalty=hierarchical_outside_penalty,
+                hierarchical_group_aggregation=hierarchical_group_aggregation,
             )
         predicted_events = predicted_events_by_key.get(pred_key, [])
         if not predicted_events and pred_mask is not None:
@@ -4355,6 +4374,7 @@ class LaGraph:
                 hierarchical_group_topk=hierarchical_group_topk,
                 hierarchical_group_boost=hierarchical_group_boost,
                 hierarchical_outside_penalty=hierarchical_outside_penalty,
+                hierarchical_group_aggregation=hierarchical_group_aggregation,
             )
 
         from datetime import datetime
@@ -4407,6 +4427,7 @@ class LaGraph:
             "rca_hierarchical_group_topk": hierarchical_group_topk,
             "rca_hierarchical_group_boost": hierarchical_group_boost,
             "rca_hierarchical_outside_penalty": hierarchical_outside_penalty,
+            "rca_hierarchical_group_aggregation": hierarchical_group_aggregation,
             "rca_event_head_ratio": event_head_ratio,
             "rca_event_head_points": event_head_points,
             "rca_onset_weight": onset_weight,

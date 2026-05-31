@@ -1632,6 +1632,7 @@ def main():
             "rca_mechanism_residual_window": 300,
             "rca_mechanism_residual_weight": 0.0,
             "rca_hierarchical_mode": "annotate",
+            "rca_hierarchical_group_aggregation": "max",
             "rca_hierarchical_group_topk": 0,
             "rca_hierarchical_group_boost": 0.0,
             "rca_hierarchical_outside_penalty": 0.0,
