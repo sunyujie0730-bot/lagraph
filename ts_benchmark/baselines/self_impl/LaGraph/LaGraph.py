@@ -211,6 +211,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_causal_weight": 0.0,
     "rca_synthetic_weight": 0.0,
     "rca_source_gate_weight": 0.0,
+    "rca_source_interaction_weight": 0.0,
     "rca_counterfactual_weight": 0.0,
     "rca_counterfactual_candidates": 12,
     "rca_counterfactual_max_windows": 32,
@@ -3688,6 +3689,7 @@ class LaGraph:
         causal_weight=0.0,
         synthetic_weight=0.0,
         source_gate_weight=0.0,
+        source_interaction_weight=0.0,
         counterfactual_weight=0.0,
         onset_weight=0.0,
         onset_baseline_window=200,
@@ -3784,6 +3786,9 @@ class LaGraph:
                     + synthetic_weight * synthetic_norm
                     + counterfactual_weight * counterfactual_norm
                 )
+                if source_interaction_weight > 0.0:
+                    source_evidence_norm = np.maximum(onset_norm, mechanism_residual_norm)
+                    source_norm = source_norm + source_interaction_weight * base_norm * source_evidence_norm
                 if use_source_propagation:
                     event_scores = source_weight * source_norm + propagation_weight * graph_norm
                 else:
@@ -3960,6 +3965,7 @@ class LaGraph:
         causal_weight = _cfg_float("rca_causal_weight", 0.0)
         synthetic_weight = _cfg_float("rca_synthetic_weight", 0.0)
         source_gate_weight = _cfg_float("rca_source_gate_weight", 0.0)
+        source_interaction_weight = _cfg_float("rca_source_interaction_weight", 0.0)
         counterfactual_weight = _cfg_float("rca_counterfactual_weight", 0.0)
         contrast_window = _cfg_int("rca_contrast_window", 0)
         contrast_weight = _cfg_float("rca_contrast_weight", 0.0)
@@ -4049,6 +4055,7 @@ class LaGraph:
             causal_weight=causal_weight,
             synthetic_weight=synthetic_weight,
             source_gate_weight=source_gate_weight,
+            source_interaction_weight=source_interaction_weight,
             counterfactual_weight=counterfactual_weight,
             onset_weight=onset_weight,
             onset_baseline_window=onset_baseline_window,
@@ -4089,6 +4096,7 @@ class LaGraph:
                     causal_weight=causal_weight,
                     synthetic_weight=synthetic_weight,
                     source_gate_weight=source_gate_weight,
+                    source_interaction_weight=source_interaction_weight,
                     counterfactual_weight=counterfactual_weight,
                     onset_weight=onset_weight,
                     onset_baseline_window=onset_baseline_window,
@@ -4133,6 +4141,7 @@ class LaGraph:
                     causal_weight=causal_weight,
                     synthetic_weight=synthetic_weight,
                     source_gate_weight=source_gate_weight,
+                    source_interaction_weight=source_interaction_weight,
                     counterfactual_weight=counterfactual_weight,
                     onset_weight=onset_weight,
                     onset_baseline_window=onset_baseline_window,
@@ -4175,6 +4184,7 @@ class LaGraph:
                 causal_weight=causal_weight,
                 synthetic_weight=synthetic_weight,
                 source_gate_weight=source_gate_weight,
+                source_interaction_weight=source_interaction_weight,
                 counterfactual_weight=counterfactual_weight,
                 onset_weight=onset_weight,
                 onset_baseline_window=onset_baseline_window,
@@ -4214,6 +4224,7 @@ class LaGraph:
                 causal_weight=causal_weight,
                 synthetic_weight=synthetic_weight,
                 source_gate_weight=source_gate_weight,
+                source_interaction_weight=source_interaction_weight,
                 counterfactual_weight=counterfactual_weight,
                 onset_weight=onset_weight,
                 onset_baseline_window=onset_baseline_window,
@@ -4254,6 +4265,7 @@ class LaGraph:
             "rca_causal_weight": causal_weight,
             "rca_synthetic_weight": synthetic_weight,
             "rca_source_gate_weight": source_gate_weight,
+            "rca_source_interaction_weight": source_interaction_weight,
             "rca_counterfactual_weight": counterfactual_weight,
             "rca_counterfactual_candidates": _cfg_int("rca_counterfactual_candidates", 12),
             "rca_counterfactual_max_windows": _cfg_int("rca_counterfactual_max_windows", 32),
