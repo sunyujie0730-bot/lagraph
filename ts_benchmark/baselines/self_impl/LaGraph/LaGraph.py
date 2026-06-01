@@ -122,6 +122,11 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "channel_mask_ratio": 0.15,
     "channel_mask_min_channels": 1,
     "channel_mask_value": "zero",
+    "use_interventional_channel_masking": False,
+    "lambda_interventional_source_bce": 0.0,
+    "lambda_interventional_source_rank": 0.0,
+    "lambda_interventional_graph_support": 0.0,
+    "interventional_graph_support_eps": 1e-6,
     "use_parallel_graph_fusion": False,
     "graph_fusion_gate_mode": "sample",
     "graph_fusion_strategy": "parallel",
@@ -1117,6 +1122,18 @@ class LaGraph:
                 "lambda_channel_masked": getattr(self.config, "lambda_channel_masked", None),
                 "channel_mask_interval": getattr(self.config, "channel_mask_interval", None),
                 "channel_mask_ratio": getattr(self.config, "channel_mask_ratio", None),
+                "use_interventional_channel_masking": getattr(
+                    self.config, "use_interventional_channel_masking", None
+                ),
+                "lambda_interventional_source_bce": getattr(
+                    self.config, "lambda_interventional_source_bce", None
+                ),
+                "lambda_interventional_source_rank": getattr(
+                    self.config, "lambda_interventional_source_rank", None
+                ),
+                "lambda_interventional_graph_support": getattr(
+                    self.config, "lambda_interventional_graph_support", None
+                ),
                 "use_synthetic_score": getattr(self.config, "use_synthetic_score", None),
                 "synthetic_score_weight": getattr(self.config, "synthetic_score_weight", None),
                 "use_parallel_graph_fusion": getattr(self.config, "use_parallel_graph_fusion", None),
@@ -1642,7 +1659,7 @@ class LaGraph:
             else:
                 masked[b, :, channels] = 0.0
 
-        rec, _, _, _, _, _, _ = self.model(masked)
+        rec, A_adaptive, _, _, _, aux_losses, _ = self.model(masked)
         mask = channel_mask[:, None, :]
         denom = mask.sum().clamp_min(1.0) * max(1, L)
         masked_loss = F.smooth_l1_loss(
@@ -1650,7 +1667,51 @@ class LaGraph:
             input_data * mask,
             reduction="sum",
         ) / denom
-        return lambda_channel_masked * masked_loss
+        total_loss = lambda_channel_masked * masked_loss
+
+        if not bool(getattr(self.config, "use_interventional_channel_masking", False)):
+            return total_loss
+
+        lambda_source_bce = float(getattr(self.config, "lambda_interventional_source_bce", 0.0) or 0.0)
+        lambda_source_rank = float(getattr(self.config, "lambda_interventional_source_rank", 0.0) or 0.0)
+        lambda_graph_support = float(getattr(self.config, "lambda_interventional_graph_support", 0.0) or 0.0)
+
+        if aux_losses and lambda_source_bce > 0:
+            gate_prob = aux_losses.get("source_gate_prob")
+            if gate_prob is not None:
+                gate_prob = gate_prob.mean(dim=1).clamp(1e-5, 1.0 - 1e-5)
+                total_loss = total_loss + lambda_source_bce * self._weighted_channel_bce(
+                    gate_prob,
+                    channel_mask,
+                )
+
+        if aux_losses and lambda_source_rank > 0:
+            source_score = aux_losses.get("source_gate_score")
+            if source_score is None:
+                source_score = aux_losses.get("channel_mechanism_error")
+            if source_score is not None:
+                if source_score.dim() == 3:
+                    source_score = source_score.mean(dim=1)
+                total_loss = total_loss + lambda_source_rank * self._synthetic_rca_ranking_loss(
+                    source_score,
+                    channel_mask,
+                )
+
+        if lambda_graph_support > 0 and A_adaptive is not None:
+            A = A_adaptive.clamp_min(0.0)
+            if A.dim() == 3 and A.shape[-1] == C and A.shape[-2] == C:
+                eye = torch.eye(C, device=A.device, dtype=A.dtype).unsqueeze(0)
+                A = A * (1.0 - eye)
+                unmasked_sources = (1.0 - channel_mask).to(dtype=A.dtype).unsqueeze(-1)
+                incoming_support = (A * unmasked_sources).sum(dim=1).clamp_min(
+                    float(getattr(self.config, "interventional_graph_support_eps", 1e-6) or 1e-6)
+                )
+                graph_support_loss = -(
+                    channel_mask.to(dtype=A.dtype) * torch.log(incoming_support)
+                ).sum() / channel_mask.sum().clamp_min(1.0)
+                total_loss = total_loss + lambda_graph_support * graph_support_loss
+
+        return total_loss
 
     def _source_effect_synthetic_loss(self, input_data, batch_idx=None):
         if not bool(getattr(self.config, "use_source_effect_synthetic", False)):
