@@ -113,6 +113,65 @@ CORE_EXPERIMENTS = [
 ]
 
 
+FOLLOWUP_EXPERIMENTS = [
+    Experiment(
+        "F01_wadi_channel_only_rca_e8",
+        "Compatibility check: WADI channel-only detection configuration with RCA export.",
+        "WADI_A1_2017_ds10.csv",
+        "channel-only",
+        8,
+        export_rca=True,
+    ),
+    Experiment(
+        "F02_wadi_temporal_only_rca_e8",
+        "Compatibility check: WADI temporal-only detection configuration with RCA export.",
+        "WADI_A1_2017_ds10.csv",
+        "temporal-only",
+        8,
+        export_rca=True,
+    ),
+    Experiment(
+        "F03_wadi_full_rca_e8",
+        "Compatibility check: WADI full dual-graph detection configuration with RCA export.",
+        "WADI_A1_2017_ds10.csv",
+        "full",
+        8,
+        export_rca=True,
+    ),
+    Experiment(
+        "F04_swat_channel_only_rca_e8",
+        "Compatibility check: SWaT channel-only detection configuration with RCA export.",
+        "SWAT_A1A2_Physical_v1.csv",
+        "channel-only",
+        8,
+        export_rca=True,
+    ),
+    Experiment(
+        "F05_swat_temporal_only_rca_e8",
+        "Compatibility check: SWaT temporal-only detection configuration with RCA export.",
+        "SWAT_A1A2_Physical_v1.csv",
+        "temporal-only",
+        8,
+        export_rca=True,
+    ),
+    Experiment(
+        "F06_swat_full_rca_e8",
+        "Compatibility check: SWaT full dual-graph detection configuration with RCA export.",
+        "SWAT_A1A2_Physical_v1.csv",
+        "full",
+        8,
+        export_rca=True,
+    ),
+]
+
+
+EXPERIMENT_SUITES = {
+    "core": CORE_EXPERIMENTS,
+    "followup": FOLLOWUP_EXPERIMENTS,
+    "all": CORE_EXPERIMENTS + FOLLOWUP_EXPERIMENTS,
+}
+
+
 def list_files(root: Path, pattern: str) -> set[Path]:
     if not root.exists():
         return set()
@@ -353,6 +412,12 @@ def write_summary(markdown_path: Path, records: list[dict]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--suite",
+        choices=sorted(EXPERIMENT_SUITES),
+        default="core",
+        help="Experiment suite to run.",
+    )
     parser.add_argument("--only", nargs="*", default=None, help="Run only selected experiment IDs.")
     args = parser.parse_args()
 
@@ -363,10 +428,10 @@ def main() -> int:
     jsonl_file = ANALYSIS_DIR / f"paper_experiment_queue_{run_id}.jsonl"
     markdown_file = ANALYSIS_DIR / f"paper_experiment_summary_{run_id}.md"
 
-    selected = CORE_EXPERIMENTS
+    selected = EXPERIMENT_SUITES[args.suite]
     if args.only:
         wanted = set(args.only)
-        selected = [exp for exp in CORE_EXPERIMENTS if exp.exp_id in wanted]
+        selected = [exp for exp in selected if exp.exp_id in wanted]
         missing = wanted - {exp.exp_id for exp in selected}
         if missing:
             raise SystemExit(f"Unknown experiment IDs: {sorted(missing)}")
