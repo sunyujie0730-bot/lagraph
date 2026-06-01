@@ -457,6 +457,10 @@ class SparseGCN(nn.Module):
                  channel_mechanism_score_eps=1e-6,
                  use_mechanism_coupled_decoder=False,
                  mechanism_coupling_init=0.15,
+                 use_mechanism_residual_feedback=False,
+                 mechanism_feedback_init=0.10,
+                 mechanism_feedback_detach=True,
+                 mechanism_feedback_norm="sample_l1",
                  use_mechanism_predictive_head=False,
                  mechanism_predictive_blend_init=0.30,
                  use_source_gate=False,
@@ -518,6 +522,10 @@ class SparseGCN(nn.Module):
         self.channel_mechanism_score_eps = float(channel_mechanism_score_eps)
         self.use_mechanism_coupled_decoder = bool(use_mechanism_coupled_decoder)
         self.mechanism_coupling_init = float(mechanism_coupling_init)
+        self.use_mechanism_residual_feedback = bool(use_mechanism_residual_feedback)
+        self.mechanism_feedback_init = float(mechanism_feedback_init)
+        self.mechanism_feedback_detach = bool(mechanism_feedback_detach)
+        self.mechanism_feedback_norm = str(mechanism_feedback_norm or "sample_l1").lower()
         self.use_mechanism_predictive_head = bool(use_mechanism_predictive_head)
         self.mechanism_predictive_blend_init = float(mechanism_predictive_blend_init)
         self.use_source_gate = bool(use_source_gate)
@@ -670,6 +678,10 @@ class SparseGCN(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(c_out, c_out),
         )
+        feedback_init = min(max(float(mechanism_feedback_init), 1e-3), 1.0 - 1e-3)
+        self.mechanism_feedback_logit = nn.Parameter(
+            torch.tensor(float(np.log(feedback_init / (1.0 - feedback_init))))
+        )
 
         predictive_blend_init = min(max(float(mechanism_predictive_blend_init), 1e-3), 1.0 - 1e-3)
         self.mechanism_predictive_blend_logit = nn.Parameter(
@@ -803,6 +815,7 @@ class SparseGCN(nn.Module):
         self._set_trainable(self.multi_scale_scorer, self.use_multi_scale_scorer)
         self._set_trainable(self.mechanism_context_fusion, self.use_mechanism_coupled_decoder)
         self.mechanism_coupling_logit.requires_grad = self.use_mechanism_coupled_decoder
+        self.mechanism_feedback_logit.requires_grad = self.use_mechanism_residual_feedback
         self._set_trainable(self.mechanism_predictor, self.use_mechanism_predictive_head)
         self._set_trainable(self.mechanism_predictive_fusion, self.use_mechanism_predictive_head)
         self.mechanism_predictive_blend_logit.requires_grad = self.use_mechanism_predictive_head
@@ -1132,6 +1145,27 @@ class SparseGCN(nn.Module):
             mechanism_coupling_weight = torch.sigmoid(self.mechanism_coupling_logit)
             stage1_feat = stage1_feat + mechanism_coupling_weight * mechanism_delta
 
+        mechanism_feedback_weight = None
+        if (
+            self.use_mechanism_residual_feedback
+            and self.use_channel_graph
+            and channel_mechanism_pred is not None
+        ):
+            mechanism_residual = resid - channel_mechanism_pred.to(dtype=resid.dtype)
+            feedback = mechanism_residual.detach() if self.mechanism_feedback_detach else mechanism_residual
+            if self.mechanism_feedback_norm == "sample_z":
+                center = feedback.mean(dim=(1, 2), keepdim=True)
+                scale = feedback.std(dim=(1, 2), keepdim=True, unbiased=False).clamp_min(1e-6)
+                feedback = (feedback - center) / scale
+            elif self.mechanism_feedback_norm == "none":
+                pass
+            else:
+                scale = feedback.abs().mean(dim=(1, 2), keepdim=True).clamp_min(1e-6)
+                feedback = feedback / scale
+            feedback = torch.tanh(feedback)
+            mechanism_feedback_weight = torch.sigmoid(self.mechanism_feedback_logit)
+            stage1_feat = stage1_feat + mechanism_feedback_weight * feedback
+
         if self.use_mechanism_predictive_head and channel_mechanism_pred is not None:
             mechanism_delta = self.mechanism_predictive_fusion(
                 torch.cat(
@@ -1211,6 +1245,8 @@ class SparseGCN(nn.Module):
             aux_losses['channel_mechanism_loss'] = channel_mechanism_loss
         if mechanism_coupling_weight is not None:
             aux_losses['mechanism_coupling_weight'] = mechanism_coupling_weight.detach()
+        if mechanism_feedback_weight is not None:
+            aux_losses['mechanism_feedback_weight'] = mechanism_feedback_weight.detach()
         if mechanism_predictive_blend_weight is not None:
             aux_losses['mechanism_predictive_blend_weight'] = mechanism_predictive_blend_weight.detach()
         if source_gate is not None:

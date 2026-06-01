@@ -173,6 +173,10 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "channel_mechanism_score_eps": 1e-6,
     "use_mechanism_coupled_decoder": False,
     "mechanism_coupling_init": 0.15,
+    "use_mechanism_residual_feedback": False,
+    "mechanism_feedback_init": 0.10,
+    "mechanism_feedback_detach": True,
+    "mechanism_feedback_norm": "sample_l1",
     "use_mechanism_predictive_head": False,
     "mechanism_predictive_blend_init": 0.30,
     "use_source_gate": False,
@@ -1127,6 +1131,14 @@ class LaGraph:
                 "lambda_channel_masked": getattr(self.config, "lambda_channel_masked", None),
                 "channel_mask_interval": getattr(self.config, "channel_mask_interval", None),
                 "channel_mask_ratio": getattr(self.config, "channel_mask_ratio", None),
+                "use_mechanism_residual_feedback": getattr(
+                    self.config, "use_mechanism_residual_feedback", None
+                ),
+                "mechanism_feedback_init": getattr(self.config, "mechanism_feedback_init", None),
+                "mechanism_feedback_detach": getattr(
+                    self.config, "mechanism_feedback_detach", None
+                ),
+                "mechanism_feedback_norm": getattr(self.config, "mechanism_feedback_norm", None),
                 "use_interventional_channel_masking": getattr(
                     self.config, "use_interventional_channel_masking", None
                 ),
@@ -2232,6 +2244,12 @@ class LaGraph:
             channel_mechanism_score_eps=getattr(self.config, "channel_mechanism_score_eps", 1e-6),
             use_mechanism_coupled_decoder=getattr(self.config, "use_mechanism_coupled_decoder", False),
             mechanism_coupling_init=getattr(self.config, "mechanism_coupling_init", 0.15),
+            use_mechanism_residual_feedback=getattr(
+                self.config, "use_mechanism_residual_feedback", False
+            ),
+            mechanism_feedback_init=getattr(self.config, "mechanism_feedback_init", 0.10),
+            mechanism_feedback_detach=getattr(self.config, "mechanism_feedback_detach", True),
+            mechanism_feedback_norm=getattr(self.config, "mechanism_feedback_norm", "sample_l1"),
             use_mechanism_predictive_head=getattr(self.config, "use_mechanism_predictive_head", False),
             mechanism_predictive_blend_init=getattr(self.config, "mechanism_predictive_blend_init", 0.30),
             use_source_gate=getattr(self.config, "use_source_gate", False),
@@ -2497,6 +2515,12 @@ class LaGraph:
             channel_mechanism_score_eps=getattr(self.config, "channel_mechanism_score_eps", 1e-6),
             use_mechanism_coupled_decoder=getattr(self.config, "use_mechanism_coupled_decoder", False),
             mechanism_coupling_init=getattr(self.config, "mechanism_coupling_init", 0.15),
+            use_mechanism_residual_feedback=getattr(
+                self.config, "use_mechanism_residual_feedback", False
+            ),
+            mechanism_feedback_init=getattr(self.config, "mechanism_feedback_init", 0.10),
+            mechanism_feedback_detach=getattr(self.config, "mechanism_feedback_detach", True),
+            mechanism_feedback_norm=getattr(self.config, "mechanism_feedback_norm", "sample_l1"),
             use_mechanism_predictive_head=getattr(self.config, "use_mechanism_predictive_head", False),
             mechanism_predictive_blend_init=getattr(self.config, "mechanism_predictive_blend_init", 0.30),
             use_source_gate=getattr(self.config, "use_source_gate", False),
