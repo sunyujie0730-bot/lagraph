@@ -187,6 +187,7 @@ def main():
             "soft-hierarchical-no-normal-prior",
             "interventional-graph-source-rca",
             "interventional-fused-source-rca",
+            "interventional-consensus-source-rca",
             "mechanism-calibrated-rca",
             "source-preserving-rca",
             "synthetic-responsibility-rca",
@@ -640,6 +641,24 @@ def main():
         type=float,
         default=None,
         help="Weight for the fused source score inside normalized source/propagation RCA.",
+    )
+    parser.add_argument(
+        "--rca-source-consensus-weight",
+        type=float,
+        default=None,
+        help="Weight for source evidence gated by base/graph consensus in RCA rankings.",
+    )
+    parser.add_argument(
+        "--rca-onset-consensus-weight",
+        type=float,
+        default=None,
+        help="Weight for onset evidence gated by base/graph consensus in RCA rankings.",
+    )
+    parser.add_argument(
+        "--rca-source-consensus-mode",
+        choices=["base", "graph", "max_bg", "min_bg", "sqrt_bg", "gate", "none"],
+        default=None,
+        help="Consensus gate used by source/onset RCA evidence.",
     )
     parser.add_argument(
         "--rca-propagation-weight",
@@ -2314,6 +2333,13 @@ def main():
         rca_source_interaction_weight=0.0,
         channel_mechanism_score_weight=0.20,
     )
+    arch_profiles["interventional-consensus-source-rca"] = dict(
+        arch_profiles["interventional-graph-source-rca"],
+        rca_source_score_weight=0.0,
+        rca_source_consensus_weight=0.50,
+        rca_onset_consensus_weight=0.10,
+        rca_source_consensus_mode="sqrt_bg",
+    )
     arch_profiles["mechanism-calibrated-rca"] = dict(
         arch_profiles["soft-hierarchical-rca"],
         rca_source_base_weight=0.25,
@@ -2487,6 +2513,16 @@ def main():
         score_hyper_params["rca_source_base_weight"] = max(0.0, float(args.rca_source_base_weight))
     if args.rca_source_score_weight is not None:
         score_hyper_params["rca_source_score_weight"] = max(0.0, float(args.rca_source_score_weight))
+    if args.rca_source_consensus_weight is not None:
+        score_hyper_params["rca_source_consensus_weight"] = max(
+            0.0, float(args.rca_source_consensus_weight)
+        )
+    if args.rca_onset_consensus_weight is not None:
+        score_hyper_params["rca_onset_consensus_weight"] = max(
+            0.0, float(args.rca_onset_consensus_weight)
+        )
+    if args.rca_source_consensus_mode is not None:
+        score_hyper_params["rca_source_consensus_mode"] = args.rca_source_consensus_mode
     if args.rca_propagation_weight is not None:
         score_hyper_params["rca_propagation_weight"] = max(0.0, float(args.rca_propagation_weight))
     if args.rca_source_mechanism_weight is not None:

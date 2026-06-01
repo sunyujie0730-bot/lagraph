@@ -215,6 +215,9 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_propagation_weight": 0.25,
     "rca_source_mechanism_weight": 0.0,
     "rca_source_score_weight": 0.0,
+    "rca_source_consensus_weight": 0.0,
+    "rca_onset_consensus_weight": 0.0,
+    "rca_source_consensus_mode": "sqrt_bg",
     "rca_causal_weight": 0.0,
     "rca_synthetic_weight": 0.0,
     "rca_source_gate_weight": 0.0,
@@ -1182,6 +1185,9 @@ class LaGraph:
                 "rca_source_weight": getattr(self.config, "rca_source_weight", None),
                 "rca_source_base_weight": getattr(self.config, "rca_source_base_weight", None),
                 "rca_source_score_weight": getattr(self.config, "rca_source_score_weight", None),
+                "rca_source_consensus_weight": getattr(self.config, "rca_source_consensus_weight", None),
+                "rca_onset_consensus_weight": getattr(self.config, "rca_onset_consensus_weight", None),
+                "rca_source_consensus_mode": getattr(self.config, "rca_source_consensus_mode", None),
                 "rca_propagation_weight": getattr(self.config, "rca_propagation_weight", None),
                 "rca_source_mechanism_weight": getattr(self.config, "rca_source_mechanism_weight", None),
                 "rca_causal_weight": getattr(self.config, "rca_causal_weight", None),
@@ -3798,6 +3804,9 @@ class LaGraph:
         propagation_weight=0.25,
         source_mechanism_weight=0.0,
         source_score_weight=0.0,
+        source_consensus_weight=0.0,
+        onset_consensus_weight=0.0,
+        source_consensus_mode="sqrt_bg",
         causal_weight=0.0,
         synthetic_weight=0.0,
         source_gate_weight=0.0,
@@ -3926,6 +3935,27 @@ class LaGraph:
                     + contrast_weight * contrast_norm
                     - graph_penalty_weight * graph_norm
                 )
+                if source_consensus_weight > 0.0 or onset_consensus_weight > 0.0:
+                    mode = str(source_consensus_mode or "sqrt_bg").lower()
+                    if mode == "base":
+                        consensus_norm = base_norm
+                    elif mode == "graph":
+                        consensus_norm = graph_norm
+                    elif mode == "max_bg":
+                        consensus_norm = np.maximum(base_norm, graph_norm)
+                    elif mode == "min_bg":
+                        consensus_norm = np.minimum(base_norm, graph_norm)
+                    elif mode == "gate":
+                        consensus_norm = source_gate_norm
+                    elif mode == "none":
+                        consensus_norm = np.ones_like(base_norm)
+                    else:
+                        consensus_norm = np.sqrt(np.maximum(base_norm * graph_norm, 0.0))
+                    event_scores = (
+                        event_scores
+                        + source_consensus_weight * source_score_norm * consensus_norm
+                        + onset_consensus_weight * onset_norm * consensus_norm
+                    )
             group_values_by_name = {}
             for name, value in zip(feature_names, event_scores):
                 group = self._root_cause_group_name(name)
@@ -4144,6 +4174,9 @@ class LaGraph:
         propagation_weight = _cfg_float("rca_propagation_weight", 0.25)
         source_mechanism_weight = _cfg_float("rca_source_mechanism_weight", 0.0)
         source_score_weight = _cfg_float("rca_source_score_weight", 0.0)
+        source_consensus_weight = _cfg_float("rca_source_consensus_weight", 0.0)
+        onset_consensus_weight = _cfg_float("rca_onset_consensus_weight", 0.0)
+        source_consensus_mode = str(getattr(self.config, "rca_source_consensus_mode", "sqrt_bg") or "sqrt_bg")
         causal_weight = _cfg_float("rca_causal_weight", 0.0)
         synthetic_weight = _cfg_float("rca_synthetic_weight", 0.0)
         source_gate_weight = _cfg_float("rca_source_gate_weight", 0.0)
@@ -4250,6 +4283,9 @@ class LaGraph:
             propagation_weight=propagation_weight,
             source_mechanism_weight=source_mechanism_weight,
             source_score_weight=source_score_weight,
+            source_consensus_weight=source_consensus_weight,
+            onset_consensus_weight=onset_consensus_weight,
+            source_consensus_mode=source_consensus_mode,
             causal_weight=causal_weight,
             synthetic_weight=synthetic_weight,
             source_gate_weight=source_gate_weight,
@@ -4308,6 +4344,9 @@ class LaGraph:
                     propagation_weight=propagation_weight,
                     source_mechanism_weight=source_mechanism_weight,
                     source_score_weight=source_score_weight,
+                    source_consensus_weight=source_consensus_weight,
+                    onset_consensus_weight=onset_consensus_weight,
+                    source_consensus_mode=source_consensus_mode,
                     causal_weight=causal_weight,
                     synthetic_weight=synthetic_weight,
                     source_gate_weight=source_gate_weight,
@@ -4359,6 +4398,9 @@ class LaGraph:
                     propagation_weight=propagation_weight,
                     source_mechanism_weight=source_mechanism_weight,
                     source_score_weight=source_score_weight,
+                    source_consensus_weight=source_consensus_weight,
+                    onset_consensus_weight=onset_consensus_weight,
+                    source_consensus_mode=source_consensus_mode,
                     causal_weight=causal_weight,
                     synthetic_weight=synthetic_weight,
                     source_gate_weight=source_gate_weight,
@@ -4408,6 +4450,9 @@ class LaGraph:
                 propagation_weight=propagation_weight,
                 source_mechanism_weight=source_mechanism_weight,
                 source_score_weight=source_score_weight,
+                source_consensus_weight=source_consensus_weight,
+                onset_consensus_weight=onset_consensus_weight,
+                source_consensus_mode=source_consensus_mode,
                 causal_weight=causal_weight,
                 synthetic_weight=synthetic_weight,
                 source_gate_weight=source_gate_weight,
@@ -4454,6 +4499,9 @@ class LaGraph:
                 propagation_weight=propagation_weight,
                 source_mechanism_weight=source_mechanism_weight,
                 source_score_weight=source_score_weight,
+                source_consensus_weight=source_consensus_weight,
+                onset_consensus_weight=onset_consensus_weight,
+                source_consensus_mode=source_consensus_mode,
                 causal_weight=causal_weight,
                 synthetic_weight=synthetic_weight,
                 source_gate_weight=source_gate_weight,
@@ -4481,7 +4529,7 @@ class LaGraph:
         output_path = os.path.join(output_dir, f"{timestamp}_rca.json")
         score_method = (
             "event-level source/propagation RCA: "
-            "source=(weighted base residual + fused source score + mechanism prior deviation + lagged causal deviation + model source-gate score + synthetic responsibility + event-local counterfactual responsibility), "
+            "source=(weighted base residual + fused source score + consensus-gated source evidence + mechanism prior deviation + lagged causal deviation + model source-gate score + synthetic responsibility + event-local counterfactual responsibility), "
             "propagation=graph-propagated residual, "
             "onset=early local-baseline crossing"
             if use_source_propagation
@@ -4501,6 +4549,9 @@ class LaGraph:
             "rca_propagation_weight": propagation_weight,
             "rca_source_mechanism_weight": source_mechanism_weight,
             "rca_source_score_weight": source_score_weight,
+            "rca_source_consensus_weight": source_consensus_weight,
+            "rca_onset_consensus_weight": onset_consensus_weight,
+            "rca_source_consensus_mode": source_consensus_mode,
             "rca_causal_weight": causal_weight,
             "rca_synthetic_weight": synthetic_weight,
             "rca_source_gate_weight": source_gate_weight,
