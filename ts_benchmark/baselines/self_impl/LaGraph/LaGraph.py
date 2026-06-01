@@ -4192,9 +4192,20 @@ class LaGraph:
         )
         predicted_events_by_key = {}
         if export_lite:
-            if pred_mask is not None:
-                predicted_events_by_key[pred_key] = self._build_rca_events(
-                    self._rca_predicted_segments(pred_mask),
+            lite_predictions = {}
+            if isinstance(predict_labels, dict):
+                for key, prediction in predict_labels.items():
+                    key_name = self._rca_prediction_key_name(key)
+                    mask = self._normalize_prediction_mask(prediction, len(labels))
+                    if rca_offset > 0:
+                        raw_mask = self._normalize_prediction_mask(prediction, len(test_data))
+                        mask = raw_mask[rca_offset:rca_offset + len(labels)]
+                    lite_predictions[key_name] = mask
+            elif pred_mask is not None:
+                lite_predictions[pred_key] = pred_mask
+            for key_name, mask in lite_predictions.items():
+                predicted_events_by_key[key_name] = self._build_rca_events(
+                    self._rca_predicted_segments(mask),
                     channel_scores,
                     base_channel_scores,
                     graph_channel_scores,

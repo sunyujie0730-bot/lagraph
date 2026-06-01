@@ -165,10 +165,91 @@ FOLLOWUP_EXPERIMENTS = [
 ]
 
 
+EVENT_QUALITY_EXPERIMENTS = [
+    Experiment(
+        "Q01_wadi_soft_allkeys_e8",
+        "Baseline soft-hierarchical RCA with all prediction keys exported for event-quality sweep.",
+        "WADI_A1_2017_ds10.csv",
+        "soft-hierarchical-rca",
+        8,
+        export_rca=True,
+    ),
+    Experiment(
+        "Q02_swat_soft_allkeys_e8",
+        "Baseline soft-hierarchical RCA with all prediction keys exported for event-quality sweep.",
+        "SWAT_A1A2_Physical_v1.csv",
+        "soft-hierarchical-rca",
+        8,
+        export_rca=True,
+    ),
+    Experiment(
+        "Q03_wadi_soft_event_smooth_e8",
+        "Moderate event smoothing to reduce fragmented predicted events while preserving recall.",
+        "WADI_A1_2017_ds10.csv",
+        "soft-hierarchical-rca",
+        8,
+        export_rca=True,
+        extra_args=(
+            "--score-smoothing-window", "5",
+            "--score-smoothing-method", "mean",
+            "--prediction-fill-gap", "6",
+            "--prediction-min-len", "2",
+            "--prediction-dilate", "2",
+        ),
+    ),
+    Experiment(
+        "Q04_swat_soft_event_smooth_e8",
+        "Moderate event smoothing to reduce fragmented predicted events while preserving recall.",
+        "SWAT_A1A2_Physical_v1.csv",
+        "soft-hierarchical-rca",
+        8,
+        export_rca=True,
+        extra_args=(
+            "--score-smoothing-window", "5",
+            "--score-smoothing-method", "mean",
+            "--prediction-fill-gap", "6",
+            "--prediction-min-len", "2",
+            "--prediction-dilate", "2",
+        ),
+    ),
+    Experiment(
+        "Q05_wadi_soft_event_conservative_e8",
+        "Conservative event post-processing for a less aggressive precision/recall trade-off.",
+        "WADI_A1_2017_ds10.csv",
+        "soft-hierarchical-rca",
+        8,
+        export_rca=True,
+        extra_args=(
+            "--score-smoothing-window", "3",
+            "--score-smoothing-method", "mean",
+            "--prediction-fill-gap", "2",
+            "--prediction-min-len", "1",
+            "--prediction-dilate", "1",
+        ),
+    ),
+    Experiment(
+        "Q06_swat_soft_event_conservative_e8",
+        "Conservative event post-processing for a less aggressive precision/recall trade-off.",
+        "SWAT_A1A2_Physical_v1.csv",
+        "soft-hierarchical-rca",
+        8,
+        export_rca=True,
+        extra_args=(
+            "--score-smoothing-window", "3",
+            "--score-smoothing-method", "mean",
+            "--prediction-fill-gap", "2",
+            "--prediction-min-len", "1",
+            "--prediction-dilate", "1",
+        ),
+    ),
+]
+
+
 EXPERIMENT_SUITES = {
     "core": CORE_EXPERIMENTS,
+    "event-quality": EVENT_QUALITY_EXPERIMENTS,
     "followup": FOLLOWUP_EXPERIMENTS,
-    "all": CORE_EXPERIMENTS + FOLLOWUP_EXPERIMENTS,
+    "all": CORE_EXPERIMENTS + FOLLOWUP_EXPERIMENTS + EVENT_QUALITY_EXPERIMENTS,
 }
 
 
@@ -261,6 +342,7 @@ def evaluate_rca(rca_path: Path, exp: Experiment, out_prefix: str, log_file: Pat
     flat_csv = ANALYSIS_DIR / f"{out_prefix}_flat_channel_pred.csv"
     static_csv = ANALYSIS_DIR / f"{out_prefix}_static_pred.csv"
     random_csv = ANALYSIS_DIR / f"{out_prefix}_random_pred.csv"
+    event_csv = ANALYSIS_DIR / f"{out_prefix}_event_detection.csv"
 
     base = [
         str(PYTHON),
@@ -321,6 +403,15 @@ def evaluate_rca(rca_path: Path, exp: Experiment, out_prefix: str, log_file: Pat
     ]
     if (PROJECT_ROOT / "scripts" / "evaluate_static_rca_baselines.py").exists():
         results["static"] = run_eval(static, static_csv, log_file)
+    event_detection = [
+        str(PYTHON),
+        str(PROJECT_ROOT / "scripts" / "evaluate_event_detection.py"),
+        "--rca",
+        str(rca_path),
+        "--save-csv",
+        str(event_csv),
+    ]
+    results["event_detection"] = run_eval(event_detection, event_csv, log_file)
     return results
 
 
@@ -356,6 +447,33 @@ def extract_mean_metrics(csv_path: Path) -> dict:
         "conditional_variable_Hit@5",
     ]
     return {key: float(row[key]) for key in wanted if key in row and pd.notna(row[key])}
+
+
+def extract_best_event_metrics(csv_path: Path) -> dict:
+    if not csv_path.exists():
+        return {}
+    df = pd.read_csv(csv_path)
+    if df.empty or "event_f1" not in df.columns:
+        return {}
+    sort_cols = [col for col in ["event_f1", "event_recall", "event_precision"] if col in df.columns]
+    row = df.sort_values(sort_cols, ascending=[False] * len(sort_cols)).iloc[0]
+    wanted = [
+        "prediction_key",
+        "pred_events",
+        "matched_true_events",
+        "event_precision",
+        "event_recall",
+        "event_f1",
+        "mean_true_coverage",
+        "mean_detection_delay",
+    ]
+    result = {}
+    for key in wanted:
+        if key not in row or pd.isna(row[key]):
+            continue
+        value = row[key]
+        result[key] = float(value) if isinstance(value, (int, float)) else str(value)
+    return result
 
 
 def write_summary(markdown_path: Path, records: list[dict]) -> None:
@@ -402,6 +520,18 @@ def write_summary(markdown_path: Path, records: list[dict]) -> None:
             f"{metrics.get('matched', '')} | {metrics.get('subsystem_MRR', '')} | "
             f"{metrics.get('subsystem_Hit@1', '')} | {metrics.get('flat_variable_MRR', '')} | "
             f"{metrics.get('flat_variable_Hit@1', '')} | {metrics.get('conditional_variable_MRR', '')} |"
+        )
+    lines.extend(["", "## Event Detection Summary", ""])
+    lines.append("| ID | Best Key | Pred Events | Matched True | Event Precision | Event Recall | Event F1 | True Coverage | Delay |")
+    lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|")
+    for item in records:
+        exp = item["experiment"]
+        event = item.get("event_detection", {})
+        lines.append(
+            f"| {exp['exp_id']} | {event.get('prediction_key', '')} | {event.get('pred_events', '')} | "
+            f"{event.get('matched_true_events', '')} | {event.get('event_precision', '')} | "
+            f"{event.get('event_recall', '')} | {event.get('event_f1', '')} | "
+            f"{event.get('mean_true_coverage', '')} | {event.get('mean_detection_delay', '')} |"
         )
     lines.extend(["", "## Notes", ""])
     lines.append("- TE is not in the current local DETECT_META/data list, so it is left pending until the dataset is restored.")
@@ -477,6 +607,8 @@ def main() -> int:
             record["rca_evaluations"] = evals
             hier_csv = ANALYSIS_DIR / f"{run_id}_{exp.exp_id}_hierarchical_pred.csv"
             record["rca_metrics"] = extract_mean_metrics(hier_csv)
+            event_csv = ANALYSIS_DIR / f"{run_id}_{exp.exp_id}_event_detection.csv"
+            record["event_detection"] = extract_best_event_metrics(event_csv)
         records.append(record)
         with jsonl_file.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
