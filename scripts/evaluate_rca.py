@@ -49,6 +49,7 @@ def parse_args() -> argparse.Namespace:
         help="Use exported ranking or recompute ranking from base/graph/mechanism/contrast component scores.",
     )
     parser.add_argument("--component-base-weight", type=float, default=1.0)
+    parser.add_argument("--component-source-score-weight", type=float, default=0.0)
     parser.add_argument("--component-graph-weight", type=float, default=0.0)
     parser.add_argument("--component-mechanism-weight", type=float, default=0.0)
     parser.add_argument("--component-causal-weight", type=float, default=0.0)
@@ -177,6 +178,7 @@ def component_ranking_names(
     pred_event: dict,
     scope: str,
     base_weight: float,
+    source_score_weight: float,
     graph_weight: float,
     mechanism_weight: float,
     causal_weight: float,
@@ -196,6 +198,7 @@ def component_ranking_names(
         for item in channel_items:
             score = (
                 base_weight * float(item.get("base_score", item.get("score", 0.0)))
+                + source_score_weight * float(item.get("source_score", 0.0))
                 + graph_weight * float(item.get("graph_score", 0.0))
                 + mechanism_weight * float(item.get("mechanism_score", 0.0))
                 + causal_weight * float(item.get("causal_score", 0.0))
@@ -214,6 +217,7 @@ def component_ranking_names(
         group = root_cause_group_name(item["name"])
         score = (
             base_weight * float(item.get("base_score", item.get("score", 0.0)))
+            + source_score_weight * float(item.get("source_score", 0.0))
             + graph_weight * float(item.get("graph_score", 0.0))
             + mechanism_weight * float(item.get("mechanism_score", 0.0))
             + causal_weight * float(item.get("causal_score", 0.0))
@@ -297,6 +301,7 @@ def ranking_for_event(pred_event: dict | None, args: argparse.Namespace) -> list
             pred_event,
             args.scope,
             args.component_base_weight,
+            args.component_source_score_weight,
             args.component_graph_weight,
             args.component_mechanism_weight,
             args.component_causal_weight,

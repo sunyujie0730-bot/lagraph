@@ -186,6 +186,7 @@ def main():
             "soft-hierarchical-rca",
             "soft-hierarchical-no-normal-prior",
             "interventional-graph-source-rca",
+            "interventional-fused-source-rca",
             "mechanism-calibrated-rca",
             "source-preserving-rca",
             "synthetic-responsibility-rca",
@@ -633,6 +634,12 @@ def main():
         type=float,
         default=None,
         help="Weight for base reconstruction residual inside the RCA source score.",
+    )
+    parser.add_argument(
+        "--rca-source-score-weight",
+        type=float,
+        default=None,
+        help="Weight for the fused source score inside normalized source/propagation RCA.",
     )
     parser.add_argument(
         "--rca-propagation-weight",
@@ -2294,6 +2301,19 @@ def main():
         rca_onset_weight=0.75,
         rca_hierarchical_group_boost=0.2,
     )
+    arch_profiles["interventional-fused-source-rca"] = dict(
+        arch_profiles["interventional-graph-source-rca"],
+        rca_source_weight=1.0,
+        rca_source_base_weight=1.0,
+        rca_source_score_weight=0.75,
+        rca_propagation_weight=1.0,
+        rca_source_gate_weight=0.10,
+        rca_source_mechanism_weight=0.0,
+        rca_graph_penalty_weight=0.0,
+        rca_onset_weight=0.25,
+        rca_source_interaction_weight=0.0,
+        channel_mechanism_score_weight=0.20,
+    )
     arch_profiles["mechanism-calibrated-rca"] = dict(
         arch_profiles["soft-hierarchical-rca"],
         rca_source_base_weight=0.25,
@@ -2465,6 +2485,8 @@ def main():
         score_hyper_params["rca_source_weight"] = max(0.0, float(args.rca_source_weight))
     if args.rca_source_base_weight is not None:
         score_hyper_params["rca_source_base_weight"] = max(0.0, float(args.rca_source_base_weight))
+    if args.rca_source_score_weight is not None:
+        score_hyper_params["rca_source_score_weight"] = max(0.0, float(args.rca_source_score_weight))
     if args.rca_propagation_weight is not None:
         score_hyper_params["rca_propagation_weight"] = max(0.0, float(args.rca_propagation_weight))
     if args.rca_source_mechanism_weight is not None:

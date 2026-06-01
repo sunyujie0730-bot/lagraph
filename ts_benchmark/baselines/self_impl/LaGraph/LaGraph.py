@@ -214,6 +214,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_source_base_weight": 1.0,
     "rca_propagation_weight": 0.25,
     "rca_source_mechanism_weight": 0.0,
+    "rca_source_score_weight": 0.0,
     "rca_causal_weight": 0.0,
     "rca_synthetic_weight": 0.0,
     "rca_source_gate_weight": 0.0,
@@ -1180,6 +1181,7 @@ class LaGraph:
                 "rca_use_source_propagation": getattr(self.config, "rca_use_source_propagation", None),
                 "rca_source_weight": getattr(self.config, "rca_source_weight", None),
                 "rca_source_base_weight": getattr(self.config, "rca_source_base_weight", None),
+                "rca_source_score_weight": getattr(self.config, "rca_source_score_weight", None),
                 "rca_propagation_weight": getattr(self.config, "rca_propagation_weight", None),
                 "rca_source_mechanism_weight": getattr(self.config, "rca_source_mechanism_weight", None),
                 "rca_causal_weight": getattr(self.config, "rca_causal_weight", None),
@@ -3795,6 +3797,7 @@ class LaGraph:
         source_base_weight=1.0,
         propagation_weight=0.25,
         source_mechanism_weight=0.0,
+        source_score_weight=0.0,
         causal_weight=0.0,
         synthetic_weight=0.0,
         source_gate_weight=0.0,
@@ -3889,11 +3892,13 @@ class LaGraph:
                 source_gate_norm = self._normalize_event_component(event_source_gate_scores)
                 synthetic_norm = self._normalize_event_component(event_synthetic_scores)
                 counterfactual_norm = self._normalize_event_component(event_counterfactual_scores)
+                source_score_norm = self._normalize_event_component(event_source_scores)
                 onset_norm = self._normalize_event_component(event_onset_scores)
                 mechanism_residual_norm = self._normalize_event_component(event_mechanism_residual_scores)
                 contrast_norm = self._normalize_event_component(event_contrast_scores)
                 source_norm = (
                     source_base_weight * base_norm
+                    + source_score_weight * source_score_norm
                     + source_mechanism_weight * mechanism_norm
                     + causal_weight * causal_norm
                     + source_gate_weight * source_gate_norm
@@ -4138,6 +4143,7 @@ class LaGraph:
         source_base_weight = _cfg_float("rca_source_base_weight", 1.0)
         propagation_weight = _cfg_float("rca_propagation_weight", 0.25)
         source_mechanism_weight = _cfg_float("rca_source_mechanism_weight", 0.0)
+        source_score_weight = _cfg_float("rca_source_score_weight", 0.0)
         causal_weight = _cfg_float("rca_causal_weight", 0.0)
         synthetic_weight = _cfg_float("rca_synthetic_weight", 0.0)
         source_gate_weight = _cfg_float("rca_source_gate_weight", 0.0)
@@ -4243,6 +4249,7 @@ class LaGraph:
             source_base_weight=source_base_weight,
             propagation_weight=propagation_weight,
             source_mechanism_weight=source_mechanism_weight,
+            source_score_weight=source_score_weight,
             causal_weight=causal_weight,
             synthetic_weight=synthetic_weight,
             source_gate_weight=source_gate_weight,
@@ -4300,6 +4307,7 @@ class LaGraph:
                     source_base_weight=source_base_weight,
                     propagation_weight=propagation_weight,
                     source_mechanism_weight=source_mechanism_weight,
+                    source_score_weight=source_score_weight,
                     causal_weight=causal_weight,
                     synthetic_weight=synthetic_weight,
                     source_gate_weight=source_gate_weight,
@@ -4350,6 +4358,7 @@ class LaGraph:
                     source_base_weight=source_base_weight,
                     propagation_weight=propagation_weight,
                     source_mechanism_weight=source_mechanism_weight,
+                    source_score_weight=source_score_weight,
                     causal_weight=causal_weight,
                     synthetic_weight=synthetic_weight,
                     source_gate_weight=source_gate_weight,
@@ -4398,6 +4407,7 @@ class LaGraph:
                 source_base_weight=source_base_weight,
                 propagation_weight=propagation_weight,
                 source_mechanism_weight=source_mechanism_weight,
+                source_score_weight=source_score_weight,
                 causal_weight=causal_weight,
                 synthetic_weight=synthetic_weight,
                 source_gate_weight=source_gate_weight,
@@ -4443,6 +4453,7 @@ class LaGraph:
                 source_base_weight=source_base_weight,
                 propagation_weight=propagation_weight,
                 source_mechanism_weight=source_mechanism_weight,
+                source_score_weight=source_score_weight,
                 causal_weight=causal_weight,
                 synthetic_weight=synthetic_weight,
                 source_gate_weight=source_gate_weight,
@@ -4470,7 +4481,7 @@ class LaGraph:
         output_path = os.path.join(output_dir, f"{timestamp}_rca.json")
         score_method = (
             "event-level source/propagation RCA: "
-            "source=(weighted base residual + mechanism prior deviation + lagged causal deviation + model source-gate score + synthetic responsibility + event-local counterfactual responsibility), "
+            "source=(weighted base residual + fused source score + mechanism prior deviation + lagged causal deviation + model source-gate score + synthetic responsibility + event-local counterfactual responsibility), "
             "propagation=graph-propagated residual, "
             "onset=early local-baseline crossing"
             if use_source_propagation
@@ -4489,6 +4500,7 @@ class LaGraph:
             "rca_source_base_weight": source_base_weight,
             "rca_propagation_weight": propagation_weight,
             "rca_source_mechanism_weight": source_mechanism_weight,
+            "rca_source_score_weight": source_score_weight,
             "rca_causal_weight": causal_weight,
             "rca_synthetic_weight": synthetic_weight,
             "rca_source_gate_weight": source_gate_weight,
