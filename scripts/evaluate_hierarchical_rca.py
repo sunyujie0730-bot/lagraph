@@ -109,11 +109,18 @@ def metric_row(ranking: list[str], roots: set[str], k_values: list[int], prefix:
         hits = sum(1 for name in topk if name in roots)
         row[f"{prefix}_Hit@{k}"] = 1.0 if hits > 0 else 0.0
         row[f"{prefix}_Precision@{k}"] = hits / max(k, 1)
+        row[f"{prefix}_PR@{k}"] = row[f"{prefix}_Precision@{k}"]
         row[f"{prefix}_Recall@{k}"] = hits / max(len(roots), 1)
+        precision_sum = 0.0
+        seen_hits = 0
         dcg = 0.0
         for idx, name in enumerate(topk, start=1):
             if name in roots:
+                seen_hits += 1
+                precision_sum += seen_hits / idx
                 dcg += 1.0 / math.log2(idx + 1)
+        max_relevant = min(len(roots), k)
+        row[f"{prefix}_MAP@{k}"] = 0.0 if max_relevant == 0 else precision_sum / max_relevant
         ideal_hits = min(len(roots), k)
         idcg = sum(1.0 / math.log2(idx + 1) for idx in range(1, ideal_hits + 1))
         row[f"{prefix}_NDCG@{k}"] = 0.0 if idcg == 0 else dcg / idcg
@@ -305,7 +312,9 @@ def main() -> None:
         or column.endswith("_MRR")
         or "_Hit@" in column
         or "_Precision@" in column
+        or "_PR@" in column
         or "_Recall@" in column
+        or "_MAP@" in column
         or "_NDCG@" in column
     ]
     summary = df[metric_cols].mean().to_frame("mean").T

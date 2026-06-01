@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate root-cause ranking reports with Hit@K, MRR, and NDCG@K."""
+"""Evaluate root-cause ranking reports with Hit@K, MRR, PR@K, MAP@K, and NDCG@K."""
 
 from __future__ import annotations
 
@@ -267,12 +267,18 @@ def metric_row(ranking: list[str], roots: set[str], k_values: list[int]) -> dict
         hits = sum(1 for name in topk if name in roots)
         row[f"Hit@{k}"] = 1.0 if hits > 0 else 0.0
         row[f"Precision@{k}"] = hits / max(k, 1)
+        row[f"PR@{k}"] = row[f"Precision@{k}"]
         row[f"Recall@{k}"] = hits / max(len(roots), 1)
+        precision_sum = 0.0
+        seen_hits = 0
         dcg = 0.0
         for idx, name in enumerate(topk, start=1):
             if name in roots:
+                seen_hits += 1
+                precision_sum += seen_hits / idx
                 dcg += 1.0 / math.log2(idx + 1)
         ideal_hits = min(len(roots), k)
+        row[f"MAP@{k}"] = 0.0 if ideal_hits == 0 else precision_sum / ideal_hits
         idcg = sum(1.0 / math.log2(idx + 1) for idx in range(1, ideal_hits + 1))
         row[f"NDCG@{k}"] = 0.0 if idcg == 0 else dcg / idcg
     return row
@@ -412,6 +418,7 @@ def main() -> None:
         c
         for c in df.columns
         if c.startswith(("Hit@", "Precision@", "Recall@", "NDCG@", "RCA_Delay@"))
+        or c.startswith(("PR@", "MAP@"))
         or c in {"MRR", "matched"}
     ]
     summary = df[metric_cols].mean().to_frame("mean").T
