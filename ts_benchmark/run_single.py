@@ -2294,9 +2294,10 @@ def main():
     arch_profiles["mechanism-feedback-rca"] = dict(
         arch_profiles["soft-hierarchical-rca"],
         use_mechanism_residual_feedback=True,
-        mechanism_feedback_init=0.10,
+        mechanism_feedback_init=0.03,
         mechanism_feedback_detach=True,
         mechanism_feedback_norm="sample_l1",
+        mechanism_feedback_clip=3.0,
         lambda_channel_mechanism=0.08,
         channel_mechanism_score_weight=0.30,
         use_channel_masked_modeling=True,

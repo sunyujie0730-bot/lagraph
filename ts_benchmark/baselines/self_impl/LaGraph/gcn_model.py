@@ -461,6 +461,7 @@ class SparseGCN(nn.Module):
                  mechanism_feedback_init=0.10,
                  mechanism_feedback_detach=True,
                  mechanism_feedback_norm="sample_l1",
+                 mechanism_feedback_clip=3.0,
                  use_mechanism_predictive_head=False,
                  mechanism_predictive_blend_init=0.30,
                  use_source_gate=False,
@@ -526,6 +527,7 @@ class SparseGCN(nn.Module):
         self.mechanism_feedback_init = float(mechanism_feedback_init)
         self.mechanism_feedback_detach = bool(mechanism_feedback_detach)
         self.mechanism_feedback_norm = str(mechanism_feedback_norm or "sample_l1").lower()
+        self.mechanism_feedback_clip = float(mechanism_feedback_clip)
         self.use_mechanism_predictive_head = bool(use_mechanism_predictive_head)
         self.mechanism_predictive_blend_init = float(mechanism_predictive_blend_init)
         self.use_source_gate = bool(use_source_gate)
@@ -1153,16 +1155,24 @@ class SparseGCN(nn.Module):
         ):
             mechanism_residual = resid - channel_mechanism_pred.to(dtype=resid.dtype)
             feedback = mechanism_residual.detach() if self.mechanism_feedback_detach else mechanism_residual
+            feedback_direction = feedback
             if self.mechanism_feedback_norm == "sample_z":
                 center = feedback.mean(dim=(1, 2), keepdim=True)
                 scale = feedback.std(dim=(1, 2), keepdim=True, unbiased=False).clamp_min(1e-6)
-                feedback = (feedback - center) / scale
+                normalized_feedback = (feedback - center) / scale
             elif self.mechanism_feedback_norm == "none":
-                pass
+                normalized_feedback = feedback
             else:
                 scale = feedback.abs().mean(dim=(1, 2), keepdim=True).clamp_min(1e-6)
-                feedback = feedback / scale
-            feedback = torch.tanh(feedback)
+                normalized_feedback = feedback / scale
+            if self.mechanism_feedback_norm == "none":
+                confidence = torch.ones_like(feedback_direction)
+            else:
+                confidence = torch.sigmoid(normalized_feedback.abs() - 1.0)
+            clip = max(float(self.mechanism_feedback_clip), 0.0)
+            if clip > 0:
+                feedback_direction = feedback_direction.clamp(min=-clip, max=clip)
+            feedback = confidence * feedback_direction
             mechanism_feedback_weight = torch.sigmoid(self.mechanism_feedback_logit)
             stage1_feat = stage1_feat + mechanism_feedback_weight * feedback
 

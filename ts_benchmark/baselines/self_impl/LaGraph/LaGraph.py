@@ -177,6 +177,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "mechanism_feedback_init": 0.10,
     "mechanism_feedback_detach": True,
     "mechanism_feedback_norm": "sample_l1",
+    "mechanism_feedback_clip": 3.0,
     "use_mechanism_predictive_head": False,
     "mechanism_predictive_blend_init": 0.30,
     "use_source_gate": False,
@@ -1139,6 +1140,7 @@ class LaGraph:
                     self.config, "mechanism_feedback_detach", None
                 ),
                 "mechanism_feedback_norm": getattr(self.config, "mechanism_feedback_norm", None),
+                "mechanism_feedback_clip": getattr(self.config, "mechanism_feedback_clip", None),
                 "use_interventional_channel_masking": getattr(
                     self.config, "use_interventional_channel_masking", None
                 ),
@@ -2250,6 +2252,7 @@ class LaGraph:
             mechanism_feedback_init=getattr(self.config, "mechanism_feedback_init", 0.10),
             mechanism_feedback_detach=getattr(self.config, "mechanism_feedback_detach", True),
             mechanism_feedback_norm=getattr(self.config, "mechanism_feedback_norm", "sample_l1"),
+            mechanism_feedback_clip=getattr(self.config, "mechanism_feedback_clip", 3.0),
             use_mechanism_predictive_head=getattr(self.config, "use_mechanism_predictive_head", False),
             mechanism_predictive_blend_init=getattr(self.config, "mechanism_predictive_blend_init", 0.30),
             use_source_gate=getattr(self.config, "use_source_gate", False),
@@ -2521,6 +2524,7 @@ class LaGraph:
             mechanism_feedback_init=getattr(self.config, "mechanism_feedback_init", 0.10),
             mechanism_feedback_detach=getattr(self.config, "mechanism_feedback_detach", True),
             mechanism_feedback_norm=getattr(self.config, "mechanism_feedback_norm", "sample_l1"),
+            mechanism_feedback_clip=getattr(self.config, "mechanism_feedback_clip", 3.0),
             use_mechanism_predictive_head=getattr(self.config, "use_mechanism_predictive_head", False),
             mechanism_predictive_blend_init=getattr(self.config, "mechanism_predictive_blend_init", 0.30),
             use_source_gate=getattr(self.config, "use_source_gate", False),
