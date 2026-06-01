@@ -184,6 +184,7 @@ def main():
             "adaptive-source-sharp-rca",
             "hierarchical-source-rca",
             "soft-hierarchical-rca",
+            "soft-hierarchical-no-normal-prior",
             "mechanism-calibrated-rca",
             "source-preserving-rca",
             "synthetic-responsibility-rca",
@@ -2253,6 +2254,13 @@ def main():
         rca_hierarchical_group_topk=0,
         rca_hierarchical_group_boost=0.2,
         rca_hierarchical_outside_penalty=0.0,
+    )
+    arch_profiles["soft-hierarchical-no-normal-prior"] = dict(
+        arch_profiles["soft-hierarchical-rca"],
+        use_channel_corr_prior=False,
+        channel_corr_prior_weight=0.0,
+        channel_corr_prior_bias=0.0,
+        lambda_channel_prior_align=0.0,
     )
     arch_profiles["mechanism-calibrated-rca"] = dict(
         arch_profiles["soft-hierarchical-rca"],

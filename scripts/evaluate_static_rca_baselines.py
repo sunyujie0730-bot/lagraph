@@ -5,6 +5,8 @@ Baselines:
 - zscore: rank variables by absolute normal-train z-score during an event.
 - correlation_prior: propagate z-score evidence over a normal-train absolute
   correlation graph before ranking.
+- random_graph_prior: propagate z-score evidence over a fixed random graph with
+  the same top-k sparsity, used to test whether graph structure itself matters.
 - granger_prior: propagate z-score evidence over a normal-train directed
   pairwise Granger graph before ranking.
 """
@@ -44,6 +46,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prediction-key", default="1.0")
     parser.add_argument("--corr-topk", type=int, default=5)
     parser.add_argument("--corr-weight", type=float, default=1.0)
+    parser.add_argument("--include-random-graph", action="store_true")
+    parser.add_argument("--random-graph-seed", type=int, default=2026)
+    parser.add_argument("--random-graph-topk", type=int, default=5)
+    parser.add_argument("--random-graph-weight", type=float, default=1.0)
     parser.add_argument("--include-granger", action="store_true")
     parser.add_argument("--granger-max-lag", type=int, default=3)
     parser.add_argument("--granger-topk", type=int, default=5)
@@ -134,6 +140,13 @@ def metric_row(ranking: list[str], roots: set[str], k_values: list[int]) -> dict
         ideal_hits = min(len(roots), k)
         idcg = sum(1.0 / math.log2(idx + 1) for idx in range(1, ideal_hits + 1))
         row[f"NDCG@{k}"] = 0.0 if idcg == 0 else dcg / idcg
+        hit_count = 0
+        ap_sum = 0.0
+        for idx, name in enumerate(topk, start=1):
+            if name in roots:
+                hit_count += 1
+                ap_sum += hit_count / idx
+        row[f"MAP@{k}"] = ap_sum / max(min(len(roots), k), 1)
     return row
 
 
@@ -147,6 +160,19 @@ def topk_abs_corr(train_x: pd.DataFrame, topk: int) -> np.ndarray:
         corr = keep
     row_sum = corr.sum(axis=1, keepdims=True)
     return np.divide(corr, row_sum, out=np.zeros_like(corr), where=row_sum > 0)
+
+
+def topk_random_graph(n_channels: int, topk: int, seed: int) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    scores = rng.random((n_channels, n_channels), dtype=np.float32)
+    np.fill_diagonal(scores, 0.0)
+    if 0 < topk < n_channels:
+        keep = np.zeros_like(scores)
+        idx = np.argpartition(-scores, kth=topk - 1, axis=1)[:, :topk]
+        keep[np.arange(n_channels)[:, None], idx] = scores[np.arange(n_channels)[:, None], idx]
+        scores = keep
+    row_sum = scores.sum(axis=1, keepdims=True)
+    return np.divide(scores, row_sum, out=np.zeros_like(scores), where=row_sum > 0)
 
 
 def _ridge_rss(design: np.ndarray, y: np.ndarray, ridge: float) -> float:
@@ -278,6 +304,11 @@ def main() -> None:
     scale = train_x.std(axis=0).replace(0, 1.0)
     z = ((test_x - center) / scale).abs().to_numpy(dtype=np.float32)
     corr = topk_abs_corr(train_x, args.corr_topk)
+    random_graph = (
+        topk_random_graph(len(columns), args.random_graph_topk, args.random_graph_seed)
+        if args.include_random_graph
+        else None
+    )
     granger = None
     if args.include_granger:
         print(
@@ -321,6 +352,13 @@ def main() -> None:
                 None if event_z is None else event_z + args.corr_weight * corr.dot(event_z),
             ),
         ]
+        if random_graph is not None:
+            score_items.append(
+                (
+                    "random_graph_prior",
+                    None if event_z is None else event_z + args.random_graph_weight * random_graph.dot(event_z),
+                )
+            )
         if granger is not None:
             score_items.append(
                 (
@@ -362,6 +400,7 @@ def main() -> None:
         c
         for c in df.columns
         if c.startswith(("Hit@", "Precision@", "Recall@", "NDCG@", "RCA_Delay@"))
+        or c.startswith("MAP@")
         or c in {"MRR", "matched"}
     ]
     summary = df.groupby("method", as_index=False)[metric_cols].mean().assign(series_name="MEAN")

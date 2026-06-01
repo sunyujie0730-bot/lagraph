@@ -4105,15 +4105,15 @@ class LaGraph:
         max_channel_ranking = export_top_k if export_lite else None
         source_channel_scores = None
         propagation_channel_scores = None
-        counterfactual_channel_scores = np.zeros_like(base_channel_scores)
-        counterfactual_candidate_scores = (
-            source_base_weight * base_channel_scores
-            + source_mechanism_weight * mechanism_channel_scores
-            + causal_weight * causal_channel_scores
-            + source_gate_weight * source_gate_channel_scores
-            + synthetic_weight * synthetic_channel_scores
-        )
+        counterfactual_channel_scores = None
         if counterfactual_weight > 0.0:
+            counterfactual_candidate_scores = (
+                source_base_weight * base_channel_scores
+                + source_mechanism_weight * mechanism_channel_scores
+                + causal_weight * causal_channel_scores
+                + source_gate_weight * source_gate_channel_scores
+                + synthetic_weight * synthetic_channel_scores
+            )
             counterfactual_channel_scores = self._compute_counterfactual_channel_scores(
                 test_data,
                 labels,
@@ -4130,8 +4130,12 @@ class LaGraph:
                 + causal_weight * causal_channel_scores
                 + source_gate_weight * source_gate_channel_scores
                 + synthetic_weight * synthetic_channel_scores
-                + counterfactual_weight * counterfactual_channel_scores
             )
+            if counterfactual_channel_scores is not None:
+                source_channel_scores = (
+                    source_channel_scores
+                    + counterfactual_weight * counterfactual_channel_scores
+                )
             propagation_channel_scores = graph_channel_scores
             channel_scores = (
                 source_weight * source_channel_scores
@@ -4144,8 +4148,12 @@ class LaGraph:
                 + mechanism_weight * mechanism_channel_scores
                 + source_gate_weight * source_gate_channel_scores
                 + synthetic_weight * synthetic_channel_scores
-                + counterfactual_weight * counterfactual_channel_scores
             )
+            if counterfactual_channel_scores is not None:
+                channel_scores = (
+                    channel_scores
+                    + counterfactual_weight * counterfactual_channel_scores
+                )
         feature_names = list(self._last_channel_names)
         events = self._build_rca_events(
             self._label_segments(labels),
