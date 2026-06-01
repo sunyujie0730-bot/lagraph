@@ -92,6 +92,9 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "synthetic_aux_interval": 1,
     "use_synthetic_rca_loss": False,
     "lambda_synthetic_rca": 0.0,
+    "lambda_masked_rca_head": 0.0,
+    "masked_rca_bce_weight": 1.0,
+    "masked_rca_rank_weight": 1.0,
     "synthetic_rca_margin": 0.2,
     "synthetic_rca_topk": 5,
     "synthetic_rca_min_roots": 1,
@@ -1132,6 +1135,9 @@ class LaGraph:
                 "lambda_channel_masked": getattr(self.config, "lambda_channel_masked", None),
                 "channel_mask_interval": getattr(self.config, "channel_mask_interval", None),
                 "channel_mask_ratio": getattr(self.config, "channel_mask_ratio", None),
+                "lambda_masked_rca_head": getattr(self.config, "lambda_masked_rca_head", None),
+                "masked_rca_bce_weight": getattr(self.config, "masked_rca_bce_weight", None),
+                "masked_rca_rank_weight": getattr(self.config, "masked_rca_rank_weight", None),
                 "use_mechanism_residual_feedback": getattr(
                     self.config, "use_mechanism_residual_feedback", None
                 ),
@@ -1692,6 +1698,26 @@ class LaGraph:
             reduction="sum",
         ) / denom
         total_loss = lambda_channel_masked * masked_loss
+
+        lambda_masked_rca = float(getattr(self.config, "lambda_masked_rca_head", 0.0) or 0.0)
+        if aux_losses and lambda_masked_rca > 0:
+            masked_rca_logits = aux_losses.get("synthetic_rca_logits")
+            if masked_rca_logits is not None:
+                pos = channel_mask.sum().clamp_min(1.0)
+                neg = (channel_mask.numel() - channel_mask.sum()).clamp_min(1.0)
+                pos_weight = (neg / pos).clamp(1.0, 20.0)
+                bce = F.binary_cross_entropy_with_logits(
+                    masked_rca_logits,
+                    channel_mask,
+                    pos_weight=pos_weight,
+                )
+                prob = torch.sigmoid(masked_rca_logits)
+                rank = self._synthetic_rca_ranking_loss(prob, channel_mask)
+                bce_weight = float(getattr(self.config, "masked_rca_bce_weight", 1.0) or 1.0)
+                rank_weight = float(getattr(self.config, "masked_rca_rank_weight", 1.0) or 1.0)
+                total_loss = total_loss + lambda_masked_rca * (
+                    bce_weight * bce + rank_weight * rank
+                )
 
         if not bool(getattr(self.config, "use_interventional_channel_masking", False)):
             return total_loss
