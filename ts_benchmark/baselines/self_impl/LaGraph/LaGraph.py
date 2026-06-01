@@ -126,6 +126,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "lambda_interventional_source_bce": 0.0,
     "lambda_interventional_source_rank": 0.0,
     "lambda_interventional_graph_support": 0.0,
+    "interventional_rank_signal": "source_gate",
     "interventional_graph_support_eps": 1e-6,
     "use_parallel_graph_fusion": False,
     "graph_fusion_gate_mode": "sample",
@@ -1138,6 +1139,7 @@ class LaGraph:
                 "lambda_interventional_graph_support": getattr(
                     self.config, "lambda_interventional_graph_support", None
                 ),
+                "interventional_rank_signal": getattr(self.config, "interventional_rank_signal", None),
                 "use_synthetic_score": getattr(self.config, "use_synthetic_score", None),
                 "synthetic_score_weight": getattr(self.config, "synthetic_score_weight", None),
                 "use_parallel_graph_fusion": getattr(self.config, "use_parallel_graph_fusion", None),
@@ -1694,9 +1696,15 @@ class LaGraph:
                 )
 
         if aux_losses and lambda_source_rank > 0:
-            source_score = aux_losses.get("source_gate_score")
-            if source_score is None:
+            rank_signal = str(getattr(self.config, "interventional_rank_signal", "source_gate") or "source_gate").lower()
+            if rank_signal == "mechanism":
                 source_score = aux_losses.get("channel_mechanism_error")
+            elif rank_signal == "reconstruction":
+                source_score = F.l1_loss(rec, input_data, reduction="none")
+            else:
+                source_score = aux_losses.get("source_gate_score")
+                if source_score is None:
+                    source_score = aux_losses.get("channel_mechanism_error")
             if source_score is not None:
                 if source_score.dim() == 3:
                     source_score = source_score.mean(dim=1)

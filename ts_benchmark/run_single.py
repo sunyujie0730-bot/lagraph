@@ -188,6 +188,7 @@ def main():
             "interventional-graph-source-rca",
             "interventional-fused-source-rca",
             "interventional-consensus-source-rca",
+            "interventional-context-source-rca",
             "mechanism-calibrated-rca",
             "source-preserving-rca",
             "synthetic-responsibility-rca",
@@ -2339,6 +2340,13 @@ def main():
         rca_source_consensus_weight=0.50,
         rca_onset_consensus_weight=0.10,
         rca_source_consensus_mode="sqrt_bg",
+    )
+    arch_profiles["interventional-context-source-rca"] = dict(
+        arch_profiles["interventional-graph-source-rca"],
+        lambda_interventional_source_bce=0.0,
+        lambda_interventional_source_rank=0.02,
+        lambda_interventional_graph_support=0.02,
+        interventional_rank_signal="mechanism",
     )
     arch_profiles["mechanism-calibrated-rca"] = dict(
         arch_profiles["soft-hierarchical-rca"],
