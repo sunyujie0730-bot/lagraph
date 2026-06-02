@@ -113,6 +113,8 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "source_effect_min_roots": 1,
     "source_effect_max_roots": 2,
     "source_effect_neighbor_topk": 3,
+    "source_effect_use_channel_prior": False,
+    "source_effect_prior_topk": 5,
     "source_effect_strength": 0.35,
     "source_effect_delay_max": 6,
     "source_effect_bce_weight": 1.0,
@@ -1134,6 +1136,10 @@ class LaGraph:
                 "use_source_effect_synthetic": getattr(self.config, "use_source_effect_synthetic", None),
                 "lambda_source_effect": getattr(self.config, "lambda_source_effect", None),
                 "source_effect_interval": getattr(self.config, "source_effect_interval", None),
+                "source_effect_use_channel_prior": getattr(
+                    self.config, "source_effect_use_channel_prior", None
+                ),
+                "source_effect_prior_topk": getattr(self.config, "source_effect_prior_topk", None),
                 "source_effect_onset_rank_weight": getattr(
                     self.config, "source_effect_onset_rank_weight", None
                 ),
@@ -2364,19 +2370,33 @@ class LaGraph:
         )
         self.model.to(self.device)
 
-        if getattr(self.config, "use_channel_corr_prior", False):
+        use_model_channel_prior = bool(getattr(self.config, "use_channel_corr_prior", False))
+        use_source_effect_prior = bool(
+            getattr(self.config, "use_source_effect_synthetic", False)
+            and getattr(self.config, "source_effect_use_channel_prior", False)
+        )
+        if use_model_channel_prior or use_source_effect_prior:
+            prior_topk = getattr(self.config, "channel_corr_prior_topk", 5)
+            if use_source_effect_prior and not use_model_channel_prior:
+                prior_topk = getattr(self.config, "source_effect_prior_topk", prior_topk)
             prior = self._build_channel_corr_prior(
                 train_df,
-                topk=getattr(self.config, "channel_corr_prior_topk", 5),
+                topk=prior_topk,
             )
             self._channel_corr_prior = prior
-            self.model.set_channel_static_prior(prior)
-            print(
-                f"  [ChannelPrior] normal correlation prior set "
-                f"(topk={getattr(self.config, 'channel_corr_prior_topk', 5)}, "
-                f"weight={getattr(self.config, 'channel_corr_prior_weight', 0.0)}, "
-                f"bias={getattr(self.config, 'channel_corr_prior_bias', 0.0)})"
-            )
+            if use_model_channel_prior:
+                self.model.set_channel_static_prior(prior)
+                print(
+                    f"  [ChannelPrior] normal correlation prior set "
+                    f"(topk={getattr(self.config, 'channel_corr_prior_topk', 5)}, "
+                    f"weight={getattr(self.config, 'channel_corr_prior_weight', 0.0)}, "
+                    f"bias={getattr(self.config, 'channel_corr_prior_bias', 0.0)})"
+                )
+            else:
+                print(
+                    f"  [SourceEffectPrior] normal correlation prior set for synthetic "
+                    f"source-effect sampling only (topk={prior_topk})"
+                )
 
         total_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         train_steps = len(self.train_loader)
@@ -4762,6 +4782,10 @@ class LaGraph:
             "use_source_effect_synthetic": bool(getattr(self.config, "use_source_effect_synthetic", False)),
             "lambda_source_effect": _cfg_float("lambda_source_effect", 0.0),
             "source_effect_interval": _cfg_int("source_effect_interval", 4),
+            "source_effect_use_channel_prior": bool(
+                getattr(self.config, "source_effect_use_channel_prior", False)
+            ),
+            "source_effect_prior_topk": _cfg_int("source_effect_prior_topk", 5),
             "source_effect_onset_rank_weight": _cfg_float("source_effect_onset_rank_weight", 0.0),
             "feature_names": feature_names,
             "events": events,

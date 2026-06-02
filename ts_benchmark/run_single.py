@@ -190,6 +190,7 @@ def main():
             "masked-responsibility-rca",
             "interventional-graph-source-rca",
             "source-propagation-trained-rca",
+            "source-propagation-prior-rca",
             "interventional-fused-source-rca",
             "interventional-consensus-source-rca",
             "interventional-context-source-rca",
@@ -2427,6 +2428,15 @@ def main():
         rca_propagation_weight=0.0,
         rca_graph_penalty_weight=0.10,
         rca_onset_weight=0.75,
+    )
+    arch_profiles["source-propagation-prior-rca"] = dict(
+        arch_profiles["source-propagation-trained-rca"],
+        source_effect_use_channel_prior=True,
+        source_effect_prior_topk=5,
+        use_channel_corr_prior=False,
+        channel_corr_prior_weight=0.0,
+        channel_corr_prior_bias=0.0,
+        lambda_channel_prior_align=0.0,
     )
     arch_profiles["interventional-fused-source-rca"] = dict(
         arch_profiles["interventional-graph-source-rca"],
