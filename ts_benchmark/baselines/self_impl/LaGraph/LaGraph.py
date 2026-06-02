@@ -118,7 +118,9 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "source_effect_bce_weight": 1.0,
     "source_effect_rank_weight": 1.0,
     "source_effect_effect_rank_weight": 0.5,
+    "source_effect_onset_rank_weight": 0.0,
     "source_effect_margin": 0.2,
+    "source_effect_onset_margin": 0.2,
     "use_channel_masked_modeling": False,
     "lambda_channel_masked": 0.0,
     "channel_mask_interval": 8,
@@ -1132,6 +1134,9 @@ class LaGraph:
                 "use_source_effect_synthetic": getattr(self.config, "use_source_effect_synthetic", None),
                 "lambda_source_effect": getattr(self.config, "lambda_source_effect", None),
                 "source_effect_interval": getattr(self.config, "source_effect_interval", None),
+                "source_effect_onset_rank_weight": getattr(
+                    self.config, "source_effect_onset_rank_weight", None
+                ),
                 "use_channel_masked_modeling": getattr(self.config, "use_channel_masked_modeling", None),
                 "lambda_channel_masked": getattr(self.config, "lambda_channel_masked", None),
                 "channel_mask_interval": getattr(self.config, "channel_mask_interval", None),
@@ -1473,6 +1478,8 @@ class LaGraph:
         event_mask = torch.zeros(B, L, device=device, dtype=torch.float32)
         source_channel_mask = torch.zeros(B, C, device=device, dtype=torch.float32)
         effect_channel_mask = torch.zeros(B, C, device=device, dtype=torch.float32)
+        source_onset_mask = torch.zeros(B, L, device=device, dtype=torch.float32)
+        effect_time_mask = torch.zeros(B, L, device=device, dtype=torch.float32)
 
         min_len = int(getattr(self.config, "source_effect_min_len", 8) or 8)
         max_len = int(getattr(self.config, "source_effect_max_len", 30) or 30)
@@ -1523,6 +1530,7 @@ class LaGraph:
                 x[b, local_idx[:, None], roots] = x[b, local_idx[:, None], roots] + amp
 
             neighbors = []
+            source_onset_end = end
             if prior is not None and neighbor_topk > 0:
                 scores = prior[roots_cpu].max(axis=0)
                 scores[roots_cpu] = 0.0
@@ -1539,6 +1547,7 @@ class LaGraph:
                 max_delay = min(delay_max, max(0, end - start - 1))
                 delay = int(torch.randint(1, max_delay + 2, (1,), device=device).item()) if max_delay > 0 else 0
                 eff_start = min(end, start + delay)
+                source_onset_end = eff_start if eff_start > start else min(end, start + max(1, (end - start) // 3))
                 if eff_start < end:
                     eff_scale = input_data[b, :, effects].std(dim=0).clamp_min(0.2)
                     eff_sign = torch.where(
@@ -1551,12 +1560,14 @@ class LaGraph:
                     eff_ramp = torch.linspace(0.0, 1.0, end - eff_start, device=device).unsqueeze(-1)
                     x[b, eff_start:end, effects] = x[b, eff_start:end, effects] + eff_ramp * eff_amp
                     effect_channel_mask[b, effects] = 1.0
+                    effect_time_mask[b, eff_start:end] = 1.0
 
             event_mask[b, start:end] = 1.0
+            source_onset_mask[b, start:max(start + 1, source_onset_end)] = 1.0
             source_channel_mask[b, roots] = 1.0
             effect_channel_mask[b, roots] = 0.0
 
-        return x, event_mask, source_channel_mask, effect_channel_mask
+        return x, event_mask, source_channel_mask, effect_channel_mask, source_onset_mask, effect_time_mask
 
     def _synthetic_anomaly_aux_loss(self, input_data, normal_aux_losses, batch_idx=None):
         use_aux = bool(getattr(self.config, "use_synthetic_anomaly_aux", False))
@@ -1652,6 +1663,39 @@ class LaGraph:
                 losses.append(F.relu(channel_scores.new_tensor(margin) + hard_effect - pos_score))
         if not losses:
             return channel_scores.new_tensor(0.0)
+        return torch.stack(losses).mean()
+
+    def _source_effect_onset_ranking_loss(self, onset_scores, effect_scores, source_mask, effect_mask):
+        margin = float(
+            getattr(
+                self.config,
+                "source_effect_onset_margin",
+                getattr(self.config, "source_effect_margin", 0.2),
+            )
+            or 0.2
+        )
+        losses = []
+        for b in range(onset_scores.shape[0]):
+            roots = source_mask[b] > 0.5
+            non_roots = ~roots
+            if roots.sum() == 0 or non_roots.sum() == 0:
+                continue
+
+            pos_score = onset_scores[b, roots].mean()
+            onset_neg = onset_scores[b, non_roots]
+            if onset_neg.numel() > 0:
+                k = min(5, onset_neg.numel())
+                hard_onset_neg = torch.topk(onset_neg, k=k).values.mean()
+                losses.append(F.relu(onset_scores.new_tensor(margin) + hard_onset_neg - pos_score))
+
+            effects = (effect_mask[b] > 0.5) & non_roots
+            if effects.sum() > 0:
+                effect_neg = effect_scores[b, effects]
+                k_eff = min(3, effect_neg.numel())
+                hard_effect_neg = torch.topk(effect_neg, k=k_eff).values.mean()
+                losses.append(F.relu(onset_scores.new_tensor(margin) + hard_effect_neg - pos_score))
+        if not losses:
+            return onset_scores.new_tensor(0.0)
         return torch.stack(losses).mean()
 
     def _weighted_channel_bce(self, probs, target):
@@ -1781,12 +1825,21 @@ class LaGraph:
         if lambda_source_effect <= 0:
             return input_data.new_tensor(0.0)
 
-        synth_data, event_mask, source_mask, effect_mask = self._make_source_effect_synthetic_batch(input_data)
+        (
+            synth_data,
+            event_mask,
+            source_mask,
+            effect_mask,
+            source_onset_mask,
+            effect_time_mask,
+        ) = self._make_source_effect_synthetic_batch(input_data)
         synth_rec, _, _, _, _, synth_aux, _ = self.model(synth_data)
         if not synth_aux:
             return input_data.new_tensor(0.0)
 
         mask_sum = event_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
+        onset_sum = source_onset_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
+        effect_time_sum = effect_time_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
         gate_prob = synth_aux.get("source_gate_prob")
         gate_channel_scores = None
         if gate_prob is not None:
@@ -1799,9 +1852,21 @@ class LaGraph:
             channel_err = F.l1_loss(synth_rec, synth_data, reduction="none")
             channel_scores = (channel_err * event_mask.unsqueeze(-1)).sum(dim=1) / mask_sum
 
+        if source_score is not None:
+            time_channel_scores = source_score
+        else:
+            time_channel_scores = F.l1_loss(synth_rec, synth_data, reduction="none")
+        onset_channel_scores = (
+            time_channel_scores * source_onset_mask.unsqueeze(-1)
+        ).sum(dim=1) / onset_sum
+        effect_channel_scores = (
+            time_channel_scores * effect_time_mask.unsqueeze(-1)
+        ).sum(dim=1) / effect_time_sum
+
         bce_weight = float(getattr(self.config, "source_effect_bce_weight", 1.0) or 1.0)
         rank_weight = float(getattr(self.config, "source_effect_rank_weight", 1.0) or 1.0)
         effect_rank_weight = float(getattr(self.config, "source_effect_effect_rank_weight", 0.5) or 0.5)
+        onset_rank_weight = float(getattr(self.config, "source_effect_onset_rank_weight", 0.0) or 0.0)
 
         total = input_data.new_tensor(0.0)
         if gate_channel_scores is not None:
@@ -1811,6 +1876,13 @@ class LaGraph:
         if effect_rank_weight > 0:
             total = total + effect_rank_weight * self._source_effect_ranking_loss(
                 channel_scores,
+                source_mask,
+                effect_mask,
+            )
+        if onset_rank_weight > 0:
+            total = total + onset_rank_weight * self._source_effect_onset_ranking_loss(
+                onset_channel_scores,
+                effect_channel_scores,
                 source_mask,
                 effect_mask,
             )
