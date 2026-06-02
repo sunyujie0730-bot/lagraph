@@ -201,6 +201,7 @@ def main():
             "source-bottleneck-aligned-wide-rca",
             "source-bottleneck-contrast-balanced-rca",
             "source-bottleneck-specificity-rca",
+            "source-bottleneck-trained-specificity-rca",
             "interventional-fused-source-rca",
             "interventional-consensus-source-rca",
             "interventional-context-source-rca",
@@ -2578,6 +2579,10 @@ def main():
         rca_event_specificity_top_k=1,
         rca_event_specificity_threshold=0.35,
         rca_event_specificity_min_events=20,
+    )
+    arch_profiles["source-bottleneck-trained-specificity-rca"] = dict(
+        arch_profiles["source-bottleneck-specificity-rca"],
+        source_bottleneck_specificity_weight=0.25,
     )
     arch_profiles["interventional-fused-source-rca"] = dict(
         arch_profiles["interventional-graph-source-rca"],

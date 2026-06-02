@@ -127,6 +127,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "source_bottleneck_bce_weight": 1.0,
     "source_bottleneck_rank_weight": 0.5,
     "source_bottleneck_effect_suppress_weight": 0.5,
+    "source_bottleneck_specificity_weight": 0.0,
     "use_channel_masked_modeling": False,
     "lambda_channel_masked": 0.0,
     "channel_mask_interval": 8,
@@ -1764,6 +1765,9 @@ class LaGraph:
         effect_suppress_weight = float(
             getattr(self.config, "source_bottleneck_effect_suppress_weight", 0.5) or 0.5
         )
+        specificity_weight = float(
+            getattr(self.config, "source_bottleneck_specificity_weight", 0.0) or 0.0
+        )
 
         gate_prob = gate_prob.clamp(1e-5, 1.0 - 1e-5)
         event_focus = event_mask.unsqueeze(-1).to(dtype=gate_prob.dtype)
@@ -1785,15 +1789,25 @@ class LaGraph:
             bce = (bce * focus).sum() / focus.sum().clamp_min(1.0)
             total = total + bce_weight * bce
 
-        if rank_weight > 0:
+        onset_gate_scores = None
+        if rank_weight > 0 or specificity_weight > 0:
             onset_sum = source_onset_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
             onset_gate_scores = (
                 gate_prob * source_onset_mask.unsqueeze(-1).to(dtype=gate_prob.dtype)
             ).sum(dim=1) / onset_sum
+        if rank_weight > 0 and onset_gate_scores is not None:
             total = total + rank_weight * self._synthetic_rca_ranking_loss(
                 onset_gate_scores,
                 source_mask,
             )
+
+        if specificity_weight > 0 and onset_gate_scores is not None and onset_gate_scores.shape[0] > 1:
+            pred_freq = onset_gate_scores.mean(dim=0)
+            target_freq = source_mask.to(dtype=gate_prob.dtype).mean(dim=0)
+            pred_dist = pred_freq / pred_freq.sum().clamp_min(1e-6)
+            target_dist = target_freq / target_freq.sum().clamp_min(1e-6)
+            specificity_loss = F.mse_loss(pred_dist, target_dist, reduction="sum")
+            total = total + specificity_weight * specificity_loss
 
         if effect_suppress_weight > 0 and effect_mask.sum() > 0 and effect_time_mask.sum() > 0:
             effect_sum = effect_time_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
@@ -5272,6 +5286,10 @@ class LaGraph:
             "source_bottleneck_effect_suppress_weight": _cfg_float(
                 "source_bottleneck_effect_suppress_weight",
                 0.5,
+            ),
+            "source_bottleneck_specificity_weight": _cfg_float(
+                "source_bottleneck_specificity_weight",
+                0.0,
             ),
             "feature_names": feature_names,
             "events": events,
