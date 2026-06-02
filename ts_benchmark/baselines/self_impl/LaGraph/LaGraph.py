@@ -271,6 +271,10 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_align_event_onset_baseline_window": 300,
     "rca_align_event_onset_z": 2.0,
     "rca_align_event_onset_quantile": 0.90,
+    "rca_event_specificity_weight": 0.0,
+    "rca_event_specificity_top_k": 1,
+    "rca_event_specificity_threshold": 0.35,
+    "rca_event_specificity_min_events": 20,
     # --- v11.4 P0-2: POT 阈值参数 ---
     "pot_risk": 1e-4,            # POT EVT 风险水平
     "pot_num_quantiles": 1000,   # POT 分位数数量
@@ -4527,6 +4531,85 @@ class LaGraph:
             )
         return events
 
+    def _apply_rca_event_specificity_suppression(
+        self,
+        events,
+        weight=0.0,
+        top_k=1,
+        threshold=0.35,
+        min_events=20,
+    ):
+        """Down-rank channels that behave like generic responders across many predicted events."""
+        weight = float(weight or 0.0)
+        if weight <= 0.0 or not events:
+            return events
+        top_k = max(1, int(top_k or 1))
+        min_events = max(1, int(min_events or 1))
+        valid_events = [event for event in events if event.get("channel_ranking")]
+        if len(valid_events) < min_events:
+            return events
+
+        top_counts = {}
+        for event in valid_events:
+            seen = set()
+            for item in event.get("channel_ranking", [])[:top_k]:
+                name = item.get("name")
+                if not name or name in seen:
+                    continue
+                top_counts[name] = top_counts.get(name, 0) + 1
+                seen.add(name)
+        if not top_counts:
+            return events
+
+        total_events = float(len(valid_events))
+        max_rate = max(top_counts.values()) / total_events
+        threshold = float(threshold if threshold is not None else 0.0)
+        if max_rate < threshold:
+            return events
+
+        for event in events:
+            ranking = event.get("channel_ranking", [])
+            if not ranking:
+                continue
+            raw_scores = np.asarray(
+                [float(item.get("score", 0.0)) for item in ranking],
+                dtype=np.float64,
+            )
+            if raw_scores.size and float(raw_scores.max() - raw_scores.min()) > 1e-12:
+                base_scores = (raw_scores - raw_scores.min()) / (raw_scores.max() - raw_scores.min())
+            else:
+                base_scores = np.zeros_like(raw_scores, dtype=np.float64)
+
+            adjusted_items = []
+            for idx, item in enumerate(ranking):
+                name = item.get("name", "")
+                nuisance_rate = float(top_counts.get(name, 0)) / total_events
+                nuisance_penalty = weight * nuisance_rate
+                specificity_score = float(base_scores[idx]) - nuisance_penalty
+                new_item = dict(item)
+                new_item.setdefault("raw_rank", int(item.get("rank", idx + 1)))
+                new_item.setdefault("raw_score", float(item.get("score", 0.0)))
+                new_item["specificity_base_score"] = float(base_scores[idx])
+                new_item["specificity_adjusted_score"] = specificity_score
+                new_item["nuisance_rate"] = nuisance_rate
+                new_item["nuisance_penalty"] = nuisance_penalty
+                new_item["score"] = specificity_score
+                adjusted_items.append(new_item)
+
+            adjusted_items = sorted(
+                adjusted_items,
+                key=lambda item: float(item.get("specificity_adjusted_score", item.get("score", 0.0))),
+                reverse=True,
+            )
+            for rank, item in enumerate(adjusted_items, start=1):
+                item["rank"] = int(rank)
+            event["channel_ranking"] = adjusted_items
+            event["top_channels"] = adjusted_items[:20]
+            event["event_specificity_applied"] = True
+            event["event_specificity_top_k"] = int(top_k)
+            event["event_specificity_max_rate"] = float(max_rate)
+        return events
+
     @staticmethod
     def _rca_event_score_bounds(start, end, event_head_ratio=1.0, event_head_points=0):
         length = max(0, int(end) - int(start))
@@ -4704,6 +4787,10 @@ class LaGraph:
         hierarchical_group_aggregation = str(
             getattr(self.config, "rca_hierarchical_group_aggregation", "max") or "max"
         )
+        event_specificity_weight = _cfg_float("rca_event_specificity_weight", 0.0)
+        event_specificity_top_k = _cfg_int("rca_event_specificity_top_k", 1)
+        event_specificity_threshold = _cfg_float("rca_event_specificity_threshold", 0.35)
+        event_specificity_min_events = _cfg_int("rca_event_specificity_min_events", 20)
         export_lite = bool(getattr(self.config, "rca_export_lite", False))
         export_top_k = int(getattr(self.config, "rca_export_top_k", 20) or 20)
         max_channel_ranking = export_top_k if export_lite else None
@@ -5020,6 +5107,16 @@ class LaGraph:
                 hierarchical_outside_penalty=hierarchical_outside_penalty,
                 hierarchical_group_aggregation=hierarchical_group_aggregation,
             )
+        if event_specificity_weight > 0.0 and predicted_events_by_key:
+            for key_name, key_events in list(predicted_events_by_key.items()):
+                predicted_events_by_key[key_name] = self._apply_rca_event_specificity_suppression(
+                    key_events,
+                    weight=event_specificity_weight,
+                    top_k=event_specificity_top_k,
+                    threshold=event_specificity_threshold,
+                    min_events=event_specificity_min_events,
+                )
+
         predicted_events = predicted_events_by_key.get(pred_key, [])
         if not predicted_events and pred_mask is not None:
             predicted_events = self._build_rca_events(
@@ -5075,6 +5172,14 @@ class LaGraph:
                 hierarchical_outside_penalty=hierarchical_outside_penalty,
                 hierarchical_group_aggregation=hierarchical_group_aggregation,
             )
+            if event_specificity_weight > 0.0:
+                predicted_events = self._apply_rca_event_specificity_suppression(
+                    predicted_events,
+                    weight=event_specificity_weight,
+                    top_k=event_specificity_top_k,
+                    threshold=event_specificity_threshold,
+                    min_events=event_specificity_min_events,
+                )
 
         from datetime import datetime
         from ts_benchmark.common.constant import ROOT_PATH
@@ -5136,6 +5241,10 @@ class LaGraph:
             "rca_hierarchical_group_boost": hierarchical_group_boost,
             "rca_hierarchical_outside_penalty": hierarchical_outside_penalty,
             "rca_hierarchical_group_aggregation": hierarchical_group_aggregation,
+            "rca_event_specificity_weight": event_specificity_weight,
+            "rca_event_specificity_top_k": event_specificity_top_k,
+            "rca_event_specificity_threshold": event_specificity_threshold,
+            "rca_event_specificity_min_events": event_specificity_min_events,
             "rca_event_head_ratio": event_head_ratio,
             "rca_event_head_points": event_head_points,
             "rca_align_event_onset": bool(getattr(self.config, "rca_align_event_onset", False)),
