@@ -194,6 +194,7 @@ def main():
             "source-innovation-rca",
             "temporal-innovation-rca",
             "source-bottleneck-rca",
+            "source-bottleneck-balanced-rca",
             "interventional-fused-source-rca",
             "interventional-consensus-source-rca",
             "interventional-context-source-rca",
@@ -2517,6 +2518,16 @@ def main():
         rca_source_gate_weight=0.35,
         rca_source_interaction_weight=2.0,
         rca_onset_weight=0.85,
+        rca_source_innovation_weight=0.0,
+    )
+    arch_profiles["source-bottleneck-balanced-rca"] = dict(
+        arch_profiles["source-bottleneck-rca"],
+        rca_source_base_weight=1.0,
+        rca_source_score_weight=0.0,
+        rca_source_gate_weight=0.50,
+        rca_onset_weight=0.75,
+        rca_source_interaction_weight=1.0,
+        rca_graph_penalty_weight=0.05,
         rca_source_innovation_weight=0.0,
     )
     arch_profiles["interventional-fused-source-rca"] = dict(

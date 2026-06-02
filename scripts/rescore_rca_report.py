@@ -15,11 +15,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rca", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--base-weight", type=float, default=0.25)
+    parser.add_argument("--source-score-weight", type=float, default=0.0)
+    parser.add_argument("--source-gate-weight", type=float, default=0.0)
     parser.add_argument("--mechanism-weight", type=float, default=0.10)
+    parser.add_argument("--mechanism-residual-weight", type=float, default=0.0)
+    parser.add_argument("--causal-weight", type=float, default=0.0)
+    parser.add_argument("--synthetic-weight", type=float, default=0.0)
+    parser.add_argument("--counterfactual-weight", type=float, default=0.0)
     parser.add_argument("--onset-weight", type=float, default=0.50)
     parser.add_argument("--source-interaction-weight", type=float, default=2.0)
     parser.add_argument("--graph-penalty-weight", type=float, default=0.10)
     parser.add_argument("--hierarchy-boost", type=float, default=0.20)
+    parser.add_argument("--compact-json", action="store_true")
     return parser.parse_args()
 
 
@@ -46,13 +53,24 @@ def rescore_event(event: dict, args: argparse.Namespace) -> dict:
     base = normalize([float(item.get("base_score", item.get("score", 0.0))) for item in items])
     graph = normalize([float(item.get("graph_score", 0.0)) for item in items])
     mechanism = normalize([float(item.get("mechanism_score", 0.0)) for item in items])
+    source_score = normalize([float(item.get("source_score", 0.0)) for item in items])
+    source_gate = normalize([float(item.get("source_gate_score", 0.0)) for item in items])
     onset = normalize([float(item.get("onset_score", 0.0)) for item in items])
     mechanism_residual = normalize([float(item.get("mechanism_residual_score", 0.0)) for item in items])
+    causal = normalize([float(item.get("causal_score", 0.0)) for item in items])
+    synthetic = normalize([float(item.get("synthetic_rca_score", 0.0)) for item in items])
+    counterfactual = normalize([float(item.get("counterfactual_score", 0.0)) for item in items])
     source_evidence = np.maximum(onset, mechanism_residual)
 
     scores = (
         args.base_weight * base
+        + args.source_score_weight * source_score
+        + args.source_gate_weight * source_gate
         + args.mechanism_weight * mechanism
+        + args.mechanism_residual_weight * mechanism_residual
+        + args.causal_weight * causal
+        + args.synthetic_weight * synthetic
+        + args.counterfactual_weight * counterfactual
         + args.onset_weight * onset
         + args.source_interaction_weight * base * source_evidence
         - args.graph_penalty_weight * graph
@@ -83,6 +101,8 @@ def rescore_event(event: dict, args: argparse.Namespace) -> dict:
         item["hierarchical_score"] = float(score + args.hierarchy_boost * group_norm.get(group, 0.0))
 
     items = sorted(items, key=lambda item: float(item.get("hierarchical_score", item.get("score", 0.0))), reverse=True)
+    for rank, item in enumerate(items, start=1):
+        item["rank"] = rank
     by_group: dict[str, list[dict]] = {}
     for item in items:
         by_group.setdefault(group_name(item), []).append(item)
@@ -114,12 +134,18 @@ def main() -> None:
         report = json.load(f)
 
     report["score_method"] = (
-        "rescored mechanism-calibrated RCA: normalized base residual + weak mechanism deviation "
+        "rescored RCA: normalized base/source/gate/mechanism/causal evidence "
         "+ onset evidence + base*source-evidence interaction - graph propagation penalty + soft hierarchy"
     )
     report["rescore_params"] = {
         "base_weight": args.base_weight,
+        "source_score_weight": args.source_score_weight,
+        "source_gate_weight": args.source_gate_weight,
         "mechanism_weight": args.mechanism_weight,
+        "mechanism_residual_weight": args.mechanism_residual_weight,
+        "causal_weight": args.causal_weight,
+        "synthetic_weight": args.synthetic_weight,
+        "counterfactual_weight": args.counterfactual_weight,
         "onset_weight": args.onset_weight,
         "source_interaction_weight": args.source_interaction_weight,
         "graph_penalty_weight": args.graph_penalty_weight,
@@ -132,7 +158,10 @@ def main() -> None:
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with open(args.output, "w", encoding="utf-8") as f:
-        json.dump(report, f, ensure_ascii=False, indent=2)
+        if args.compact_json:
+            json.dump(report, f, ensure_ascii=False, separators=(",", ":"))
+        else:
+            json.dump(report, f, ensure_ascii=False, indent=2)
     print(args.output)
 
 
