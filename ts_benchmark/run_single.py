@@ -192,6 +192,7 @@ def main():
             "source-propagation-trained-rca",
             "source-propagation-prior-rca",
             "source-innovation-rca",
+            "temporal-innovation-rca",
             "interventional-fused-source-rca",
             "interventional-consensus-source-rca",
             "interventional-context-source-rca",
@@ -686,10 +687,22 @@ def main():
         help="Weight for normal-prior-unexplained residual inside the RCA source score.",
     )
     parser.add_argument(
+        "--rca-source-innovation-mode",
+        choices=["series", "onset_directional", "directional_onset", "temporal"],
+        default=None,
+        help="How to compute source innovation in exported RCA rankings.",
+    )
+    parser.add_argument(
         "--rca-source-innovation-neighbor-weight",
         type=float,
         default=None,
         help="Neighbor support strength subtracted when computing source innovation.",
+    )
+    parser.add_argument(
+        "--rca-source-innovation-lead-points",
+        type=int,
+        default=None,
+        help="Minimum event-local lead for neighbors to explain a variable in directional source innovation.",
     )
     parser.add_argument(
         "--rca-causal-weight",
@@ -2456,6 +2469,13 @@ def main():
         rca_source_innovation_weight=0.25,
         rca_source_innovation_neighbor_weight=1.0,
     )
+    arch_profiles["temporal-innovation-rca"] = dict(
+        arch_profiles["source-propagation-prior-rca"],
+        rca_source_innovation_weight=0.15,
+        rca_source_innovation_mode="onset_directional",
+        rca_source_innovation_neighbor_weight=0.50,
+        rca_source_innovation_lead_points=1,
+    )
     arch_profiles["interventional-fused-source-rca"] = dict(
         arch_profiles["interventional-graph-source-rca"],
         rca_source_weight=1.0,
@@ -2674,9 +2694,15 @@ def main():
         score_hyper_params["rca_source_innovation_weight"] = max(
             0.0, float(args.rca_source_innovation_weight)
         )
+    if args.rca_source_innovation_mode is not None:
+        score_hyper_params["rca_source_innovation_mode"] = args.rca_source_innovation_mode
     if args.rca_source_innovation_neighbor_weight is not None:
         score_hyper_params["rca_source_innovation_neighbor_weight"] = max(
             0.0, float(args.rca_source_innovation_neighbor_weight)
+        )
+    if args.rca_source_innovation_lead_points is not None:
+        score_hyper_params["rca_source_innovation_lead_points"] = max(
+            0, int(args.rca_source_innovation_lead_points)
         )
     if args.rca_causal_weight is not None:
         score_hyper_params["rca_causal_weight"] = max(0.0, float(args.rca_causal_weight))

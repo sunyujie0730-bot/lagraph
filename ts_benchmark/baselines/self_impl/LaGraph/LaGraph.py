@@ -236,7 +236,9 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_source_gate_weight": 0.0,
     "rca_source_interaction_weight": 0.0,
     "rca_source_innovation_weight": 0.0,
+    "rca_source_innovation_mode": "series",
     "rca_source_innovation_neighbor_weight": 1.0,
+    "rca_source_innovation_lead_points": 1,
     "rca_mechanism_guided_source_weight": 0.0,
     "rca_counterfactual_weight": 0.0,
     "rca_counterfactual_candidates": 12,
@@ -1229,8 +1231,12 @@ class LaGraph:
                 "rca_causal_weight": getattr(self.config, "rca_causal_weight", None),
                 "rca_mechanism_guided_source_weight": getattr(self.config, "rca_mechanism_guided_source_weight", None),
                 "rca_source_innovation_weight": getattr(self.config, "rca_source_innovation_weight", None),
+                "rca_source_innovation_mode": getattr(self.config, "rca_source_innovation_mode", None),
                 "rca_source_innovation_neighbor_weight": getattr(
                     self.config, "rca_source_innovation_neighbor_weight", None
+                ),
+                "rca_source_innovation_lead_points": getattr(
+                    self.config, "rca_source_innovation_lead_points", None
                 ),
                 "rca_onset_weight": getattr(self.config, "rca_onset_weight", None),
                 "rca_onset_baseline_window": getattr(self.config, "rca_onset_baseline_window", None),
@@ -2875,8 +2881,12 @@ class LaGraph:
                 "lambda_source_effect": getattr(self.config, "lambda_source_effect", None),
                 "source_effect_interval": getattr(self.config, "source_effect_interval", None),
                 "rca_source_innovation_weight": getattr(self.config, "rca_source_innovation_weight", None),
+                "rca_source_innovation_mode": getattr(self.config, "rca_source_innovation_mode", None),
                 "rca_source_innovation_neighbor_weight": getattr(
                     self.config, "rca_source_innovation_neighbor_weight", None
+                ),
+                "rca_source_innovation_lead_points": getattr(
+                    self.config, "rca_source_innovation_lead_points", None
                 ),
                 "use_synthetic_score": getattr(self.config, "use_synthetic_score", None),
                 "synthetic_score_weight": getattr(self.config, "synthetic_score_weight", None),
@@ -3896,20 +3906,34 @@ class LaGraph:
         return deduped
 
     @staticmethod
-    def _event_onset_scores(score_matrix, start, end, baseline_window=200, onset_z=2.0):
-        """Score variables that cross their normal local baseline earlier within an event."""
+    def _event_onset_profile(score_matrix, start, end, baseline_window=200, onset_z=2.0):
+        """Return onset strength, first crossing index, and crossing mask for one event."""
         if score_matrix is None or end <= start or start <= 0:
             width = score_matrix.shape[1] if score_matrix is not None and score_matrix.ndim == 2 else 0
-            return np.zeros(width, dtype=np.float32)
+            return (
+                np.zeros(width, dtype=np.float32),
+                np.full(width, np.inf, dtype=np.float32),
+                np.zeros(width, dtype=bool),
+            )
 
         event_scores = score_matrix[start:end]
         if event_scores.size == 0:
-            return np.zeros(score_matrix.shape[1], dtype=np.float32)
+            width = score_matrix.shape[1]
+            return (
+                np.zeros(width, dtype=np.float32),
+                np.full(width, np.inf, dtype=np.float32),
+                np.zeros(width, dtype=bool),
+            )
 
         baseline_start = max(0, start - max(1, int(baseline_window)))
         baseline_scores = score_matrix[baseline_start:start]
         if baseline_scores.size == 0:
-            return np.zeros(score_matrix.shape[1], dtype=np.float32)
+            width = score_matrix.shape[1]
+            return (
+                np.zeros(width, dtype=np.float32),
+                np.full(width, np.inf, dtype=np.float32),
+                np.zeros(width, dtype=bool),
+            )
 
         center = np.median(baseline_scores, axis=0)
         mad = 1.4826 * np.median(np.abs(baseline_scores - center), axis=0)
@@ -3925,7 +3949,21 @@ class LaGraph:
         early_factor = np.where(has_onset, 1.0 - (first_idx / float(length)), 0.0)
         peak_delta = np.maximum(event_scores.max(axis=0) - center, 0.0) / scale
         onset_scores = np.where(has_onset, early_factor * np.log1p(peak_delta), 0.0)
-        return np.nan_to_num(onset_scores, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+        onset_scores = np.nan_to_num(onset_scores, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+        first_idx = np.where(has_onset, first_idx.astype(np.float32), np.inf).astype(np.float32)
+        return onset_scores, first_idx, has_onset
+
+    @staticmethod
+    def _event_onset_scores(score_matrix, start, end, baseline_window=200, onset_z=2.0):
+        """Score variables that cross their normal local baseline earlier within an event."""
+        onset_scores, _, _ = LaGraph._event_onset_profile(
+            score_matrix,
+            start,
+            end,
+            baseline_window=baseline_window,
+            onset_z=onset_z,
+        )
+        return onset_scores
 
     @staticmethod
     def _normalize_event_component(values):
@@ -3947,7 +3985,7 @@ class LaGraph:
         scores = np.asarray(base_scores, dtype=np.float32)
         if scores.ndim != 2 or scores.size == 0:
             return np.zeros_like(scores, dtype=np.float32)
-        prior_arr = np.asarray(prior, dtype=np.float32) if prior is not None else None
+        prior_arr = np.array(prior, dtype=np.float32, copy=True) if prior is not None else None
         if prior_arr is None or prior_arr.shape != (scores.shape[1], scores.shape[1]):
             return np.zeros_like(scores, dtype=np.float32)
         prior_arr = np.nan_to_num(prior_arr, nan=0.0, posinf=0.0, neginf=0.0)
@@ -3961,6 +3999,68 @@ class LaGraph:
         )
         support = scores @ prior_arr.T
         innovation = scores - max(float(neighbor_weight), 0.0) * support
+        return np.nan_to_num(
+            np.maximum(innovation, 0.0),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        ).astype(np.float32)
+
+    @staticmethod
+    def _event_directional_source_innovation_scores(
+        score_matrix,
+        prior,
+        start,
+        end,
+        baseline_window=200,
+        onset_z=2.0,
+        neighbor_weight=1.0,
+        lead_points=1,
+    ):
+        """Onset residual unexplained by normal-prior neighbors that become abnormal earlier."""
+        if score_matrix is None or prior is None:
+            width = score_matrix.shape[1] if score_matrix is not None and getattr(score_matrix, "ndim", 0) == 2 else 0
+            return np.zeros(width, dtype=np.float32)
+        scores = np.asarray(score_matrix, dtype=np.float32)
+        if scores.ndim != 2 or scores.size == 0:
+            return np.zeros(scores.shape[1] if scores.ndim == 2 else 0, dtype=np.float32)
+        prior_arr = np.array(prior, dtype=np.float32, copy=True)
+        if prior_arr.shape != (scores.shape[1], scores.shape[1]):
+            return np.zeros(scores.shape[1], dtype=np.float32)
+
+        onset_scores, first_idx, has_onset = LaGraph._event_onset_profile(
+            scores,
+            start,
+            end,
+            baseline_window=baseline_window,
+            onset_z=onset_z,
+        )
+        if onset_scores.size == 0:
+            return onset_scores
+
+        prior_arr = np.nan_to_num(prior_arr, nan=0.0, posinf=0.0, neginf=0.0)
+        np.fill_diagonal(prior_arr, 0.0)
+        row_sum = prior_arr.sum(axis=1, keepdims=True)
+        prior_arr = np.divide(
+            prior_arr,
+            row_sum,
+            out=np.zeros_like(prior_arr, dtype=np.float32),
+            where=row_sum > 1e-8,
+        )
+
+        lead = max(0, int(lead_points))
+        earlier = (first_idx[None, :] + float(lead)) <= first_idx[:, None]
+        earlier = earlier & has_onset[None, :] & has_onset[:, None]
+        directional_prior = prior_arr * earlier.astype(np.float32)
+        support_sum = directional_prior.sum(axis=1, keepdims=True)
+        directional_prior = np.divide(
+            directional_prior,
+            support_sum,
+            out=np.zeros_like(directional_prior, dtype=np.float32),
+            where=support_sum > 1e-8,
+        )
+        predecessor_support = directional_prior @ onset_scores
+        innovation = onset_scores - max(float(neighbor_weight), 0.0) * predecessor_support
         return np.nan_to_num(
             np.maximum(innovation, 0.0),
             nan=0.0,
@@ -4006,6 +4106,9 @@ class LaGraph:
         source_gate_weight=0.0,
         source_interaction_weight=0.0,
         source_innovation_weight=0.0,
+        source_innovation_mode="series",
+        source_innovation_neighbor_weight=1.0,
+        source_innovation_lead_points=1,
         mechanism_guided_source_weight=0.0,
         counterfactual_weight=0.0,
         onset_weight=0.0,
@@ -4059,11 +4162,26 @@ class LaGraph:
                 if source_gate_channel_scores is not None
                 else np.zeros_like(event_raw_scores)
             )
+            onset_source_scores = source_channel_scores if source_channel_scores is not None else base_channel_scores
             event_source_innovation_scores = (
                 source_innovation_channel_scores[score_start:score_end].mean(axis=0)
                 if source_innovation_channel_scores is not None
                 else np.zeros_like(event_raw_scores)
             )
+            if (
+                source_innovation_weight > 0.0
+                and str(source_innovation_mode or "series").lower() in {"onset_directional", "directional_onset", "temporal"}
+            ):
+                event_source_innovation_scores = self._event_directional_source_innovation_scores(
+                    onset_source_scores,
+                    getattr(self, "_channel_corr_prior", None),
+                    start,
+                    end,
+                    baseline_window=onset_baseline_window,
+                    onset_z=onset_z,
+                    neighbor_weight=source_innovation_neighbor_weight,
+                    lead_points=source_innovation_lead_points,
+                )
             event_synthetic_scores = (
                 synthetic_channel_scores[score_start:score_end].mean(axis=0)
                 if synthetic_channel_scores is not None
@@ -4074,7 +4192,6 @@ class LaGraph:
                 if counterfactual_channel_scores is not None
                 else np.zeros_like(event_raw_scores)
             )
-            onset_source_scores = source_channel_scores if source_channel_scores is not None else base_channel_scores
             event_onset_scores = np.zeros_like(event_raw_scores)
             if onset_weight > 0.0:
                 event_onset_scores = self._event_onset_scores(
@@ -4421,7 +4538,11 @@ class LaGraph:
         source_gate_weight = _cfg_float("rca_source_gate_weight", 0.0)
         source_interaction_weight = _cfg_float("rca_source_interaction_weight", 0.0)
         source_innovation_weight = _cfg_float("rca_source_innovation_weight", 0.0)
+        source_innovation_mode = str(
+            getattr(self.config, "rca_source_innovation_mode", "series") or "series"
+        ).lower()
         source_innovation_neighbor_weight = _cfg_float("rca_source_innovation_neighbor_weight", 1.0)
+        source_innovation_lead_points = _cfg_int("rca_source_innovation_lead_points", 1)
         mechanism_guided_source_weight = _cfg_float("rca_mechanism_guided_source_weight", 0.0)
         counterfactual_weight = _cfg_float("rca_counterfactual_weight", 0.0)
         contrast_window = _cfg_int("rca_contrast_window", 0)
@@ -4449,7 +4570,8 @@ class LaGraph:
         propagation_channel_scores = None
         source_innovation_channel_scores = None
         counterfactual_channel_scores = None
-        if source_innovation_weight > 0.0:
+        directional_innovation_modes = {"onset_directional", "directional_onset", "temporal"}
+        if source_innovation_weight > 0.0 and source_innovation_mode not in directional_innovation_modes:
             source_innovation_channel_scores = self._source_innovation_scores(
                 base_channel_scores,
                 getattr(self, "_channel_corr_prior", None),
@@ -4556,6 +4678,9 @@ class LaGraph:
             source_gate_weight=source_gate_weight,
             source_interaction_weight=source_interaction_weight,
             source_innovation_weight=source_innovation_weight,
+            source_innovation_mode=source_innovation_mode,
+            source_innovation_neighbor_weight=source_innovation_neighbor_weight,
+            source_innovation_lead_points=source_innovation_lead_points,
             mechanism_guided_source_weight=mechanism_guided_source_weight,
             counterfactual_weight=counterfactual_weight,
             onset_weight=onset_weight,
@@ -4620,6 +4745,9 @@ class LaGraph:
                     source_gate_weight=source_gate_weight,
                     source_interaction_weight=source_interaction_weight,
                     source_innovation_weight=source_innovation_weight,
+                    source_innovation_mode=source_innovation_mode,
+                    source_innovation_neighbor_weight=source_innovation_neighbor_weight,
+                    source_innovation_lead_points=source_innovation_lead_points,
                     mechanism_guided_source_weight=mechanism_guided_source_weight,
                     counterfactual_weight=counterfactual_weight,
                     onset_weight=onset_weight,
@@ -4677,6 +4805,9 @@ class LaGraph:
                     source_gate_weight=source_gate_weight,
                     source_interaction_weight=source_interaction_weight,
                     source_innovation_weight=source_innovation_weight,
+                    source_innovation_mode=source_innovation_mode,
+                    source_innovation_neighbor_weight=source_innovation_neighbor_weight,
+                    source_innovation_lead_points=source_innovation_lead_points,
                     mechanism_guided_source_weight=mechanism_guided_source_weight,
                     counterfactual_weight=counterfactual_weight,
                     onset_weight=onset_weight,
@@ -4732,6 +4863,9 @@ class LaGraph:
                 source_gate_weight=source_gate_weight,
                 source_interaction_weight=source_interaction_weight,
                 source_innovation_weight=source_innovation_weight,
+                source_innovation_mode=source_innovation_mode,
+                source_innovation_neighbor_weight=source_innovation_neighbor_weight,
+                source_innovation_lead_points=source_innovation_lead_points,
                 mechanism_guided_source_weight=mechanism_guided_source_weight,
                 counterfactual_weight=counterfactual_weight,
                 onset_weight=onset_weight,
@@ -4784,6 +4918,9 @@ class LaGraph:
                 source_gate_weight=source_gate_weight,
                 source_interaction_weight=source_interaction_weight,
                 source_innovation_weight=source_innovation_weight,
+                source_innovation_mode=source_innovation_mode,
+                source_innovation_neighbor_weight=source_innovation_neighbor_weight,
+                source_innovation_lead_points=source_innovation_lead_points,
                 mechanism_guided_source_weight=mechanism_guided_source_weight,
                 counterfactual_weight=counterfactual_weight,
                 onset_weight=onset_weight,
@@ -4836,7 +4973,9 @@ class LaGraph:
             "rca_source_gate_weight": source_gate_weight,
             "rca_source_interaction_weight": source_interaction_weight,
             "rca_source_innovation_weight": source_innovation_weight,
+            "rca_source_innovation_mode": source_innovation_mode,
             "rca_source_innovation_neighbor_weight": source_innovation_neighbor_weight,
+            "rca_source_innovation_lead_points": source_innovation_lead_points,
             "rca_mechanism_guided_source_weight": mechanism_guided_source_weight,
             "rca_counterfactual_weight": counterfactual_weight,
             "rca_counterfactual_candidates": _cfg_int("rca_counterfactual_candidates", 12),
