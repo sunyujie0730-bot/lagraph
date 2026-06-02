@@ -59,6 +59,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--component-onset-weight", type=float, default=0.0)
     parser.add_argument("--component-mechanism-residual-weight", type=float, default=0.0)
     parser.add_argument("--component-contrast-weight", type=float, default=0.0)
+    parser.add_argument("--component-source-interaction-weight", type=float, default=0.0)
+    parser.add_argument("--component-graph-penalty-weight", type=float, default=0.0)
+    parser.add_argument("--component-normalize", action="store_true")
     parser.add_argument(
         "--method-name",
         type=str,
@@ -174,6 +177,17 @@ def ranking_names(pred_event: dict, scope: str) -> list[str]:
     return names
 
 
+def normalize_component(values: list[float]) -> list[float]:
+    if not values:
+        return values
+    min_value = min(values)
+    max_value = max(values)
+    span = max_value - min_value
+    if span <= 1e-12:
+        return [0.0 for _ in values]
+    return [(value - min_value) / span for value in values]
+
+
 def component_ranking_names(
     pred_event: dict,
     scope: str,
@@ -188,46 +202,57 @@ def component_ranking_names(
     onset_weight: float,
     mechanism_residual_weight: float,
     contrast_weight: float,
+    source_interaction_weight: float,
+    graph_penalty_weight: float,
+    normalize_components: bool,
 ) -> list[str]:
     channel_items = pred_event.get("channel_ranking", [])
     if not channel_items:
         return ranking_names(pred_event, scope)
 
+    names = [item["name"] for item in channel_items]
+    components = {
+        "base": [float(item.get("base_score", item.get("score", 0.0))) for item in channel_items],
+        "source_score": [float(item.get("source_score", 0.0)) for item in channel_items],
+        "graph": [float(item.get("graph_score", 0.0)) for item in channel_items],
+        "mechanism": [float(item.get("mechanism_score", 0.0)) for item in channel_items],
+        "causal": [float(item.get("causal_score", 0.0)) for item in channel_items],
+        "source_gate": [float(item.get("source_gate_score", 0.0)) for item in channel_items],
+        "synthetic": [float(item.get("synthetic_rca_score", 0.0)) for item in channel_items],
+        "counterfactual": [float(item.get("counterfactual_score", 0.0)) for item in channel_items],
+        "onset": [float(item.get("onset_score", 0.0)) for item in channel_items],
+        "mechanism_residual": [float(item.get("mechanism_residual_score", 0.0)) for item in channel_items],
+        "contrast": [float(item.get("contrast_score", 0.0)) for item in channel_items],
+    }
+    if normalize_components:
+        components = {key: normalize_component(values) for key, values in components.items()}
+
+    scored = []
+    for idx, name in enumerate(names):
+        source_evidence = max(components["onset"][idx], components["mechanism_residual"][idx])
+        score = (
+            base_weight * components["base"][idx]
+            + source_score_weight * components["source_score"][idx]
+            + graph_weight * components["graph"][idx]
+            + mechanism_weight * components["mechanism"][idx]
+            + causal_weight * components["causal"][idx]
+            + source_gate_weight * components["source_gate"][idx]
+            + synthetic_weight * components["synthetic"][idx]
+            + counterfactual_weight * components["counterfactual"][idx]
+            + onset_weight * components["onset"][idx]
+            + mechanism_residual_weight * components["mechanism_residual"][idx]
+            + contrast_weight * components["contrast"][idx]
+            + source_interaction_weight * components["base"][idx] * source_evidence
+            - graph_penalty_weight * components["graph"][idx]
+        )
+        scored.append((name, score))
+
     if scope == "channel":
-        scored = []
-        for item in channel_items:
-            score = (
-                base_weight * float(item.get("base_score", item.get("score", 0.0)))
-                + source_score_weight * float(item.get("source_score", 0.0))
-                + graph_weight * float(item.get("graph_score", 0.0))
-                + mechanism_weight * float(item.get("mechanism_score", 0.0))
-                + causal_weight * float(item.get("causal_score", 0.0))
-                + source_gate_weight * float(item.get("source_gate_score", 0.0))
-                + synthetic_weight * float(item.get("synthetic_rca_score", 0.0))
-                + counterfactual_weight * float(item.get("counterfactual_score", 0.0))
-                + onset_weight * float(item.get("onset_score", 0.0))
-                + mechanism_residual_weight * float(item.get("mechanism_residual_score", 0.0))
-                + contrast_weight * float(item.get("contrast_score", 0.0))
-            )
-            scored.append((item["name"], score))
         return [name for name, _ in sorted(scored, key=lambda item: item[1], reverse=True)]
 
     group_scores = {}
-    for item in channel_items:
-        group = root_cause_group_name(item["name"])
-        score = (
-            base_weight * float(item.get("base_score", item.get("score", 0.0)))
-            + source_score_weight * float(item.get("source_score", 0.0))
-            + graph_weight * float(item.get("graph_score", 0.0))
-            + mechanism_weight * float(item.get("mechanism_score", 0.0))
-            + causal_weight * float(item.get("causal_score", 0.0))
-            + source_gate_weight * float(item.get("source_gate_score", 0.0))
-            + synthetic_weight * float(item.get("synthetic_rca_score", 0.0))
-            + counterfactual_weight * float(item.get("counterfactual_score", 0.0))
-            + onset_weight * float(item.get("onset_score", 0.0))
-            + mechanism_residual_weight * float(item.get("mechanism_residual_score", 0.0))
-            + contrast_weight * float(item.get("contrast_score", 0.0))
-        )
+    for name, score in scored:
+        group = root_cause_group_name(name)
         group_scores[group] = max(group_scores.get(group, float("-inf")), score)
     return [
         name
@@ -311,6 +336,9 @@ def ranking_for_event(pred_event: dict | None, args: argparse.Namespace) -> list
             args.component_onset_weight,
             args.component_mechanism_residual_weight,
             args.component_contrast_weight,
+            args.component_source_interaction_weight,
+            args.component_graph_penalty_weight,
+            args.component_normalize,
         )
     return ranking_names(pred_event, args.scope)
 
