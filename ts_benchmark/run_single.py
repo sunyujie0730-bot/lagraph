@@ -193,6 +193,7 @@ def main():
             "source-propagation-prior-rca",
             "source-innovation-rca",
             "temporal-innovation-rca",
+            "source-bottleneck-rca",
             "interventional-fused-source-rca",
             "interventional-consensus-source-rca",
             "interventional-context-source-rca",
@@ -496,6 +497,30 @@ def main():
         type=float,
         default=None,
         help="Override synthetic anomaly head score fusion weight",
+    )
+    parser.add_argument(
+        "--lambda-source-bottleneck",
+        type=float,
+        default=None,
+        help="Weight for source-gate temporal bottleneck supervision on synthetic source-effect events",
+    )
+    parser.add_argument(
+        "--source-bottleneck-bce-weight",
+        type=float,
+        default=None,
+        help="BCE term weight inside source-gate temporal bottleneck supervision",
+    )
+    parser.add_argument(
+        "--source-bottleneck-rank-weight",
+        type=float,
+        default=None,
+        help="Onset ranking term weight inside source-gate temporal bottleneck supervision",
+    )
+    parser.add_argument(
+        "--source-bottleneck-effect-suppress-weight",
+        type=float,
+        default=None,
+        help="Propagation-channel suppression weight inside source-gate temporal bottleneck supervision",
     )
     parser.add_argument(
         "--lambda-channel-masked",
@@ -2476,6 +2501,24 @@ def main():
         rca_source_innovation_neighbor_weight=0.50,
         rca_source_innovation_lead_points=1,
     )
+    arch_profiles["source-bottleneck-rca"] = dict(
+        arch_profiles["source-propagation-prior-rca"],
+        lambda_source_effect=0.04,
+        source_effect_interval=8,
+        source_effect_bce_weight=0.60,
+        source_effect_rank_weight=0.85,
+        source_effect_effect_rank_weight=0.90,
+        source_effect_onset_rank_weight=1.25,
+        lambda_source_bottleneck=0.025,
+        source_bottleneck_bce_weight=1.0,
+        source_bottleneck_rank_weight=0.75,
+        source_bottleneck_effect_suppress_weight=0.50,
+        rca_source_base_weight=0.40,
+        rca_source_gate_weight=0.35,
+        rca_source_interaction_weight=2.0,
+        rca_onset_weight=0.85,
+        rca_source_innovation_weight=0.0,
+    )
     arch_profiles["interventional-fused-source-rca"] = dict(
         arch_profiles["interventional-graph-source-rca"],
         rca_source_weight=1.0,
@@ -2645,6 +2688,20 @@ def main():
         score_hyper_params["synthetic_rca_rank_weight"] = max(0.0, float(args.synthetic_rca_rank_weight))
     if args.synthetic_score_weight is not None:
         score_hyper_params["synthetic_score_weight"] = max(0.0, args.synthetic_score_weight)
+    if args.lambda_source_bottleneck is not None:
+        score_hyper_params["lambda_source_bottleneck"] = max(0.0, float(args.lambda_source_bottleneck))
+    if args.source_bottleneck_bce_weight is not None:
+        score_hyper_params["source_bottleneck_bce_weight"] = max(
+            0.0, float(args.source_bottleneck_bce_weight)
+        )
+    if args.source_bottleneck_rank_weight is not None:
+        score_hyper_params["source_bottleneck_rank_weight"] = max(
+            0.0, float(args.source_bottleneck_rank_weight)
+        )
+    if args.source_bottleneck_effect_suppress_weight is not None:
+        score_hyper_params["source_bottleneck_effect_suppress_weight"] = max(
+            0.0, float(args.source_bottleneck_effect_suppress_weight)
+        )
     if args.lambda_channel_masked is not None:
         score_hyper_params["lambda_channel_masked"] = max(0.0, float(args.lambda_channel_masked))
         score_hyper_params["use_channel_masked_modeling"] = score_hyper_params["lambda_channel_masked"] > 0.0

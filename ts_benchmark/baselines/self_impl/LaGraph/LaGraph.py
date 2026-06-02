@@ -123,6 +123,10 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "source_effect_onset_rank_weight": 0.0,
     "source_effect_margin": 0.2,
     "source_effect_onset_margin": 0.2,
+    "lambda_source_bottleneck": 0.0,
+    "source_bottleneck_bce_weight": 1.0,
+    "source_bottleneck_rank_weight": 0.5,
+    "source_bottleneck_effect_suppress_weight": 0.5,
     "use_channel_masked_modeling": False,
     "lambda_channel_masked": 0.0,
     "channel_mask_interval": 8,
@@ -1147,6 +1151,16 @@ class LaGraph:
                 "source_effect_onset_rank_weight": getattr(
                     self.config, "source_effect_onset_rank_weight", None
                 ),
+                "lambda_source_bottleneck": getattr(self.config, "lambda_source_bottleneck", None),
+                "source_bottleneck_bce_weight": getattr(
+                    self.config, "source_bottleneck_bce_weight", None
+                ),
+                "source_bottleneck_rank_weight": getattr(
+                    self.config, "source_bottleneck_rank_weight", None
+                ),
+                "source_bottleneck_effect_suppress_weight": getattr(
+                    self.config, "source_bottleneck_effect_suppress_weight", None
+                ),
                 "use_channel_masked_modeling": getattr(self.config, "use_channel_masked_modeling", None),
                 "lambda_channel_masked": getattr(self.config, "lambda_channel_masked", None),
                 "channel_mask_interval": getattr(self.config, "channel_mask_interval", None),
@@ -1724,6 +1738,67 @@ class LaGraph:
         loss = -(pos_weight * target * torch.log(probs) + (1.0 - target) * torch.log(1.0 - probs))
         return loss.mean()
 
+    def _source_bottleneck_loss(
+        self,
+        gate_prob,
+        source_mask,
+        effect_mask,
+        source_onset_mask,
+        effect_time_mask,
+        event_mask,
+    ):
+        weight = float(getattr(self.config, "lambda_source_bottleneck", 0.0) or 0.0)
+        if weight <= 0 or gate_prob is None:
+            return source_mask.new_tensor(0.0)
+
+        bce_weight = float(getattr(self.config, "source_bottleneck_bce_weight", 1.0) or 1.0)
+        rank_weight = float(getattr(self.config, "source_bottleneck_rank_weight", 0.5) or 0.5)
+        effect_suppress_weight = float(
+            getattr(self.config, "source_bottleneck_effect_suppress_weight", 0.5) or 0.5
+        )
+
+        gate_prob = gate_prob.clamp(1e-5, 1.0 - 1e-5)
+        event_focus = event_mask.unsqueeze(-1).to(dtype=gate_prob.dtype)
+        source_target = (
+            source_onset_mask.unsqueeze(-1).to(dtype=gate_prob.dtype)
+            * source_mask.unsqueeze(1).to(dtype=gate_prob.dtype)
+        )
+
+        total = gate_prob.new_tensor(0.0)
+        if bce_weight > 0:
+            focus = event_focus.expand_as(gate_prob)
+            pos = (source_target * focus).sum().clamp_min(1.0)
+            neg = ((1.0 - source_target) * focus).sum().clamp_min(1.0)
+            pos_weight = (neg / pos).clamp(1.0, 20.0)
+            bce = -(
+                pos_weight * source_target * torch.log(gate_prob)
+                + (1.0 - source_target) * torch.log(1.0 - gate_prob)
+            )
+            bce = (bce * focus).sum() / focus.sum().clamp_min(1.0)
+            total = total + bce_weight * bce
+
+        if rank_weight > 0:
+            onset_sum = source_onset_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
+            onset_gate_scores = (
+                gate_prob * source_onset_mask.unsqueeze(-1).to(dtype=gate_prob.dtype)
+            ).sum(dim=1) / onset_sum
+            total = total + rank_weight * self._synthetic_rca_ranking_loss(
+                onset_gate_scores,
+                source_mask,
+            )
+
+        if effect_suppress_weight > 0 and effect_mask.sum() > 0 and effect_time_mask.sum() > 0:
+            effect_sum = effect_time_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
+            effect_gate_scores = (
+                gate_prob * effect_time_mask.unsqueeze(-1).to(dtype=gate_prob.dtype)
+            ).sum(dim=1) / effect_sum
+            suppress = (
+                effect_gate_scores * effect_mask.to(dtype=gate_prob.dtype)
+            ).sum() / effect_mask.sum().clamp_min(1.0)
+            total = total + effect_suppress_weight * suppress
+
+        return weight * total
+
     def _channel_masked_modeling_loss(self, input_data, batch_idx=None):
         if not bool(getattr(self.config, "use_channel_masked_modeling", False)):
             return input_data.new_tensor(0.0)
@@ -1889,6 +1964,14 @@ class LaGraph:
         total = input_data.new_tensor(0.0)
         if gate_channel_scores is not None:
             total = total + bce_weight * self._weighted_channel_bce(gate_channel_scores, source_mask)
+            total = total + self._source_bottleneck_loss(
+                gate_prob,
+                source_mask,
+                effect_mask,
+                source_onset_mask,
+                effect_time_mask,
+                event_mask,
+            )
         if rank_weight > 0:
             total = total + rank_weight * self._synthetic_rca_ranking_loss(channel_scores, source_mask)
         if effect_rank_weight > 0:
@@ -5012,6 +5095,13 @@ class LaGraph:
             ),
             "source_effect_prior_topk": _cfg_int("source_effect_prior_topk", 5),
             "source_effect_onset_rank_weight": _cfg_float("source_effect_onset_rank_weight", 0.0),
+            "lambda_source_bottleneck": _cfg_float("lambda_source_bottleneck", 0.0),
+            "source_bottleneck_bce_weight": _cfg_float("source_bottleneck_bce_weight", 1.0),
+            "source_bottleneck_rank_weight": _cfg_float("source_bottleneck_rank_weight", 0.5),
+            "source_bottleneck_effect_suppress_weight": _cfg_float(
+                "source_bottleneck_effect_suppress_weight",
+                0.5,
+            ),
             "feature_names": feature_names,
             "events": events,
             "predicted_events": predicted_events,
