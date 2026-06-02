@@ -191,6 +191,7 @@ def main():
             "interventional-graph-source-rca",
             "source-propagation-trained-rca",
             "source-propagation-prior-rca",
+            "source-innovation-rca",
             "interventional-fused-source-rca",
             "interventional-consensus-source-rca",
             "interventional-context-source-rca",
@@ -677,6 +678,18 @@ def main():
         type=float,
         default=None,
         help="Weight for mechanism-prior deviation inside the RCA source score.",
+    )
+    parser.add_argument(
+        "--rca-source-innovation-weight",
+        type=float,
+        default=None,
+        help="Weight for normal-prior-unexplained residual inside the RCA source score.",
+    )
+    parser.add_argument(
+        "--rca-source-innovation-neighbor-weight",
+        type=float,
+        default=None,
+        help="Neighbor support strength subtracted when computing source innovation.",
     )
     parser.add_argument(
         "--rca-causal-weight",
@@ -2438,6 +2451,11 @@ def main():
         channel_corr_prior_bias=0.0,
         lambda_channel_prior_align=0.0,
     )
+    arch_profiles["source-innovation-rca"] = dict(
+        arch_profiles["source-propagation-prior-rca"],
+        rca_source_innovation_weight=0.25,
+        rca_source_innovation_neighbor_weight=1.0,
+    )
     arch_profiles["interventional-fused-source-rca"] = dict(
         arch_profiles["interventional-graph-source-rca"],
         rca_source_weight=1.0,
@@ -2652,6 +2670,14 @@ def main():
         score_hyper_params["rca_propagation_weight"] = max(0.0, float(args.rca_propagation_weight))
     if args.rca_source_mechanism_weight is not None:
         score_hyper_params["rca_source_mechanism_weight"] = max(0.0, float(args.rca_source_mechanism_weight))
+    if args.rca_source_innovation_weight is not None:
+        score_hyper_params["rca_source_innovation_weight"] = max(
+            0.0, float(args.rca_source_innovation_weight)
+        )
+    if args.rca_source_innovation_neighbor_weight is not None:
+        score_hyper_params["rca_source_innovation_neighbor_weight"] = max(
+            0.0, float(args.rca_source_innovation_neighbor_weight)
+        )
     if args.rca_causal_weight is not None:
         score_hyper_params["rca_causal_weight"] = max(0.0, float(args.rca_causal_weight))
     if args.rca_synthetic_weight is not None:
