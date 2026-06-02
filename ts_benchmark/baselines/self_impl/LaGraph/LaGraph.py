@@ -267,6 +267,10 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_split_predicted_events": False,
     "rca_split_max_event_len": 120,
     "rca_split_stride": 60,
+    "rca_align_event_onset": False,
+    "rca_align_event_onset_baseline_window": 300,
+    "rca_align_event_onset_z": 2.0,
+    "rca_align_event_onset_quantile": 0.90,
     # --- v11.4 P0-2: POT 阈值参数 ---
     "pot_risk": 1e-4,            # POT EVT 风险水平
     "pot_num_quantiles": 1000,   # POT 分位数数量
@@ -4206,20 +4210,36 @@ class LaGraph:
         hierarchical_group_aggregation="max",
     ):
         events = []
+        align_event_onset = bool(getattr(self.config, "rca_align_event_onset", False))
+        align_baseline_window = int(
+            getattr(self.config, "rca_align_event_onset_baseline_window", 300) or 300
+        )
+        align_onset_z = float(getattr(self.config, "rca_align_event_onset_z", 2.0) or 2.0)
+        align_quantile = float(getattr(self.config, "rca_align_event_onset_quantile", 0.90) or 0.90)
         for event_id, (start, end) in enumerate(segments, start=1):
             if end <= start:
                 continue
+            event_anchor_start = int(start)
+            if align_event_onset:
+                event_anchor_start = self._align_rca_event_onset(
+                    base_channel_scores,
+                    start,
+                    end,
+                    baseline_window=align_baseline_window,
+                    onset_z=align_onset_z,
+                    quantile=align_quantile,
+                )
             score_start, score_end = self._rca_event_score_bounds(
-                start,
+                event_anchor_start,
                 end,
                 event_head_ratio,
                 event_head_points,
             )
             event_raw_scores = channel_scores[score_start:score_end].mean(axis=0)
             event_contrast_scores = np.zeros_like(event_raw_scores)
-            if contrast_window > 0 and contrast_weight > 0.0 and start > 0:
-                baseline_start = max(0, start - contrast_window)
-                baseline_scores = channel_scores[baseline_start:start].mean(axis=0)
+            if contrast_window > 0 and contrast_weight > 0.0 and event_anchor_start > 0:
+                baseline_start = max(0, event_anchor_start - contrast_window)
+                baseline_scores = channel_scores[baseline_start:event_anchor_start].mean(axis=0)
                 event_contrast_scores = np.maximum(event_raw_scores - baseline_scores, 0.0)
             event_scores = event_raw_scores + contrast_weight * event_contrast_scores
             event_base_scores = base_channel_scores[score_start:score_end].mean(axis=0)
@@ -4279,7 +4299,7 @@ class LaGraph:
             if onset_weight > 0.0:
                 event_onset_scores = self._event_onset_scores(
                     onset_source_scores,
-                    start,
+                    event_anchor_start,
                     end,
                     baseline_window=onset_baseline_window,
                     onset_z=onset_z,
@@ -4291,9 +4311,9 @@ class LaGraph:
                 or mechanism_guided_source_weight > 0.0
                 or source_interaction_weight > 0.0
             )
-            if mechanism_residual_window > 0 and needs_mechanism_residual and start > 0:
-                baseline_start = max(0, start - mechanism_residual_window)
-                baseline_mechanism_scores = mechanism_channel_scores[baseline_start:start].mean(axis=0)
+            if mechanism_residual_window > 0 and needs_mechanism_residual and event_anchor_start > 0:
+                baseline_start = max(0, event_anchor_start - mechanism_residual_window)
+                baseline_mechanism_scores = mechanism_channel_scores[baseline_start:event_anchor_start].mean(axis=0)
                 event_mechanism_residual_scores = np.maximum(
                     event_mechanism_scores - baseline_mechanism_scores,
                     0.0,
@@ -4496,6 +4516,7 @@ class LaGraph:
                     "start": int(start),
                     "end": int(end),
                     "length": int(end - start),
+                    "aligned_start": int(event_anchor_start),
                     "score_start": int(score_start),
                     "score_end": int(score_end),
                     "score_length": int(score_end - score_start),
@@ -4520,6 +4541,43 @@ class LaGraph:
             head_len = min(head_len, points)
         head_len = max(1, head_len)
         return int(start), int(start) + head_len
+
+    @staticmethod
+    def _align_rca_event_onset(
+        score_matrix,
+        start,
+        end,
+        baseline_window=300,
+        onset_z=2.0,
+        quantile=0.90,
+    ):
+        """Align RCA aggregation to the first local residual burst inside an event."""
+        if score_matrix is None or end <= start or start <= 0:
+            return int(start)
+        scores = np.asarray(score_matrix, dtype=np.float32)
+        if scores.ndim != 2 or scores.size == 0:
+            return int(start)
+
+        baseline_start = max(0, int(start) - max(1, int(baseline_window)))
+        baseline_scores = scores[baseline_start:int(start)]
+        event_scores = scores[int(start):int(end)]
+        if baseline_scores.size == 0 or event_scores.size == 0:
+            return int(start)
+
+        q = min(max(float(quantile), 0.0), 1.0)
+        baseline_signal = np.quantile(baseline_scores, q, axis=1)
+        event_signal = np.quantile(event_scores, q, axis=1)
+        center = float(np.median(baseline_signal))
+        mad = 1.4826 * float(np.median(np.abs(baseline_signal - center)))
+        std = float(np.std(baseline_signal))
+        scale = max(mad if mad > 1e-6 else std, 1e-6)
+        threshold = center + max(0.0, float(onset_z)) * scale
+
+        hits = np.flatnonzero(event_signal >= threshold)
+        if hits.size == 0:
+            return int(start)
+        aligned = int(start) + int(hits[0])
+        return min(max(int(start), aligned), int(end) - 1)
 
     def export_root_cause_report(self, series_name, test_data, test_label, predict_labels=None, scores=None):
         if not bool(getattr(self.config, "export_rca", False)):
@@ -5080,6 +5138,10 @@ class LaGraph:
             "rca_hierarchical_group_aggregation": hierarchical_group_aggregation,
             "rca_event_head_ratio": event_head_ratio,
             "rca_event_head_points": event_head_points,
+            "rca_align_event_onset": bool(getattr(self.config, "rca_align_event_onset", False)),
+            "rca_align_event_onset_baseline_window": _cfg_int("rca_align_event_onset_baseline_window", 300),
+            "rca_align_event_onset_z": _cfg_float("rca_align_event_onset_z", 2.0),
+            "rca_align_event_onset_quantile": _cfg_float("rca_align_event_onset_quantile", 0.90),
             "rca_onset_weight": onset_weight,
             "rca_onset_baseline_window": onset_baseline_window,
             "rca_onset_z": onset_z,

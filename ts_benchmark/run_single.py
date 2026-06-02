@@ -197,6 +197,8 @@ def main():
             "source-bottleneck-balanced-rca",
             "source-bottleneck-onset-balanced-rca",
             "source-bottleneck-onset-wide-rca",
+            "source-bottleneck-aligned-onset-rca",
+            "source-bottleneck-aligned-wide-rca",
             "interventional-fused-source-rca",
             "interventional-consensus-source-rca",
             "interventional-context-source-rca",
@@ -2542,6 +2544,24 @@ def main():
     )
     arch_profiles["source-bottleneck-onset-wide-rca"] = dict(
         arch_profiles["source-bottleneck-balanced-rca"],
+        rca_event_head_ratio=0.50,
+        rca_event_head_points=60,
+    )
+    arch_profiles["source-bottleneck-aligned-onset-rca"] = dict(
+        arch_profiles["source-bottleneck-balanced-rca"],
+        rca_align_event_onset=True,
+        rca_align_event_onset_baseline_window=300,
+        rca_align_event_onset_z=2.0,
+        rca_align_event_onset_quantile=0.90,
+        rca_event_head_ratio=0.30,
+        rca_event_head_points=30,
+    )
+    arch_profiles["source-bottleneck-aligned-wide-rca"] = dict(
+        arch_profiles["source-bottleneck-balanced-rca"],
+        rca_align_event_onset=True,
+        rca_align_event_onset_baseline_window=300,
+        rca_align_event_onset_z=2.0,
+        rca_align_event_onset_quantile=0.90,
         rca_event_head_ratio=0.50,
         rca_event_head_points=60,
     )
