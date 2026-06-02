@@ -2529,6 +2529,9 @@ def main():
         rca_source_interaction_weight=1.0,
         rca_graph_penalty_weight=0.05,
         rca_source_innovation_weight=0.0,
+        rca_hierarchical_mode="annotate",
+        rca_hierarchical_group_boost=0.0,
+        rca_hierarchical_outside_penalty=0.0,
     )
     arch_profiles["interventional-fused-source-rca"] = dict(
         arch_profiles["interventional-graph-source-rca"],
