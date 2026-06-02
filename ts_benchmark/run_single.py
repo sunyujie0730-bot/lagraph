@@ -195,6 +195,8 @@ def main():
             "temporal-innovation-rca",
             "source-bottleneck-rca",
             "source-bottleneck-balanced-rca",
+            "source-bottleneck-onset-balanced-rca",
+            "source-bottleneck-onset-wide-rca",
             "interventional-fused-source-rca",
             "interventional-consensus-source-rca",
             "interventional-context-source-rca",
@@ -2532,6 +2534,16 @@ def main():
         rca_hierarchical_mode="annotate",
         rca_hierarchical_group_boost=0.0,
         rca_hierarchical_outside_penalty=0.0,
+    )
+    arch_profiles["source-bottleneck-onset-balanced-rca"] = dict(
+        arch_profiles["source-bottleneck-balanced-rca"],
+        rca_event_head_ratio=0.30,
+        rca_event_head_points=30,
+    )
+    arch_profiles["source-bottleneck-onset-wide-rca"] = dict(
+        arch_profiles["source-bottleneck-balanced-rca"],
+        rca_event_head_ratio=0.50,
+        rca_event_head_points=60,
     )
     arch_profiles["interventional-fused-source-rca"] = dict(
         arch_profiles["interventional-graph-source-rca"],
