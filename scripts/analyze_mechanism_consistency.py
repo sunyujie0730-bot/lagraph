@@ -33,6 +33,7 @@ COMPONENTS = [
     "mechanism_score",
     "source_score",
     "source_gate_score",
+    "mechanism_guided_source_score",
     "onset_score",
     "propagation_score",
     "graph_score",

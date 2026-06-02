@@ -231,6 +231,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_synthetic_weight": 0.0,
     "rca_source_gate_weight": 0.0,
     "rca_source_interaction_weight": 0.0,
+    "rca_mechanism_guided_source_weight": 0.0,
     "rca_counterfactual_weight": 0.0,
     "rca_counterfactual_candidates": 12,
     "rca_counterfactual_max_windows": 32,
@@ -1213,6 +1214,7 @@ class LaGraph:
                 "rca_propagation_weight": getattr(self.config, "rca_propagation_weight", None),
                 "rca_source_mechanism_weight": getattr(self.config, "rca_source_mechanism_weight", None),
                 "rca_causal_weight": getattr(self.config, "rca_causal_weight", None),
+                "rca_mechanism_guided_source_weight": getattr(self.config, "rca_mechanism_guided_source_weight", None),
                 "rca_onset_weight": getattr(self.config, "rca_onset_weight", None),
                 "rca_onset_baseline_window": getattr(self.config, "rca_onset_baseline_window", None),
                 "rca_onset_z": getattr(self.config, "rca_onset_z", None),
@@ -3873,6 +3875,7 @@ class LaGraph:
         synthetic_weight=0.0,
         source_gate_weight=0.0,
         source_interaction_weight=0.0,
+        mechanism_guided_source_weight=0.0,
         counterfactual_weight=0.0,
         onset_weight=0.0,
         onset_baseline_window=200,
@@ -3947,14 +3950,21 @@ class LaGraph:
                 )
                 event_scores = event_scores + onset_weight * event_onset_scores
             event_mechanism_residual_scores = np.zeros_like(event_mechanism_scores)
-            if mechanism_residual_window > 0 and mechanism_residual_weight > 0.0 and start > 0:
+            needs_mechanism_residual = (
+                mechanism_residual_weight > 0.0
+                or mechanism_guided_source_weight > 0.0
+                or source_interaction_weight > 0.0
+            )
+            if mechanism_residual_window > 0 and needs_mechanism_residual and start > 0:
                 baseline_start = max(0, start - mechanism_residual_window)
                 baseline_mechanism_scores = mechanism_channel_scores[baseline_start:start].mean(axis=0)
                 event_mechanism_residual_scores = np.maximum(
                     event_mechanism_scores - baseline_mechanism_scores,
                     0.0,
                 )
-                event_scores = event_scores + mechanism_residual_weight * event_mechanism_residual_scores
+                if mechanism_residual_weight > 0.0:
+                    event_scores = event_scores + mechanism_residual_weight * event_mechanism_residual_scores
+            event_mechanism_guided_source_scores = np.zeros_like(event_raw_scores)
             if event_component_normalize:
                 base_norm = self._normalize_event_component(event_base_scores)
                 graph_norm = self._normalize_event_component(event_graph_scores)
@@ -3967,12 +3977,20 @@ class LaGraph:
                 onset_norm = self._normalize_event_component(event_onset_scores)
                 mechanism_residual_norm = self._normalize_event_component(event_mechanism_residual_scores)
                 contrast_norm = self._normalize_event_component(event_contrast_scores)
+                mechanism_source_evidence_norm = np.maximum(mechanism_norm, mechanism_residual_norm)
+                if source_gate_weight > 0.0:
+                    mechanism_source_evidence_norm = np.maximum(
+                        mechanism_source_evidence_norm,
+                        source_gate_norm,
+                    )
+                event_mechanism_guided_source_scores = base_norm * mechanism_source_evidence_norm
                 source_norm = (
                     source_base_weight * base_norm
                     + source_score_weight * source_score_norm
                     + source_mechanism_weight * mechanism_norm
                     + causal_weight * causal_norm
                     + source_gate_weight * source_gate_norm
+                    + mechanism_guided_source_weight * event_mechanism_guided_source_scores
                     + synthetic_weight * synthetic_norm
                     + counterfactual_weight * counterfactual_norm
                 )
@@ -4018,6 +4036,22 @@ class LaGraph:
                         + source_consensus_weight * source_score_norm * consensus_norm
                         + onset_consensus_weight * onset_norm * consensus_norm
                     )
+            elif mechanism_guided_source_weight > 0.0:
+                base_norm = self._normalize_event_component(event_base_scores)
+                mechanism_norm = self._normalize_event_component(event_mechanism_scores)
+                mechanism_residual_norm = self._normalize_event_component(event_mechanism_residual_scores)
+                source_gate_norm = self._normalize_event_component(event_source_gate_scores)
+                mechanism_source_evidence_norm = np.maximum(mechanism_norm, mechanism_residual_norm)
+                if source_gate_weight > 0.0:
+                    mechanism_source_evidence_norm = np.maximum(
+                        mechanism_source_evidence_norm,
+                        source_gate_norm,
+                    )
+                event_mechanism_guided_source_scores = base_norm * mechanism_source_evidence_norm
+                event_scores = (
+                    event_scores
+                    + mechanism_guided_source_weight * event_mechanism_guided_source_scores
+                )
             group_values_by_name = {}
             for name, value in zip(feature_names, event_scores):
                 group = self._root_cause_group_name(name)
@@ -4099,6 +4133,7 @@ class LaGraph:
                     "propagation_score": float(event_propagation_scores[idx]),
                     "causal_score": float(event_causal_scores[idx]),
                     "source_gate_score": float(event_source_gate_scores[idx]),
+                    "mechanism_guided_source_score": float(event_mechanism_guided_source_scores[idx]),
                     "synthetic_rca_score": float(event_synthetic_scores[idx]),
                     "counterfactual_score": float(event_counterfactual_scores[idx]),
                     "onset_score": float(event_onset_scores[idx]),
@@ -4243,6 +4278,7 @@ class LaGraph:
         synthetic_weight = _cfg_float("rca_synthetic_weight", 0.0)
         source_gate_weight = _cfg_float("rca_source_gate_weight", 0.0)
         source_interaction_weight = _cfg_float("rca_source_interaction_weight", 0.0)
+        mechanism_guided_source_weight = _cfg_float("rca_mechanism_guided_source_weight", 0.0)
         counterfactual_weight = _cfg_float("rca_counterfactual_weight", 0.0)
         contrast_window = _cfg_int("rca_contrast_window", 0)
         contrast_weight = _cfg_float("rca_contrast_weight", 0.0)
@@ -4352,6 +4388,7 @@ class LaGraph:
             synthetic_weight=synthetic_weight,
             source_gate_weight=source_gate_weight,
             source_interaction_weight=source_interaction_weight,
+            mechanism_guided_source_weight=mechanism_guided_source_weight,
             counterfactual_weight=counterfactual_weight,
             onset_weight=onset_weight,
             onset_baseline_window=onset_baseline_window,
@@ -4413,6 +4450,7 @@ class LaGraph:
                     synthetic_weight=synthetic_weight,
                     source_gate_weight=source_gate_weight,
                     source_interaction_weight=source_interaction_weight,
+                    mechanism_guided_source_weight=mechanism_guided_source_weight,
                     counterfactual_weight=counterfactual_weight,
                     onset_weight=onset_weight,
                     onset_baseline_window=onset_baseline_window,
@@ -4467,6 +4505,7 @@ class LaGraph:
                     synthetic_weight=synthetic_weight,
                     source_gate_weight=source_gate_weight,
                     source_interaction_weight=source_interaction_weight,
+                    mechanism_guided_source_weight=mechanism_guided_source_weight,
                     counterfactual_weight=counterfactual_weight,
                     onset_weight=onset_weight,
                     onset_baseline_window=onset_baseline_window,
@@ -4519,6 +4558,7 @@ class LaGraph:
                 synthetic_weight=synthetic_weight,
                 source_gate_weight=source_gate_weight,
                 source_interaction_weight=source_interaction_weight,
+                mechanism_guided_source_weight=mechanism_guided_source_weight,
                 counterfactual_weight=counterfactual_weight,
                 onset_weight=onset_weight,
                 onset_baseline_window=onset_baseline_window,
@@ -4568,6 +4608,7 @@ class LaGraph:
                 synthetic_weight=synthetic_weight,
                 source_gate_weight=source_gate_weight,
                 source_interaction_weight=source_interaction_weight,
+                mechanism_guided_source_weight=mechanism_guided_source_weight,
                 counterfactual_weight=counterfactual_weight,
                 onset_weight=onset_weight,
                 onset_baseline_window=onset_baseline_window,
@@ -4591,7 +4632,7 @@ class LaGraph:
         output_path = os.path.join(output_dir, f"{timestamp}_rca.json")
         score_method = (
             "event-level source/propagation RCA: "
-            "source=(weighted base residual + fused source score + consensus-gated source evidence + mechanism prior deviation + lagged causal deviation + model source-gate score + synthetic responsibility + event-local counterfactual responsibility), "
+            "source=(weighted base residual + fused source score + consensus-gated source evidence + mechanism prior deviation + mechanism-guided source interaction + lagged causal deviation + model source-gate score + synthetic responsibility + event-local counterfactual responsibility), "
             "propagation=graph-propagated residual, "
             "onset=early local-baseline crossing"
             if use_source_propagation
@@ -4618,6 +4659,7 @@ class LaGraph:
             "rca_synthetic_weight": synthetic_weight,
             "rca_source_gate_weight": source_gate_weight,
             "rca_source_interaction_weight": source_interaction_weight,
+            "rca_mechanism_guided_source_weight": mechanism_guided_source_weight,
             "rca_counterfactual_weight": counterfactual_weight,
             "rca_counterfactual_candidates": _cfg_int("rca_counterfactual_candidates", 12),
             "rca_counterfactual_max_windows": _cfg_int("rca_counterfactual_max_windows", 32),
