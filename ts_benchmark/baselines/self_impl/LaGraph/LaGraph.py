@@ -124,6 +124,9 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "source_effect_margin": 0.2,
     "source_effect_onset_margin": 0.2,
     "source_effect_specificity_weight": 0.0,
+    "lambda_source_effect_rca_head": 0.0,
+    "source_effect_rca_head_bce_weight": 1.0,
+    "source_effect_rca_head_rank_weight": 1.0,
     "lambda_source_bottleneck": 0.0,
     "source_bottleneck_bce_weight": 1.0,
     "source_bottleneck_rank_weight": 0.5,
@@ -1161,6 +1164,15 @@ class LaGraph:
                 "source_effect_onset_rank_weight": getattr(
                     self.config, "source_effect_onset_rank_weight", None
                 ),
+                "lambda_source_effect_rca_head": getattr(
+                    self.config, "lambda_source_effect_rca_head", None
+                ),
+                "source_effect_rca_head_bce_weight": getattr(
+                    self.config, "source_effect_rca_head_bce_weight", None
+                ),
+                "source_effect_rca_head_rank_weight": getattr(
+                    self.config, "source_effect_rca_head_rank_weight", None
+                ),
                 "lambda_source_bottleneck": getattr(self.config, "lambda_source_bottleneck", None),
                 "source_bottleneck_bce_weight": getattr(
                     self.config, "source_bottleneck_bce_weight", None
@@ -1957,6 +1969,7 @@ class LaGraph:
         onset_sum = source_onset_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
         effect_time_sum = effect_time_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
         gate_prob = synth_aux.get("source_gate_prob")
+        synth_rca_logits = synth_aux.get("synthetic_rca_logits")
         gate_channel_scores = None
         if gate_prob is not None:
             gate_channel_scores = (gate_prob * event_mask.unsqueeze(-1)).sum(dim=1) / mask_sum
@@ -1984,6 +1997,7 @@ class LaGraph:
         effect_rank_weight = float(getattr(self.config, "source_effect_effect_rank_weight", 0.5) or 0.5)
         onset_rank_weight = float(getattr(self.config, "source_effect_onset_rank_weight", 0.0) or 0.0)
         specificity_weight = float(getattr(self.config, "source_effect_specificity_weight", 0.0) or 0.0)
+        rca_head_weight = float(getattr(self.config, "lambda_source_effect_rca_head", 0.0) or 0.0)
 
         total = input_data.new_tensor(0.0)
         if gate_channel_scores is not None:
@@ -2006,6 +2020,27 @@ class LaGraph:
                     target_dist,
                     reduction="sum",
                 )
+        if synth_rca_logits is not None and rca_head_weight > 0:
+            pos = source_mask.sum().clamp_min(1.0)
+            neg = (source_mask.numel() - source_mask.sum()).clamp_min(1.0)
+            pos_weight = (neg / pos).clamp(1.0, 20.0)
+            rca_head_bce = F.binary_cross_entropy_with_logits(
+                synth_rca_logits,
+                source_mask,
+                pos_weight=pos_weight,
+            )
+            rca_head_prob = torch.sigmoid(synth_rca_logits)
+            rca_head_rank = self._synthetic_rca_ranking_loss(rca_head_prob, source_mask)
+            rca_head_bce_weight = float(
+                getattr(self.config, "source_effect_rca_head_bce_weight", 1.0) or 1.0
+            )
+            rca_head_rank_weight = float(
+                getattr(self.config, "source_effect_rca_head_rank_weight", 1.0) or 1.0
+            )
+            total = total + rca_head_weight * (
+                rca_head_bce_weight * rca_head_bce
+                + rca_head_rank_weight * rca_head_rank
+            )
         if rank_weight > 0:
             total = total + rank_weight * self._synthetic_rca_ranking_loss(channel_scores, source_mask)
         if effect_rank_weight > 0:
@@ -5293,6 +5328,15 @@ class LaGraph:
             "source_effect_prior_topk": _cfg_int("source_effect_prior_topk", 5),
             "source_effect_onset_rank_weight": _cfg_float("source_effect_onset_rank_weight", 0.0),
             "source_effect_specificity_weight": _cfg_float("source_effect_specificity_weight", 0.0),
+            "lambda_source_effect_rca_head": _cfg_float("lambda_source_effect_rca_head", 0.0),
+            "source_effect_rca_head_bce_weight": _cfg_float(
+                "source_effect_rca_head_bce_weight",
+                1.0,
+            ),
+            "source_effect_rca_head_rank_weight": _cfg_float(
+                "source_effect_rca_head_rank_weight",
+                1.0,
+            ),
             "lambda_source_bottleneck": _cfg_float("lambda_source_bottleneck", 0.0),
             "source_bottleneck_bce_weight": _cfg_float("source_bottleneck_bce_weight", 1.0),
             "source_bottleneck_rank_weight": _cfg_float("source_bottleneck_rank_weight", 0.5),
