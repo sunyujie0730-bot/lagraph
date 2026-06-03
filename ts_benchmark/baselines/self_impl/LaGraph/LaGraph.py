@@ -123,6 +123,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "source_effect_onset_rank_weight": 0.0,
     "source_effect_margin": 0.2,
     "source_effect_onset_margin": 0.2,
+    "source_effect_specificity_weight": 0.0,
     "lambda_source_bottleneck": 0.0,
     "source_bottleneck_bce_weight": 1.0,
     "source_bottleneck_rank_weight": 0.5,
@@ -1982,6 +1983,7 @@ class LaGraph:
         rank_weight = float(getattr(self.config, "source_effect_rank_weight", 1.0) or 1.0)
         effect_rank_weight = float(getattr(self.config, "source_effect_effect_rank_weight", 0.5) or 0.5)
         onset_rank_weight = float(getattr(self.config, "source_effect_onset_rank_weight", 0.0) or 0.0)
+        specificity_weight = float(getattr(self.config, "source_effect_specificity_weight", 0.0) or 0.0)
 
         total = input_data.new_tensor(0.0)
         if gate_channel_scores is not None:
@@ -1994,6 +1996,16 @@ class LaGraph:
                 effect_time_mask,
                 event_mask,
             )
+            if specificity_weight > 0 and gate_channel_scores.shape[0] > 1:
+                pred_freq = gate_channel_scores.clamp_min(0.0).mean(dim=0)
+                target_freq = source_mask.to(dtype=gate_channel_scores.dtype).mean(dim=0)
+                pred_dist = pred_freq / pred_freq.sum().clamp_min(1e-6)
+                target_dist = target_freq / target_freq.sum().clamp_min(1e-6)
+                total = total + specificity_weight * F.mse_loss(
+                    pred_dist,
+                    target_dist,
+                    reduction="sum",
+                )
         if rank_weight > 0:
             total = total + rank_weight * self._synthetic_rca_ranking_loss(channel_scores, source_mask)
         if effect_rank_weight > 0:
@@ -5280,6 +5292,7 @@ class LaGraph:
             ),
             "source_effect_prior_topk": _cfg_int("source_effect_prior_topk", 5),
             "source_effect_onset_rank_weight": _cfg_float("source_effect_onset_rank_weight", 0.0),
+            "source_effect_specificity_weight": _cfg_float("source_effect_specificity_weight", 0.0),
             "lambda_source_bottleneck": _cfg_float("lambda_source_bottleneck", 0.0),
             "source_bottleneck_bce_weight": _cfg_float("source_bottleneck_bce_weight", 1.0),
             "source_bottleneck_rank_weight": _cfg_float("source_bottleneck_rank_weight", 0.5),
