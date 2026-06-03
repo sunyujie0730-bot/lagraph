@@ -2593,6 +2593,14 @@ def main():
     )
     arch_profiles["source-bottleneck-head-specificity-rca"] = dict(
         arch_profiles["source-bottleneck-specificity-rca"],
+        use_synthetic_rca_head=True,
+        use_synthetic_rca_loss=False,
+        lambda_synthetic_rca=0.0,
+        lambda_masked_rca_head=0.05,
+        masked_rca_bce_weight=1.0,
+        masked_rca_rank_weight=1.0,
+        synthetic_rca_margin=0.15,
+        synthetic_rca_topk=8,
         lambda_source_effect_rca_head=2.0,
         source_effect_rca_head_bce_weight=1.0,
         source_effect_rca_head_rank_weight=1.0,
