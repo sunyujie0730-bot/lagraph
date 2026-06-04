@@ -3720,7 +3720,13 @@ class LaGraph:
         total_length = len(scaled_data)
 
         self.model.eval()
-        window_scores_list = []
+        aggregation_method = str(getattr(self.config, "score_aggregation", "mean") or "mean").lower()
+        stream_mean = aggregation_method == "mean"
+        window_scores_list = [] if not stream_mean else None
+        if stream_mean:
+            point_scores_sum = np.zeros(total_length, dtype=np.float64)
+            point_scores_count = np.zeros(total_length, dtype=np.float64)
+            next_window_start = 0
 
         loader = anomaly_detection_data_provider(
             scaled_data, batch_size=eval_batch_size,
@@ -3731,9 +3737,33 @@ class LaGraph:
         for i, (input_data, labels) in enumerate(loader):
             input_data = input_data.float().to(self.device)
             scores_batch = self._detect_forward(input_data)
-            window_scores_list.append(scores_batch)
+            if stream_mean:
+                scores_batch = np.asarray(scores_batch, dtype=np.float32)
+                n_windows = scores_batch.shape[0]
+                win_size = min(int(self.config.win_size), scores_batch.shape[1])
+                for offset in range(win_size):
+                    start = next_window_start + offset
+                    n = min(n_windows, total_length - start)
+                    if n <= 0:
+                        break
+                    point_scores_sum[start:start + n] += scores_batch[:n, offset]
+                    point_scores_count[start:start + n] += 1.0
+                next_window_start += n_windows
+            else:
+                window_scores_list.append(scores_batch)
             if (i + 1) % 5 == 0:
                 torch.cuda.empty_cache()
+
+        if stream_mean:
+            point_scores = np.divide(
+                point_scores_sum,
+                point_scores_count,
+                out=np.zeros_like(point_scores_sum),
+                where=point_scores_count > 0,
+            ).astype(np.float32)
+            point_scores = self._apply_event_persistence_score(point_scores)
+            point_scores = self._smooth_scores_for_detection(point_scores)
+            return point_scores, point_scores
 
         if len(window_scores_list) == 0:
             dummy = np.zeros(total_length)
