@@ -187,6 +187,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "use_channel_mechanism_score": False,
     "channel_mechanism_score_weight": 0.1,
     "channel_mechanism_score_eps": 1e-6,
+    "score_stats_max_samples": 2_000_000,
     "use_mechanism_coupled_decoder": False,
     "mechanism_coupling_init": 0.15,
     "use_mechanism_residual_feedback": False,
@@ -2261,17 +2262,32 @@ class LaGraph:
         )
 
         scores = []
+        max_samples = int(getattr(self.config, "score_stats_max_samples", 2_000_000) or 2_000_000)
+        batches = max(len(loader), 1)
+        per_batch_samples = max(1, int(math.ceil(max_samples / batches)))
         for input_data, _ in loader:
             input_data = input_data.float().to(self.device)
             _, _, _, _, _, aux_losses, _ = self.model(input_data)
             mechanism_score = aux_losses.get("channel_mechanism_score") if aux_losses else None
             if mechanism_score is not None:
-                scores.append(mechanism_score.detach().cpu().numpy().reshape(-1))
+                batch_scores = mechanism_score.detach().cpu().numpy().reshape(-1)
+                if 0 < per_batch_samples < batch_scores.size:
+                    sample_idx = np.linspace(
+                        0,
+                        batch_scores.size - 1,
+                        num=per_batch_samples,
+                        dtype=np.int64,
+                    )
+                    batch_scores = batch_scores[sample_idx]
+                scores.append(batch_scores)
 
         if not scores:
             return
 
         scores = np.concatenate(scores, axis=0)
+        if max_samples > 0 and scores.size > max_samples:
+            sample_idx = np.linspace(0, scores.size - 1, num=max_samples, dtype=np.int64)
+            scores = scores[sample_idx]
         score_center = float(np.median(scores))
         q25 = float(np.percentile(scores, 25))
         q75 = float(np.percentile(scores, 75))
@@ -2280,7 +2296,7 @@ class LaGraph:
         raw_model.set_channel_mechanism_score_stats(score_center, score_scale)
         print(
             "  [ChannelMechanism] score median="
-            f"{score_center:.6f}, scale={score_scale:.6f}"
+            f"{score_center:.6f}, scale={score_scale:.6f}, samples={scores.size:,}"
         )
 
     @torch.no_grad()
