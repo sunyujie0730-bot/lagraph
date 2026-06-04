@@ -468,6 +468,7 @@ class SparseGCN(nn.Module):
                  source_gate_init=0.20,
                  use_channel_temporal_corefinement=False,
                  corefinement_init=0.10,
+                 corefinement_detach_first_pass=True,
                  use_state_aware_fusion=False,
                  state_aware_num_states=4,
                  state_aware_graph_gate_init=0.6,
@@ -536,6 +537,7 @@ class SparseGCN(nn.Module):
         self.source_gate_init = float(source_gate_init)
         self.use_channel_temporal_corefinement = bool(use_channel_temporal_corefinement)
         self.corefinement_init = float(corefinement_init)
+        self.corefinement_detach_first_pass = bool(corefinement_detach_first_pass)
         self.use_state_aware_fusion = use_state_aware_fusion
         self.state_aware_num_states = int(state_aware_num_states)
         self.state_aware_graph_gate_init = float(state_aware_graph_gate_init)
@@ -1124,7 +1126,12 @@ class SparseGCN(nn.Module):
             and self.use_channel_graph
             and self.use_temporal_graph
         ):
-            resid_serial, A_temp = self.temporal_graph(resid_adapted, A_proximity=A_adaptive)
+            if self.corefinement_detach_first_pass:
+                with torch.no_grad():
+                    resid_serial, A_temp = self.temporal_graph(resid_adapted, A_proximity=A_adaptive)
+                resid_serial = resid_serial.detach()
+            else:
+                resid_serial, A_temp = self.temporal_graph(resid_adapted, A_proximity=A_adaptive)
             temporal_mechanism_context = self._graph_neighbor_context(resid_serial, A_adaptive)
             corefine_delta = self.corefinement_fusion(
                 torch.cat(

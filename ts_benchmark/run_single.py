@@ -2587,6 +2587,7 @@ def main():
         arch_profiles["source-bottleneck-specificity-rca"],
         use_channel_temporal_corefinement=True,
         corefinement_init=0.10,
+        corefinement_detach_first_pass=True,
     )
     arch_profiles["source-bottleneck-trained-specificity-rca"] = dict(
         arch_profiles["source-bottleneck-specificity-rca"],
