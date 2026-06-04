@@ -73,6 +73,29 @@ def overlap(a_start: int, a_end: int, b_start: int, b_end: int) -> int:
     return max(0, min(a_end, b_end) - max(a_start, b_start))
 
 
+def interval_match_stats(meta_event: dict, pred_event: dict | None, best_overlap: int) -> dict:
+    true_len = max(0, int(meta_event.get("end", 0)) - int(meta_event.get("start", 0)))
+    if pred_event:
+        pred_len = max(0, int(pred_event.get("end", 0)) - int(pred_event.get("start", 0)))
+    else:
+        pred_len = 0
+    union = true_len + pred_len - max(best_overlap, 0)
+    true_coverage = best_overlap / true_len if true_len > 0 else 0.0
+    pred_coverage = best_overlap / pred_len if pred_len > 0 else 0.0
+    iou = best_overlap / union if union > 0 else 0.0
+    return {
+        "true_event_len": true_len,
+        "pred_event_len": pred_len,
+        "true_coverage": true_coverage,
+        "pred_coverage": pred_coverage,
+        "event_iou": iou,
+        "matched": 1.0 if pred_event and best_overlap > 0 else 0.0,
+        "matched_coverage_10": 1.0 if true_coverage >= 0.10 else 0.0,
+        "matched_iou_10": 1.0 if iou >= 0.10 else 0.0,
+        "matched_iou_30": 1.0 if iou >= 0.30 else 0.0,
+    }
+
+
 def load_meta(registry: Path, series_name: str) -> list[dict]:
     df = pd.read_csv(registry)
     rows = df.loc[df["file"] == series_name].copy()
@@ -252,6 +275,7 @@ def main() -> None:
         if not root_groups and not root_variables:
             continue
 
+        match_stats = interval_match_stats(meta_event, event, best_overlap)
         row = {
             "series_name": rca.get("series_name"),
             "event_source": args.event_source,
@@ -263,11 +287,11 @@ def main() -> None:
             "pred_start": "" if not event else event.get("start"),
             "pred_end": "" if not event else event.get("end"),
             "overlap": best_overlap,
-            "matched": 1.0 if event and best_overlap > 0 else 0.0,
             "root_groups": ",".join(sorted(root_groups)),
             "root_variables": ",".join(sorted(root_variables)),
             "method": args.method_name or "lagraph",
         }
+        row.update(match_stats)
 
         if event and root_groups:
             groups = group_ranking(event, args.group_aggregation, args.group_topk)
@@ -309,6 +333,14 @@ def main() -> None:
         column
         for column in df.columns
         if column == "matched"
+        or column in {
+            "matched_coverage_10",
+            "matched_iou_10",
+            "matched_iou_30",
+            "true_coverage",
+            "pred_coverage",
+            "event_iou",
+        }
         or column.endswith("_MRR")
         or "_Hit@" in column
         or "_Precision@" in column

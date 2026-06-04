@@ -132,6 +132,29 @@ def overlap(a_start: int, a_end: int, b_start: int, b_end: int) -> int:
     return max(0, min(a_end, b_end) - max(a_start, b_start))
 
 
+def interval_match_stats(meta_event: dict, pred_event: dict | None, best_overlap: int) -> dict:
+    true_len = max(0, int(meta_event.get("end", 0)) - int(meta_event.get("start", 0)))
+    if pred_event:
+        pred_len = max(0, int(pred_event.get("end", 0)) - int(pred_event.get("start", 0)))
+    else:
+        pred_len = 0
+    union = true_len + pred_len - max(best_overlap, 0)
+    true_coverage = best_overlap / true_len if true_len > 0 else 0.0
+    pred_coverage = best_overlap / pred_len if pred_len > 0 else 0.0
+    iou = best_overlap / union if union > 0 else 0.0
+    return {
+        "true_event_len": true_len,
+        "pred_event_len": pred_len,
+        "true_coverage": true_coverage,
+        "pred_coverage": pred_coverage,
+        "event_iou": iou,
+        "matched": 1.0 if best_overlap > 0 else 0.0,
+        "matched_coverage_10": 1.0 if true_coverage >= 0.10 else 0.0,
+        "matched_iou_10": 1.0 if iou >= 0.10 else 0.0,
+        "matched_iou_30": 1.0 if iou >= 0.30 else 0.0,
+    }
+
+
 def match_meta_event(pred_event: dict, meta_events: list[dict]) -> dict | None:
     best = None
     best_overlap = 0
@@ -402,6 +425,7 @@ def main() -> None:
                 delay = max(0, int(pred_event.get("start", 0)) - int(meta_event.get("start", 0)))
             for k in args.k:
                 metric_values[f"RCA_Delay@{k}"] = delay if metric_values.get(f"Hit@{k}", 0.0) > 0 else math.nan
+            match_stats = interval_match_stats(meta_event, pred_event, best_overlap)
             row = {
                 "series_name": rca.get("series_name"),
                 "event_source": "predicted",
@@ -413,11 +437,11 @@ def main() -> None:
                 "pred_start": "" if not pred_event else pred_event.get("start"),
                 "pred_end": "" if not pred_event else pred_event.get("end"),
                 "overlap": best_overlap,
-                "matched": 1.0 if best_overlap > 0 else 0.0,
                 "roots": ",".join(sorted(roots)),
                 "top1": top1,
                 "method": args.method_name or ("random" if args.baseline == "random" else "lagraph"),
             }
+            row.update(match_stats)
             row.update(metric_values)
             rows.append(row)
     else:
@@ -452,7 +476,16 @@ def main() -> None:
         for c in df.columns
         if c.startswith(("Hit@", "Precision@", "Recall@", "NDCG@", "RCA_Delay@"))
         or c.startswith(("PR@", "MAP@"))
-        or c in {"MRR", "matched"}
+        or c in {
+            "MRR",
+            "matched",
+            "matched_coverage_10",
+            "matched_iou_10",
+            "matched_iou_30",
+            "true_coverage",
+            "pred_coverage",
+            "event_iou",
+        }
     ]
     summary = df[metric_cols].mean().to_frame("mean").T
     print("\nPer-event RCA:")

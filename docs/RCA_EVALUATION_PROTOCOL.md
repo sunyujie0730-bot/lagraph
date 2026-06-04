@@ -47,6 +47,33 @@ flowchart LR
     E --> H["Random/component baselines"]
 ```
 
+## Predicted-Event Matching
+
+Predicted-event RCA uses two levels of event matching.
+
+The legacy lenient match remains:
+
+```text
+matched = 1 if overlap(predicted_event, true_event) > 0
+```
+
+This matches common event-hit practice but is optimistic when predicted events
+touch a true event by only one time point. New RCA tables therefore also report:
+
+```text
+true_coverage = |P ∩ G| / |G|
+pred_coverage = |P ∩ G| / |P|
+event_iou = |P ∩ G| / |P ∪ G|
+matched_coverage_10 = 1[true_coverage >= 0.10]
+matched_iou_10 = 1[event_iou >= 0.10]
+matched_iou_30 = 1[event_iou >= 0.30]
+```
+
+Main predicted-event RCA tables may still include the lenient `matched` column
+for comparability with previous results, but conclusions should be checked
+against `matched_coverage_10` or `matched_iou_10` when arguing end-to-end RCA
+quality.
+
 ## Current Strict Claim Boundary
 
 The current defensible claim is:

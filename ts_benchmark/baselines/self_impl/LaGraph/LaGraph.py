@@ -198,6 +198,8 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "mechanism_predictive_blend_init": 0.30,
     "use_source_gate": False,
     "source_gate_init": 0.20,
+    "use_channel_temporal_corefinement": False,
+    "corefinement_init": 0.10,
     "lambda_source_gate_sparse": 0.0,
     "use_state_aware_fusion": False,
     "state_aware_num_states": 4,
@@ -2527,6 +2529,10 @@ class LaGraph:
             mechanism_predictive_blend_init=getattr(self.config, "mechanism_predictive_blend_init", 0.30),
             use_source_gate=getattr(self.config, "use_source_gate", False),
             source_gate_init=getattr(self.config, "source_gate_init", 0.20),
+            use_channel_temporal_corefinement=getattr(
+                self.config, "use_channel_temporal_corefinement", False
+            ),
+            corefinement_init=getattr(self.config, "corefinement_init", 0.10),
             use_state_aware_fusion=getattr(self.config, "use_state_aware_fusion", False),
             state_aware_num_states=getattr(self.config, "state_aware_num_states", 4),
             state_aware_graph_gate_init=getattr(self.config, "state_aware_graph_gate_init", 0.6),
@@ -2813,6 +2819,10 @@ class LaGraph:
             mechanism_predictive_blend_init=getattr(self.config, "mechanism_predictive_blend_init", 0.30),
             use_source_gate=getattr(self.config, "use_source_gate", False),
             source_gate_init=getattr(self.config, "source_gate_init", 0.20),
+            use_channel_temporal_corefinement=getattr(
+                self.config, "use_channel_temporal_corefinement", False
+            ),
+            corefinement_init=getattr(self.config, "corefinement_init", 0.10),
             use_state_aware_fusion=getattr(self.config, "use_state_aware_fusion", False),
             state_aware_num_states=getattr(self.config, "state_aware_num_states", 4),
             state_aware_graph_gate_init=getattr(self.config, "state_aware_graph_gate_init", 0.6),

@@ -466,6 +466,8 @@ class SparseGCN(nn.Module):
                  mechanism_predictive_blend_init=0.30,
                  use_source_gate=False,
                  source_gate_init=0.20,
+                 use_channel_temporal_corefinement=False,
+                 corefinement_init=0.10,
                  use_state_aware_fusion=False,
                  state_aware_num_states=4,
                  state_aware_graph_gate_init=0.6,
@@ -532,6 +534,8 @@ class SparseGCN(nn.Module):
         self.mechanism_predictive_blend_init = float(mechanism_predictive_blend_init)
         self.use_source_gate = bool(use_source_gate)
         self.source_gate_init = float(source_gate_init)
+        self.use_channel_temporal_corefinement = bool(use_channel_temporal_corefinement)
+        self.corefinement_init = float(corefinement_init)
         self.use_state_aware_fusion = use_state_aware_fusion
         self.state_aware_num_states = int(state_aware_num_states)
         self.state_aware_graph_gate_init = float(state_aware_graph_gate_init)
@@ -702,6 +706,17 @@ class SparseGCN(nn.Module):
             nn.Linear(c_out, c_out),
         )
 
+        corefine_init = min(max(float(corefinement_init), 1e-3), 1.0 - 1e-3)
+        self.corefinement_logit = nn.Parameter(
+            torch.tensor(float(np.log(corefine_init / (1.0 - corefine_init))))
+        )
+        self.corefinement_fusion = nn.Sequential(
+            nn.Linear(c_out * 4, c_out),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(c_out, c_out),
+        )
+
         # === ★ P0: Dual-Path VQ Bottleneck (旁路模式) ===
         source_gate_init = min(max(float(source_gate_init), 1e-3), 1.0 - 1e-3)
         source_gate_bias = float(np.log(source_gate_init / (1.0 - source_gate_init)))
@@ -823,6 +838,8 @@ class SparseGCN(nn.Module):
         self.mechanism_predictive_blend_logit.requires_grad = self.use_mechanism_predictive_head
         self._set_trainable(self.source_gate_net, self.use_source_gate)
         self.source_gate_bias.requires_grad = self.use_source_gate
+        self._set_trainable(self.corefinement_fusion, self.use_channel_temporal_corefinement)
+        self.corefinement_logit.requires_grad = self.use_channel_temporal_corefinement
 
     def _parallel_fuse_graphs(self, resid, resid_channel, resid_temporal):
         gate_input = torch.cat(
@@ -1032,6 +1049,7 @@ class SparseGCN(nn.Module):
         channel_mechanism_pred = None
         mechanism_coupling_weight = None
         mechanism_predictive_blend_weight = None
+        corefinement_weight = None
         source_gate = None
         source_gate_score = None
 
@@ -1101,7 +1119,28 @@ class SparseGCN(nn.Module):
             )
             resid_adapted = source_gate * resid + (1.0 - source_gate) * resid_adapted
 
-        if self.use_state_aware_fusion and self.use_channel_graph and self.use_temporal_graph:
+        if (
+            self.use_channel_temporal_corefinement
+            and self.use_channel_graph
+            and self.use_temporal_graph
+        ):
+            resid_serial, A_temp = self.temporal_graph(resid_adapted, A_proximity=A_adaptive)
+            temporal_mechanism_context = self._graph_neighbor_context(resid_serial, A_adaptive)
+            corefine_delta = self.corefinement_fusion(
+                torch.cat(
+                    [
+                        resid_serial,
+                        resid_adapted,
+                        temporal_mechanism_context,
+                        (resid_serial - temporal_mechanism_context).abs(),
+                    ],
+                    dim=-1,
+                )
+            )
+            corefinement_weight = torch.sigmoid(self.corefinement_logit)
+            resid_corefined = resid_serial + corefinement_weight * corefine_delta
+            stage1_feat, A_temp = self.temporal_graph(resid_corefined, A_proximity=A_adaptive)
+        elif self.use_state_aware_fusion and self.use_channel_graph and self.use_temporal_graph:
             resid_serial, A_temp = self.temporal_graph(resid_adapted, A_proximity=A_adaptive)
             resid_temporal_base, _ = self.temporal_graph(resid, A_proximity=A_adaptive)
             stage1_feat, state_aware_info = self.state_aware_fusion(
@@ -1259,6 +1298,8 @@ class SparseGCN(nn.Module):
             aux_losses['mechanism_feedback_weight'] = mechanism_feedback_weight.detach()
         if mechanism_predictive_blend_weight is not None:
             aux_losses['mechanism_predictive_blend_weight'] = mechanism_predictive_blend_weight.detach()
+        if corefinement_weight is not None:
+            aux_losses['corefinement_weight'] = corefinement_weight.detach()
         if source_gate is not None:
             aux_losses['source_gate'] = source_gate.detach()
             aux_losses['source_gate_prob'] = source_gate

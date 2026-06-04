@@ -734,10 +734,25 @@ the current dependency graph is already a causal graph
 ## Practical Next Step
 
 Do not spend more experiments on generic dual-graph fusion, disconnected RCA
-branches, or weak graph-alignment losses. The immediate architecture question
-has been partially answered: the channel graph can provide a measurable
-mechanism-violation explanation, but current HAI group-level labels do not show
-that this mechanism term improves RCA beyond reconstruction residuals.
+branches, or weak graph-alignment losses. The current exception is the
+lightweight `source-bottleneck-corefine-rca` test, which is not a parallel
+branch ensemble. It explicitly feeds a channel-refined temporal representation
+back through the temporal graph:
+
+```text
+R0 = residual
+C1 = ChannelGraph(R0)
+T1 = TemporalGraph(C1)
+C2 = ChannelRefine(T1, A_channel)
+T2 = TemporalGraph(C2)
+```
+
+This tests whether channel dependency and temporal evolution can be jointly
+refined rather than merely concatenated or gated. The immediate architecture
+question has therefore been narrowed: the channel graph can provide a
+measurable mechanism-violation explanation, but the remaining question is
+whether deeper channel-temporal interaction improves variable-level RCA without
+damaging event detection.
 
 ```text
 Gt = adaptive channel graph learned from each input window
