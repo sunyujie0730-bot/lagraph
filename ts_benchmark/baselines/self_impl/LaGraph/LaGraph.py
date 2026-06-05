@@ -2102,7 +2102,8 @@ class LaGraph:
             win_size=self.config.win_size,
             step=1,
             mode="test",
-            num_workers=0,
+            num_workers=getattr(self.config, "dataloader_num_workers", 0),
+            prefetch_factor=getattr(self.config, "dataloader_prefetch_factor", 2),
         )
 
         channel_errors = []
@@ -2152,7 +2153,8 @@ class LaGraph:
                 win_size=self.config.win_size,
                 step=1,
                 mode="test",
-                num_workers=0,
+                num_workers=getattr(self.config, "dataloader_num_workers", 0),
+                prefetch_factor=getattr(self.config, "dataloader_prefetch_factor", 2),
             )
 
         graph_sum = None
@@ -2212,7 +2214,8 @@ class LaGraph:
             win_size=self.config.win_size,
             step=1,
             mode="test",
-            num_workers=0,
+            num_workers=getattr(self.config, "dataloader_num_workers", 0),
+            prefetch_factor=getattr(self.config, "dataloader_prefetch_factor", 2),
         )
 
         scores = []
@@ -2260,7 +2263,8 @@ class LaGraph:
             win_size=self.config.win_size,
             step=1,
             mode="test",
-            num_workers=0,
+            num_workers=getattr(self.config, "dataloader_num_workers", 0),
+            prefetch_factor=getattr(self.config, "dataloader_prefetch_factor", 2),
         )
 
         scores = []
@@ -2322,7 +2326,8 @@ class LaGraph:
             win_size=self.config.win_size,
             step=1,
             mode="test",
-            num_workers=0,
+            num_workers=getattr(self.config, "dataloader_num_workers", 0),
+            prefetch_factor=getattr(self.config, "dataloader_prefetch_factor", 2),
         )
 
         scores = []
@@ -3738,7 +3743,8 @@ class LaGraph:
         loader = anomaly_detection_data_provider(
             scaled_data, batch_size=eval_batch_size,
             win_size=self.config.win_size, step=1, mode="test",
-            num_workers=0,
+            num_workers=getattr(self.config, "dataloader_num_workers", 0),
+            prefetch_factor=getattr(self.config, "dataloader_prefetch_factor", 2),
         )
 
         for i, (input_data, labels) in enumerate(loader):
@@ -3820,7 +3826,8 @@ class LaGraph:
         test_loader = anomaly_detection_data_provider(
             scaled_test, batch_size=eval_batch_size,
             win_size=self.config.win_size, step=1, mode="test",
-            num_workers=0,
+            num_workers=getattr(self.config, "dataloader_num_workers", 0),
+            prefetch_factor=getattr(self.config, "dataloader_prefetch_factor", 2),
         )
 
         test_window_list = []

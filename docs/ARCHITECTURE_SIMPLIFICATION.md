@@ -477,7 +477,7 @@ Single-dataset sanity checks:
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets MSL.csv --arch-profile full --save-dir label/LaGraph_msl_15ep
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets swat.csv --arch-profile full --save-dir label/LaGraph_swat_15ep
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets MSL.csv --arch-profile dynamic-temporal-gated --seed 2021 --save-dir label/LaGraph_candidate_dynamic_temporal_gated_msl
-D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets swat.csv --arch-profile dynamic-temporal-gated --seed 2021 --num-workers 0 --prefetch-factor 2 --save-dir label/LaGraph_candidate_dynamic_temporal_gated_swat
+D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets swat.csv --arch-profile dynamic-temporal-gated --seed 2021 --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_candidate_dynamic_temporal_gated_swat
 D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets MSL.csv --arch-profile synthetic-aux --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_synth_aux_msl
 ```
 
