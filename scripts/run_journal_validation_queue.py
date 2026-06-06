@@ -146,11 +146,31 @@ ABLATIONS = [
     ),
 ]
 
+CANDIDATES = [
+    Experiment(
+        "candidate_adaptive_mechanism_wadi_e8",
+        "WADI_A1_2017_ds10.csv",
+        "source-bottleneck-adaptive-mechanism-rca",
+        8,
+        "Test event-adaptive mechanism gating on WADI before longer cross-dataset validation.",
+        run_static_baselines=False,
+    ),
+    Experiment(
+        "candidate_adaptive_mechanism_swat_e8",
+        "SWAT_A1A2_Physical_v1.csv",
+        "source-bottleneck-adaptive-mechanism-rca",
+        8,
+        "Test event-adaptive mechanism gating on SWaT after WADI sanity validation.",
+        run_static_baselines=False,
+    ),
+]
+
 
 SUITES = {
     "confirmation": CONFIRMATION,
     "ablation": ABLATIONS,
-    "all": CONFIRMATION + ABLATIONS,
+    "candidate": CANDIDATES,
+    "all": CONFIRMATION + ABLATIONS + CANDIDATES,
 }
 
 

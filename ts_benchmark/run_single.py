@@ -201,6 +201,7 @@ def main():
             "source-bottleneck-aligned-wide-rca",
             "source-bottleneck-contrast-balanced-rca",
             "source-bottleneck-specificity-rca",
+            "source-bottleneck-adaptive-mechanism-rca",
             "source-bottleneck-no-mechanism-rca",
             "source-bottleneck-no-source-gate-rca",
             "source-bottleneck-no-source-bottleneck-rca",
@@ -821,6 +822,24 @@ def main():
         type=float,
         default=None,
         help="Weight for positive mechanism-error lift in exported RCA rankings.",
+    )
+    parser.add_argument(
+        "--rca-adaptive-mechanism-gate-weight",
+        type=float,
+        default=None,
+        help="Weight for event-adaptive mechanism evidence gated by source/onset support.",
+    )
+    parser.add_argument(
+        "--rca-adaptive-mechanism-gate-floor",
+        type=float,
+        default=None,
+        help="Minimum adaptive mechanism gate value in exported RCA rankings.",
+    )
+    parser.add_argument(
+        "--rca-adaptive-mechanism-gate-mode",
+        choices=["source_onset", "source_gate", "onset", "base", "base_source_onset"],
+        default=None,
+        help="Support signal used to decide when mechanism evidence should affect RCA.",
     )
     parser.add_argument(
         "--rca-event-head-ratio",
@@ -2587,6 +2606,12 @@ def main():
         rca_event_specificity_threshold=0.35,
         rca_event_specificity_min_events=20,
     )
+    arch_profiles["source-bottleneck-adaptive-mechanism-rca"] = dict(
+        arch_profiles["source-bottleneck-specificity-rca"],
+        rca_adaptive_mechanism_gate_weight=0.20,
+        rca_adaptive_mechanism_gate_floor=0.05,
+        rca_adaptive_mechanism_gate_mode="source_onset",
+    )
     arch_profiles["source-bottleneck-no-mechanism-rca"] = dict(
         arch_profiles["source-bottleneck-specificity-rca"],
         use_mechanism_predictive_head=False,
@@ -2938,6 +2963,17 @@ def main():
         score_hyper_params["rca_mechanism_residual_window"] = max(0, args.rca_mechanism_residual_window)
     if args.rca_mechanism_residual_weight is not None:
         score_hyper_params["rca_mechanism_residual_weight"] = max(0.0, args.rca_mechanism_residual_weight)
+    if args.rca_adaptive_mechanism_gate_weight is not None:
+        score_hyper_params["rca_adaptive_mechanism_gate_weight"] = max(
+            0.0, float(args.rca_adaptive_mechanism_gate_weight)
+        )
+    if args.rca_adaptive_mechanism_gate_floor is not None:
+        score_hyper_params["rca_adaptive_mechanism_gate_floor"] = min(
+            max(float(args.rca_adaptive_mechanism_gate_floor), 0.0),
+            1.0,
+        )
+    if args.rca_adaptive_mechanism_gate_mode is not None:
+        score_hyper_params["rca_adaptive_mechanism_gate_mode"] = args.rca_adaptive_mechanism_gate_mode
     if args.rca_event_head_ratio is not None:
         score_hyper_params["rca_event_head_ratio"] = min(max(float(args.rca_event_head_ratio), 1e-6), 1.0)
     if args.rca_event_head_points is not None:

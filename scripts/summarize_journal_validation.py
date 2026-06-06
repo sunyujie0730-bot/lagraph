@@ -26,6 +26,7 @@ CORE_PROFILE = "source-bottleneck-specificity-rca"
 
 METHOD_LABELS = {
     CORE_PROFILE: "LaGraph-main",
+    "source-bottleneck-adaptive-mechanism-rca": "adaptive mechanism gate",
     "source-bottleneck-no-mechanism-rca": "no mechanism",
     "source-bottleneck-no-source-gate-rca": "no source gate",
     "source-bottleneck-no-source-bottleneck-rca": "no source bottleneck",

@@ -254,6 +254,9 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_source_innovation_neighbor_weight": 1.0,
     "rca_source_innovation_lead_points": 1,
     "rca_mechanism_guided_source_weight": 0.0,
+    "rca_adaptive_mechanism_gate_weight": 0.0,
+    "rca_adaptive_mechanism_gate_floor": 0.05,
+    "rca_adaptive_mechanism_gate_mode": "source_onset",
     "rca_counterfactual_weight": 0.0,
     "rca_counterfactual_candidates": 12,
     "rca_counterfactual_max_windows": 32,
@@ -4361,6 +4364,9 @@ class LaGraph:
         source_innovation_neighbor_weight=1.0,
         source_innovation_lead_points=1,
         mechanism_guided_source_weight=0.0,
+        adaptive_mechanism_gate_weight=0.0,
+        adaptive_mechanism_gate_floor=0.05,
+        adaptive_mechanism_gate_mode="source_onset",
         counterfactual_weight=0.0,
         onset_weight=0.0,
         onset_baseline_window=200,
@@ -4474,6 +4480,7 @@ class LaGraph:
                 mechanism_residual_weight > 0.0
                 or mechanism_guided_source_weight > 0.0
                 or source_interaction_weight > 0.0
+                or adaptive_mechanism_gate_weight > 0.0
             )
             if mechanism_residual_window > 0 and needs_mechanism_residual and event_anchor_start > 0:
                 baseline_start = max(0, event_anchor_start - mechanism_residual_window)
@@ -4485,6 +4492,8 @@ class LaGraph:
                 if mechanism_residual_weight > 0.0:
                     event_scores = event_scores + mechanism_residual_weight * event_mechanism_residual_scores
             event_mechanism_guided_source_scores = np.zeros_like(event_raw_scores)
+            event_adaptive_mechanism_gate_scores = np.zeros_like(event_raw_scores)
+            event_adaptive_mechanism_scores = np.zeros_like(event_raw_scores)
             if event_component_normalize:
                 base_norm = self._normalize_event_component(event_base_scores)
                 graph_norm = self._normalize_event_component(event_graph_scores)
@@ -4505,6 +4514,28 @@ class LaGraph:
                         source_gate_norm,
                     )
                 event_mechanism_guided_source_scores = base_norm * mechanism_source_evidence_norm
+                if adaptive_mechanism_gate_weight > 0.0:
+                    mode = str(adaptive_mechanism_gate_mode or "source_onset").lower()
+                    if mode == "source_gate":
+                        mechanism_support_norm = source_gate_norm
+                    elif mode == "onset":
+                        mechanism_support_norm = onset_norm
+                    elif mode == "base":
+                        mechanism_support_norm = base_norm
+                    elif mode == "base_source_onset":
+                        mechanism_support_norm = np.maximum.reduce([base_norm, source_gate_norm, onset_norm])
+                    else:
+                        mechanism_support_norm = np.maximum(source_gate_norm, onset_norm)
+                    raw_gate = np.sqrt(
+                        np.maximum(mechanism_source_evidence_norm * mechanism_support_norm, 0.0)
+                    )
+                    floor = min(max(float(adaptive_mechanism_gate_floor or 0.0), 0.0), 1.0)
+                    event_adaptive_mechanism_gate_scores = floor + (1.0 - floor) * raw_gate
+                    event_adaptive_mechanism_scores = (
+                        base_norm
+                        * mechanism_source_evidence_norm
+                        * event_adaptive_mechanism_gate_scores
+                    )
                 source_norm = (
                     source_base_weight * base_norm
                     + source_score_weight * source_score_norm
@@ -4513,6 +4544,7 @@ class LaGraph:
                     + source_gate_weight * source_gate_norm
                     + source_innovation_weight * source_innovation_norm
                     + mechanism_guided_source_weight * event_mechanism_guided_source_scores
+                    + adaptive_mechanism_gate_weight * event_adaptive_mechanism_scores
                     + synthetic_weight * synthetic_norm
                     + counterfactual_weight * counterfactual_norm
                 )
@@ -4660,6 +4692,8 @@ class LaGraph:
                     "source_gate_score": float(event_source_gate_scores[idx]),
                     "source_innovation_score": float(event_source_innovation_scores[idx]),
                     "mechanism_guided_source_score": float(event_mechanism_guided_source_scores[idx]),
+                    "adaptive_mechanism_gate_score": float(event_adaptive_mechanism_gate_scores[idx]),
+                    "adaptive_mechanism_score": float(event_adaptive_mechanism_scores[idx]),
                     "synthetic_rca_score": float(event_synthetic_scores[idx]),
                     "counterfactual_score": float(event_counterfactual_scores[idx]),
                     "onset_score": float(event_onset_scores[idx]),
@@ -4928,6 +4962,11 @@ class LaGraph:
         source_innovation_neighbor_weight = _cfg_float("rca_source_innovation_neighbor_weight", 1.0)
         source_innovation_lead_points = _cfg_int("rca_source_innovation_lead_points", 1)
         mechanism_guided_source_weight = _cfg_float("rca_mechanism_guided_source_weight", 0.0)
+        adaptive_mechanism_gate_weight = _cfg_float("rca_adaptive_mechanism_gate_weight", 0.0)
+        adaptive_mechanism_gate_floor = _cfg_float("rca_adaptive_mechanism_gate_floor", 0.05)
+        adaptive_mechanism_gate_mode = str(
+            getattr(self.config, "rca_adaptive_mechanism_gate_mode", "source_onset") or "source_onset"
+        )
         counterfactual_weight = _cfg_float("rca_counterfactual_weight", 0.0)
         contrast_window = _cfg_int("rca_contrast_window", 0)
         contrast_weight = _cfg_float("rca_contrast_weight", 0.0)
@@ -5070,6 +5109,9 @@ class LaGraph:
             source_innovation_neighbor_weight=source_innovation_neighbor_weight,
             source_innovation_lead_points=source_innovation_lead_points,
             mechanism_guided_source_weight=mechanism_guided_source_weight,
+            adaptive_mechanism_gate_weight=adaptive_mechanism_gate_weight,
+            adaptive_mechanism_gate_floor=adaptive_mechanism_gate_floor,
+            adaptive_mechanism_gate_mode=adaptive_mechanism_gate_mode,
             counterfactual_weight=counterfactual_weight,
             onset_weight=onset_weight,
             onset_baseline_window=onset_baseline_window,
@@ -5137,6 +5179,9 @@ class LaGraph:
                     source_innovation_neighbor_weight=source_innovation_neighbor_weight,
                     source_innovation_lead_points=source_innovation_lead_points,
                     mechanism_guided_source_weight=mechanism_guided_source_weight,
+                    adaptive_mechanism_gate_weight=adaptive_mechanism_gate_weight,
+                    adaptive_mechanism_gate_floor=adaptive_mechanism_gate_floor,
+                    adaptive_mechanism_gate_mode=adaptive_mechanism_gate_mode,
                     counterfactual_weight=counterfactual_weight,
                     onset_weight=onset_weight,
                     onset_baseline_window=onset_baseline_window,
@@ -5197,6 +5242,9 @@ class LaGraph:
                     source_innovation_neighbor_weight=source_innovation_neighbor_weight,
                     source_innovation_lead_points=source_innovation_lead_points,
                     mechanism_guided_source_weight=mechanism_guided_source_weight,
+                    adaptive_mechanism_gate_weight=adaptive_mechanism_gate_weight,
+                    adaptive_mechanism_gate_floor=adaptive_mechanism_gate_floor,
+                    adaptive_mechanism_gate_mode=adaptive_mechanism_gate_mode,
                     counterfactual_weight=counterfactual_weight,
                     onset_weight=onset_weight,
                     onset_baseline_window=onset_baseline_window,
@@ -5255,6 +5303,9 @@ class LaGraph:
                 source_innovation_neighbor_weight=source_innovation_neighbor_weight,
                 source_innovation_lead_points=source_innovation_lead_points,
                 mechanism_guided_source_weight=mechanism_guided_source_weight,
+                adaptive_mechanism_gate_weight=adaptive_mechanism_gate_weight,
+                adaptive_mechanism_gate_floor=adaptive_mechanism_gate_floor,
+                adaptive_mechanism_gate_mode=adaptive_mechanism_gate_mode,
                 counterfactual_weight=counterfactual_weight,
                 onset_weight=onset_weight,
                 onset_baseline_window=onset_baseline_window,
@@ -5320,6 +5371,9 @@ class LaGraph:
                 source_innovation_neighbor_weight=source_innovation_neighbor_weight,
                 source_innovation_lead_points=source_innovation_lead_points,
                 mechanism_guided_source_weight=mechanism_guided_source_weight,
+                adaptive_mechanism_gate_weight=adaptive_mechanism_gate_weight,
+                adaptive_mechanism_gate_floor=adaptive_mechanism_gate_floor,
+                adaptive_mechanism_gate_mode=adaptive_mechanism_gate_mode,
                 counterfactual_weight=counterfactual_weight,
                 onset_weight=onset_weight,
                 onset_baseline_window=onset_baseline_window,
@@ -5383,6 +5437,9 @@ class LaGraph:
             "rca_source_innovation_neighbor_weight": source_innovation_neighbor_weight,
             "rca_source_innovation_lead_points": source_innovation_lead_points,
             "rca_mechanism_guided_source_weight": mechanism_guided_source_weight,
+            "rca_adaptive_mechanism_gate_weight": adaptive_mechanism_gate_weight,
+            "rca_adaptive_mechanism_gate_floor": adaptive_mechanism_gate_floor,
+            "rca_adaptive_mechanism_gate_mode": adaptive_mechanism_gate_mode,
             "rca_counterfactual_weight": counterfactual_weight,
             "rca_counterfactual_candidates": _cfg_int("rca_counterfactual_candidates", 12),
             "rca_counterfactual_max_windows": _cfg_int("rca_counterfactual_max_windows", 32),
