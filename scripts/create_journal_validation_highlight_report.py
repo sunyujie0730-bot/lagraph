@@ -291,6 +291,90 @@ def source_aware_corefine_section(main: pd.DataFrame) -> list[str]:
     ]
 
 
+def source_preserving_fusion_section(main: pd.DataFrame) -> list[str]:
+    rows = []
+    for dataset in ["WADI", "SWaT"]:
+        candidates = main[
+            (main["dataset"].eq(dataset))
+            & (main["method"].eq("source-preserving fusion"))
+        ].copy()
+        if candidates.empty:
+            continue
+        candidates["epochs_int"] = candidates["epochs"].astype(int)
+        for _, cand in candidates.sort_values("epochs_int").iterrows():
+            epoch = int(cand["epochs_int"])
+            base_rows = main[
+                (main["dataset"].eq(dataset))
+                & (main["method"].eq("LaGraph-main"))
+                & (main["epochs"].astype(int).eq(epoch))
+            ]
+            if base_rows.empty:
+                base_rows = main[
+                    (main["dataset"].eq(dataset))
+                    & (main["method"].eq("LaGraph-main"))
+                    & (main["epochs"].astype(int).eq(8))
+                ]
+            if base_rows.empty:
+                continue
+            base = base_rows.iloc[0]
+            var_delta = num(cand["Var-MRR"]) - num(base["Var-MRR"])
+            hit1_delta = num(cand["Var-Hit@1"]) - num(base["Var-Hit@1"])
+            cond_delta = num(cand["Cond-Var-MRR"]) - num(base["Cond-Var-MRR"])
+            aff_delta = num(cand["Aff-F1"]) - num(base["Aff-F1"])
+            time_ratio = num(cand["Fit-min"]) / max(num(base["Fit-min"]), 1e-9)
+            if var_delta > 0.01 or hit1_delta > 0.01:
+                decision = '<span style="color:#166534"><strong>变量级有提升，优先继续确认</strong></span>'
+            elif var_delta > -0.01 and cond_delta >= 0.0:
+                decision = '<span style="color:#1d4ed8"><strong>基本持平且更有机制解释，可保留候选</strong></span>'
+            else:
+                decision = '<span style="color:#b91c1c"><strong>没有证明收益，暂不替代主模型</strong></span>'
+            rows.append(
+                [
+                    dataset,
+                    str(epoch),
+                    fmt(base["Var-MRR"]),
+                    fmt(cand["Var-MRR"]),
+                    strong(var_delta, BLUE) if var_delta >= 0.0 else warn(var_delta),
+                    fmt(cand["Var-Hit@1"]),
+                    strong(hit1_delta, BLUE) if hit1_delta >= 0.0 else warn(hit1_delta),
+                    fmt(cand["Cond-Var-MRR"]),
+                    strong(cond_delta, BLUE) if cond_delta >= 0.0 else warn(cond_delta),
+                    fmt(cand["Aff-F1"]),
+                    strong(aff_delta, BLUE) if aff_delta >= 0.0 else warn(aff_delta),
+                    f"{time_ratio:.2f}x",
+                    decision,
+                ]
+            )
+    if not rows:
+        return []
+    return [
+        "## Source-Preserving Mechanism Fusion 候选结果",
+        "",
+        "这个候选结构让 source gate 直接调节机制上下文注入：疑似源变量少吸收邻居解释，保留自身残差信号；非源变量继续利用机制邻居完成重构。通俗地说，它避免把真正的根因变量“平滑成正常”，从而尽量保留变量级 RCA 的尖锐度。",
+        "",
+        *md_table(
+            [
+                "数据集",
+                "Epoch",
+                "主模型变量 MRR",
+                "候选变量 MRR",
+                "MRR 变化",
+                "候选 Hit@1",
+                "Hit@1 变化",
+                "候选条件变量 MRR",
+                "条件变量变化",
+                "候选 Aff-F1",
+                "Aff-F1 变化",
+                "训练时间倍率",
+                "判断",
+            ],
+            rows,
+        ),
+        "",
+        "结论：该候选的目标不是增加后处理权重，而是让通道机制图在 decoder 内部以 source-aware 的方式参与重构。若它提升变量级 MRR/Hit@1，则说明通道图确实在深度表征中发挥作用；若只持平或下降，则说明当前 source gate 更适合 RCA 评分层，而不适合强行改动重构路径。",
+    ]
+
+
 def baseline_section(main: pd.DataFrame, baselines: pd.DataFrame) -> list[str]:
     rows = []
     for dataset in ["WADI", "SWaT"]:
@@ -358,6 +442,8 @@ def write_report() -> None:
         *adaptive_gate_section(main),
         "",
         *source_aware_corefine_section(main),
+        "",
+        *source_preserving_fusion_section(main),
         "",
         *baseline_section(main, baselines),
         "",

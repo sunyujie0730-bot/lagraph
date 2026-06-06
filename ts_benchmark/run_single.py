@@ -208,6 +208,7 @@ def main():
             "source-bottleneck-no-source-propagation-rca",
             "source-bottleneck-corefine-rca",
             "source-aware-dual-corefine-rca",
+            "source-preserving-mechanism-fusion-rca",
             "source-bottleneck-trained-specificity-rca",
             "source-bottleneck-gate-specificity-rca",
             "source-bottleneck-head-specificity-rca",
@@ -2680,6 +2681,12 @@ def main():
         use_source_aware_corefinement=True,
         source_aware_corefinement_init=0.15,
         source_aware_corefinement_detach_gate=True,
+    )
+    arch_profiles["source-preserving-mechanism-fusion-rca"] = dict(
+        arch_profiles["source-bottleneck-specificity-rca"],
+        use_source_preserving_decoder=True,
+        source_preserving_init=0.65,
+        source_preserving_detach_gate=True,
     )
     arch_profiles["source-bottleneck-trained-specificity-rca"] = dict(
         arch_profiles["source-bottleneck-specificity-rca"],

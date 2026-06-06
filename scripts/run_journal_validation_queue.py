@@ -179,6 +179,38 @@ CANDIDATES = [
         "Test whether source gate can directly improve channel-temporal co-refinement on SWaT.",
         run_static_baselines=False,
     ),
+    Experiment(
+        "candidate_source_preserving_fusion_wadi_e8",
+        "WADI_A1_2017_ds10.csv",
+        "source-preserving-mechanism-fusion-rca",
+        8,
+        "Test source-preserving mechanism fusion on WADI without extra graph propagation.",
+        run_static_baselines=False,
+    ),
+    Experiment(
+        "candidate_source_preserving_fusion_swat_e8",
+        "SWAT_A1A2_Physical_v1.csv",
+        "source-preserving-mechanism-fusion-rca",
+        8,
+        "Test source-preserving mechanism fusion on SWaT without extra graph propagation.",
+        run_static_baselines=False,
+    ),
+    Experiment(
+        "candidate_source_preserving_fusion_wadi_e15",
+        "WADI_A1_2017_ds10.csv",
+        "source-preserving-mechanism-fusion-rca",
+        15,
+        "Confirm source-preserving mechanism fusion on WADI at 15 epochs.",
+        run_static_baselines=False,
+    ),
+    Experiment(
+        "candidate_source_preserving_fusion_swat_e15",
+        "SWAT_A1A2_Physical_v1.csv",
+        "source-preserving-mechanism-fusion-rca",
+        15,
+        "Confirm source-preserving mechanism fusion on SWaT at 15 epochs.",
+        run_static_baselines=False,
+    ),
 ]
 
 

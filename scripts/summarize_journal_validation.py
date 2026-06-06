@@ -28,6 +28,7 @@ METHOD_LABELS = {
     CORE_PROFILE: "LaGraph-main",
     "source-bottleneck-adaptive-mechanism-rca": "adaptive mechanism gate",
     "source-aware-dual-corefine-rca": "source-aware dual corefine",
+    "source-preserving-mechanism-fusion-rca": "source-preserving fusion",
     "source-bottleneck-no-mechanism-rca": "no mechanism",
     "source-bottleneck-no-source-gate-rca": "no source gate",
     "source-bottleneck-no-source-bottleneck-rca": "no source bottleneck",

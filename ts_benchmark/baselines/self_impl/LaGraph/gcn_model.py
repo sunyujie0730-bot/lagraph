@@ -457,6 +457,9 @@ class SparseGCN(nn.Module):
                  channel_mechanism_score_eps=1e-6,
                  use_mechanism_coupled_decoder=False,
                  mechanism_coupling_init=0.15,
+                 use_source_preserving_decoder=False,
+                 source_preserving_init=0.65,
+                 source_preserving_detach_gate=True,
                  use_mechanism_residual_feedback=False,
                  mechanism_feedback_init=0.10,
                  mechanism_feedback_detach=True,
@@ -529,6 +532,9 @@ class SparseGCN(nn.Module):
         self.channel_mechanism_score_eps = float(channel_mechanism_score_eps)
         self.use_mechanism_coupled_decoder = bool(use_mechanism_coupled_decoder)
         self.mechanism_coupling_init = float(mechanism_coupling_init)
+        self.use_source_preserving_decoder = bool(use_source_preserving_decoder)
+        self.source_preserving_init = float(source_preserving_init)
+        self.source_preserving_detach_gate = bool(source_preserving_detach_gate)
         self.use_mechanism_residual_feedback = bool(use_mechanism_residual_feedback)
         self.mechanism_feedback_init = float(mechanism_feedback_init)
         self.mechanism_feedback_detach = bool(mechanism_feedback_detach)
@@ -685,6 +691,10 @@ class SparseGCN(nn.Module):
         coupling_init = min(max(float(mechanism_coupling_init), 1e-3), 1.0 - 1e-3)
         self.mechanism_coupling_logit = nn.Parameter(
             torch.tensor(float(np.log(coupling_init / (1.0 - coupling_init))))
+        )
+        source_preserve_init = min(max(float(source_preserving_init), 1e-3), 1.0 - 1e-3)
+        self.source_preserving_logit = nn.Parameter(
+            torch.tensor(float(np.log(source_preserve_init / (1.0 - source_preserve_init))))
         )
         self.mechanism_context_fusion = nn.Sequential(
             nn.Linear(c_out * 3, c_out),
@@ -854,6 +864,9 @@ class SparseGCN(nn.Module):
         self._set_trainable(self.multi_scale_scorer, self.use_multi_scale_scorer)
         self._set_trainable(self.mechanism_context_fusion, self.use_mechanism_coupled_decoder)
         self.mechanism_coupling_logit.requires_grad = self.use_mechanism_coupled_decoder
+        self.source_preserving_logit.requires_grad = (
+            self.use_mechanism_coupled_decoder and self.use_source_preserving_decoder
+        )
         self.mechanism_feedback_logit.requires_grad = self.use_mechanism_residual_feedback
         self._set_trainable(self.mechanism_predictor, self.use_mechanism_predictive_head)
         self._set_trainable(self.mechanism_predictive_fusion, self.use_mechanism_predictive_head)
@@ -1077,6 +1090,7 @@ class SparseGCN(nn.Module):
         channel_mechanism_error = None
         channel_mechanism_pred = None
         mechanism_coupling_weight = None
+        source_preserving_weight = None
         mechanism_predictive_blend_weight = None
         corefinement_weight = None
         source_aware_corefinement_weight = None
@@ -1246,7 +1260,19 @@ class SparseGCN(nn.Module):
                 )
             )
             mechanism_coupling_weight = torch.sigmoid(self.mechanism_coupling_logit)
-            stage1_feat = stage1_feat + mechanism_coupling_weight * mechanism_delta
+            if self.use_source_preserving_decoder and source_gate is not None:
+                source_preserve_gate = (
+                    source_gate.detach()
+                    if self.source_preserving_detach_gate
+                    else source_gate
+                )
+                source_preserving_weight = torch.sigmoid(self.source_preserving_logit)
+                local_coupling = mechanism_coupling_weight * (
+                    1.0 - source_preserving_weight * source_preserve_gate
+                )
+                stage1_feat = stage1_feat + local_coupling * mechanism_delta
+            else:
+                stage1_feat = stage1_feat + mechanism_coupling_weight * mechanism_delta
 
         mechanism_feedback_weight = None
         if (
@@ -1356,6 +1382,9 @@ class SparseGCN(nn.Module):
             aux_losses['channel_mechanism_loss'] = channel_mechanism_loss
         if mechanism_coupling_weight is not None:
             aux_losses['mechanism_coupling_weight'] = mechanism_coupling_weight.detach()
+        if source_preserving_weight is not None:
+            aux_losses['source_preserving_weight'] = source_preserving_weight.detach()
+            aux_losses['source_preserving_gate_mean'] = source_gate.detach().mean()
         if mechanism_feedback_weight is not None:
             aux_losses['mechanism_feedback_weight'] = mechanism_feedback_weight.detach()
         if mechanism_predictive_blend_weight is not None:

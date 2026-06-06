@@ -191,6 +191,9 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "score_stats_max_samples": 2_000_000,
     "use_mechanism_coupled_decoder": False,
     "mechanism_coupling_init": 0.15,
+    "use_source_preserving_decoder": False,
+    "source_preserving_init": 0.65,
+    "source_preserving_detach_gate": True,
     "use_mechanism_residual_feedback": False,
     "mechanism_feedback_init": 0.10,
     "mechanism_feedback_detach": True,
@@ -2575,6 +2578,13 @@ class LaGraph:
             channel_mechanism_score_eps=getattr(self.config, "channel_mechanism_score_eps", 1e-6),
             use_mechanism_coupled_decoder=getattr(self.config, "use_mechanism_coupled_decoder", False),
             mechanism_coupling_init=getattr(self.config, "mechanism_coupling_init", 0.15),
+            use_source_preserving_decoder=getattr(
+                self.config, "use_source_preserving_decoder", False
+            ),
+            source_preserving_init=getattr(self.config, "source_preserving_init", 0.65),
+            source_preserving_detach_gate=getattr(
+                self.config, "source_preserving_detach_gate", True
+            ),
             use_mechanism_residual_feedback=getattr(
                 self.config, "use_mechanism_residual_feedback", False
             ),
@@ -2877,6 +2887,13 @@ class LaGraph:
             channel_mechanism_score_eps=getattr(self.config, "channel_mechanism_score_eps", 1e-6),
             use_mechanism_coupled_decoder=getattr(self.config, "use_mechanism_coupled_decoder", False),
             mechanism_coupling_init=getattr(self.config, "mechanism_coupling_init", 0.15),
+            use_source_preserving_decoder=getattr(
+                self.config, "use_source_preserving_decoder", False
+            ),
+            source_preserving_init=getattr(self.config, "source_preserving_init", 0.65),
+            source_preserving_detach_gate=getattr(
+                self.config, "source_preserving_detach_gate", True
+            ),
             use_mechanism_residual_feedback=getattr(
                 self.config, "use_mechanism_residual_feedback", False
             ),
