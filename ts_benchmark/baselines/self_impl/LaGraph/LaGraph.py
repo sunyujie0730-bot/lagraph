@@ -1117,6 +1117,31 @@ class LaGraph:
         micro_part = f"{now.microsecond:06d}"
         filename = f"LaGraph_params_{date_part}_{micro_part}.json"
         filepath = os.path.join(params_dir, filename)
+        checkpoint_dir = os.path.join(ROOT_PATH, "result", "checkpoints")
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        checkpoint_path = os.path.join(
+            checkpoint_dir, f"LaGraph_checkpoint_{date_part}_{micro_part}.pt"
+        )
+
+        checkpoint_state = None
+        if self.early_stopping is not None:
+            checkpoint_state = getattr(self.early_stopping, "check_point", None)
+        if checkpoint_state is not None:
+            torch.save(
+                {
+                    "model_state_dict": checkpoint_state,
+                    "config": dict(vars(self.config)),
+                    "scaler": self.scaler,
+                    "input_clip_lower": self._input_clip_lower,
+                    "input_clip_upper": self._input_clip_upper,
+                    "dataset_name": self.dataset_name,
+                    "best_val_loss": float(self.early_stopping.val_loss_min),
+                    "best_epoch": int(self.early_stopping.best_epoch),
+                },
+                checkpoint_path,
+            )
+        else:
+            checkpoint_path = None
 
         params_record = {
             "meta": {
@@ -1310,6 +1335,9 @@ class LaGraph:
             "environment": {
                 "device": str(self.device),
                 "gpu_info": _get_gpu_info(self.device),
+            },
+            "artifacts": {
+                "checkpoint_path": checkpoint_path,
             },
         }
 
