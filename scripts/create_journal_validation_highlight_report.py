@@ -451,7 +451,7 @@ def write_report() -> None:
         "",
         "## 当前判断",
         "",
-        "当前系统已经能证明 source-oriented RCA 的价值：source-propagation、source gate、source bottleneck 在 WADI 上贡献明确，SWaT 上 no-mechanism 虽然更强，但它在 WADI 明显退化，说明完全删掉机制图不适合作为统一框架。adaptive mechanism gate 第一版没有提升，因此当前主模型仍固定为 source-bottleneck-specificity-rca；后续优化应优先做更深的图-源交互，而不是继续叠加后处理权重。",
+        "当前系统已经能证明 source-oriented RCA 的价值：source-propagation、source gate、source bottleneck 在 WADI 上贡献明确，SWaT 上 no-mechanism 虽然更强，但它在 WADI 明显退化，说明完全删掉机制图不适合作为统一框架。source-preserving mechanism fusion 在 8 epoch 快筛中提升了 SWaT 变量级 RCA，但 15 epoch 确认中没有稳定超过主模型，因此它更适合作为“机制图如何进入 decoder”的候选证据，而不是当前主模型。当前主模型仍固定为 source-bottleneck-specificity-rca；后续优化应优先解决机制图监督不足和长训练 RCA 退化，而不是继续叠加后处理权重。",
     ]
     OUTPUT_MD.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"Wrote {OUTPUT_MD}")
