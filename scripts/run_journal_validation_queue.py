@@ -163,6 +163,22 @@ CANDIDATES = [
         "Test event-adaptive mechanism gating on SWaT after WADI sanity validation.",
         run_static_baselines=False,
     ),
+    Experiment(
+        "candidate_source_aware_dual_corefine_wadi_e8",
+        "WADI_A1_2017_ds10.csv",
+        "source-aware-dual-corefine-rca",
+        8,
+        "Test whether source gate can directly improve channel-temporal co-refinement on WADI.",
+        run_static_baselines=False,
+    ),
+    Experiment(
+        "candidate_source_aware_dual_corefine_swat_e8",
+        "SWAT_A1A2_Physical_v1.csv",
+        "source-aware-dual-corefine-rca",
+        8,
+        "Test whether source gate can directly improve channel-temporal co-refinement on SWaT.",
+        run_static_baselines=False,
+    ),
 ]
 
 

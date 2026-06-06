@@ -222,6 +222,75 @@ def adaptive_gate_section(main: pd.DataFrame) -> list[str]:
     ]
 
 
+def source_aware_corefine_section(main: pd.DataFrame) -> list[str]:
+    rows = []
+    for dataset in ["WADI", "SWaT"]:
+        base = main[
+            (main["dataset"].eq(dataset))
+            & (main["method"].eq("LaGraph-main"))
+            & (main["epochs"].astype(int).eq(8))
+        ].iloc[0]
+        candidate = main[
+            (main["dataset"].eq(dataset))
+            & (main["method"].eq("source-aware dual corefine"))
+            & (main["epochs"].astype(int).eq(8))
+        ]
+        if candidate.empty:
+            continue
+        cand = candidate.iloc[0]
+        var_delta = num(cand["Var-MRR"]) - num(base["Var-MRR"])
+        subsys_delta = num(cand["Subsys-MRR"]) - num(base["Subsys-MRR"])
+        aff_delta = num(cand["Aff-F1"]) - num(base["Aff-F1"])
+        time_ratio = num(cand["Fit-min"]) / max(num(base["Fit-min"]), 1e-9)
+        if var_delta > 0.01:
+            decision = '<span style="color:#166534"><strong>变量级提升，值得继续确认</strong></span>'
+        elif subsys_delta > 0.01 and var_delta > -0.04:
+            decision = '<span style="color:#1d4ed8"><strong>更偏子系统/事件质量，暂不替代主模型</strong></span>'
+        else:
+            decision = '<span style="color:#b91c1c"><strong>变量级下降且更慢，不建议作为主模型</strong></span>'
+        rows.append(
+            [
+                dataset,
+                fmt(base["Var-MRR"]),
+                fmt(cand["Var-MRR"]),
+                warn(var_delta) if var_delta < -0.01 else strong(var_delta, BLUE),
+                fmt(cand["Subsys-MRR"]),
+                strong(subsys_delta, BLUE) if subsys_delta > 0.0 else warn(subsys_delta),
+                fmt(cand["Cond-Var-MRR"]),
+                fmt(cand["Aff-F1"]),
+                strong(aff_delta, BLUE) if aff_delta > 0.0 else warn(aff_delta),
+                f"{time_ratio:.2f}x",
+                decision,
+            ]
+        )
+    if not rows:
+        return []
+    return [
+        "## Source-Aware Dual Corefine 候选结果",
+        "",
+        "这个候选结构把 source gate 接入双图 refinement：先用通道图找机制邻居，再用 source gate 强调疑似源变量，最后把 source-aware context 送入第二次时序图更新。通俗地说，它不是只在最后给变量打分，而是让“疑似根因变量”参与中间特征更新。",
+        "",
+        *md_table(
+            [
+                "数据集",
+                "主模型变量 MRR",
+                "Corefine 变量 MRR",
+                "变量变化",
+                "Corefine 子系统 MRR",
+                "子系统变化",
+                "Corefine 条件变量 MRR",
+                "Corefine Aff-F1",
+                "Aff-F1 变化",
+                "训练时间倍率",
+                "判断",
+            ],
+            rows,
+        ),
+        "",
+        "结论：source-aware dual corefine 没有证明变量级 RCA 收益。WADI 子系统 MRR 和 Aff-F1 略升，但变量 MRR/Hit@1 下降；SWaT 条件变量 MRR 基本持平、子系统 MRR 极小提升，但变量 MRR 下降且训练更慢。因此它更像“深融合可行但过重”的负例，不应替代当前主模型。下一步若继续做双图融合，应改为轻量 gate/attention，而不是再堆第二次图传播。",
+    ]
+
+
 def baseline_section(main: pd.DataFrame, baselines: pd.DataFrame) -> list[str]:
     rows = []
     for dataset in ["WADI", "SWaT"]:
@@ -287,6 +356,8 @@ def write_report() -> None:
         *ablation_section(main),
         "",
         *adaptive_gate_section(main),
+        "",
+        *source_aware_corefine_section(main),
         "",
         *baseline_section(main, baselines),
         "",

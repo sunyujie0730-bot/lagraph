@@ -203,6 +203,9 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "use_channel_temporal_corefinement": False,
     "corefinement_init": 0.10,
     "corefinement_detach_first_pass": True,
+    "use_source_aware_corefinement": False,
+    "source_aware_corefinement_init": 0.15,
+    "source_aware_corefinement_detach_gate": True,
     "lambda_source_gate_sparse": 0.0,
     "use_state_aware_fusion": False,
     "state_aware_num_states": 4,
@@ -2590,6 +2593,15 @@ class LaGraph:
             corefinement_detach_first_pass=getattr(
                 self.config, "corefinement_detach_first_pass", True
             ),
+            use_source_aware_corefinement=getattr(
+                self.config, "use_source_aware_corefinement", False
+            ),
+            source_aware_corefinement_init=getattr(
+                self.config, "source_aware_corefinement_init", 0.15
+            ),
+            source_aware_corefinement_detach_gate=getattr(
+                self.config, "source_aware_corefinement_detach_gate", True
+            ),
             use_state_aware_fusion=getattr(self.config, "use_state_aware_fusion", False),
             state_aware_num_states=getattr(self.config, "state_aware_num_states", 4),
             state_aware_graph_gate_init=getattr(self.config, "state_aware_graph_gate_init", 0.6),
@@ -2882,6 +2894,15 @@ class LaGraph:
             corefinement_init=getattr(self.config, "corefinement_init", 0.10),
             corefinement_detach_first_pass=getattr(
                 self.config, "corefinement_detach_first_pass", True
+            ),
+            use_source_aware_corefinement=getattr(
+                self.config, "use_source_aware_corefinement", False
+            ),
+            source_aware_corefinement_init=getattr(
+                self.config, "source_aware_corefinement_init", 0.15
+            ),
+            source_aware_corefinement_detach_gate=getattr(
+                self.config, "source_aware_corefinement_detach_gate", True
             ),
             use_state_aware_fusion=getattr(self.config, "use_state_aware_fusion", False),
             state_aware_num_states=getattr(self.config, "state_aware_num_states", 4),

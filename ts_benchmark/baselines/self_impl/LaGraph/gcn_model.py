@@ -469,6 +469,9 @@ class SparseGCN(nn.Module):
                  use_channel_temporal_corefinement=False,
                  corefinement_init=0.10,
                  corefinement_detach_first_pass=True,
+                 use_source_aware_corefinement=False,
+                 source_aware_corefinement_init=0.15,
+                 source_aware_corefinement_detach_gate=True,
                  use_state_aware_fusion=False,
                  state_aware_num_states=4,
                  state_aware_graph_gate_init=0.6,
@@ -538,6 +541,9 @@ class SparseGCN(nn.Module):
         self.use_channel_temporal_corefinement = bool(use_channel_temporal_corefinement)
         self.corefinement_init = float(corefinement_init)
         self.corefinement_detach_first_pass = bool(corefinement_detach_first_pass)
+        self.use_source_aware_corefinement = bool(use_source_aware_corefinement)
+        self.source_aware_corefinement_init = float(source_aware_corefinement_init)
+        self.source_aware_corefinement_detach_gate = bool(source_aware_corefinement_detach_gate)
         self.use_state_aware_fusion = use_state_aware_fusion
         self.state_aware_num_states = int(state_aware_num_states)
         self.state_aware_graph_gate_init = float(state_aware_graph_gate_init)
@@ -720,6 +726,20 @@ class SparseGCN(nn.Module):
         )
 
         # === ★ P0: Dual-Path VQ Bottleneck (旁路模式) ===
+        source_corefine_init = min(
+            max(float(source_aware_corefinement_init), 1e-3),
+            1.0 - 1e-3,
+        )
+        self.source_aware_corefinement_logit = nn.Parameter(
+            torch.tensor(float(np.log(source_corefine_init / (1.0 - source_corefine_init))))
+        )
+        self.source_aware_corefinement_fusion = nn.Sequential(
+            nn.Linear(c_out * 5, c_out),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(c_out, c_out),
+        )
+
         source_gate_init = min(max(float(source_gate_init), 1e-3), 1.0 - 1e-3)
         source_gate_bias = float(np.log(source_gate_init / (1.0 - source_gate_init)))
         self.source_gate_net = nn.Sequential(
@@ -842,6 +862,13 @@ class SparseGCN(nn.Module):
         self.source_gate_bias.requires_grad = self.use_source_gate
         self._set_trainable(self.corefinement_fusion, self.use_channel_temporal_corefinement)
         self.corefinement_logit.requires_grad = self.use_channel_temporal_corefinement
+        self._set_trainable(
+            self.source_aware_corefinement_fusion,
+            self.use_source_aware_corefinement,
+        )
+        self.source_aware_corefinement_logit.requires_grad = (
+            self.use_source_aware_corefinement
+        )
 
     def _parallel_fuse_graphs(self, resid, resid_channel, resid_temporal):
         gate_input = torch.cat(
@@ -1052,6 +1079,7 @@ class SparseGCN(nn.Module):
         mechanism_coupling_weight = None
         mechanism_predictive_blend_weight = None
         corefinement_weight = None
+        source_aware_corefinement_weight = None
         source_gate = None
         source_gate_score = None
 
@@ -1133,19 +1161,46 @@ class SparseGCN(nn.Module):
             else:
                 resid_serial, A_temp = self.temporal_graph(resid_adapted, A_proximity=A_adaptive)
             temporal_mechanism_context = self._graph_neighbor_context(resid_serial, A_adaptive)
-            corefine_delta = self.corefinement_fusion(
-                torch.cat(
-                    [
-                        resid_serial,
-                        resid_adapted,
-                        temporal_mechanism_context,
-                        (resid_serial - temporal_mechanism_context).abs(),
-                    ],
-                    dim=-1,
+            if self.use_source_aware_corefinement and source_gate is not None:
+                source_refine_gate = (
+                    source_gate.detach()
+                    if self.source_aware_corefinement_detach_gate
+                    else source_gate
                 )
-            )
-            corefinement_weight = torch.sigmoid(self.corefinement_logit)
-            resid_corefined = resid_serial + corefinement_weight * corefine_delta
+                source_context = self._graph_neighbor_context(
+                    source_refine_gate * resid_serial,
+                    A_adaptive,
+                )
+                corefine_delta = self.source_aware_corefinement_fusion(
+                    torch.cat(
+                        [
+                            resid_serial,
+                            resid_adapted,
+                            temporal_mechanism_context,
+                            source_context,
+                            (resid_serial - source_context).abs(),
+                        ],
+                        dim=-1,
+                    )
+                )
+                source_aware_corefinement_weight = torch.sigmoid(
+                    self.source_aware_corefinement_logit
+                )
+                resid_corefined = resid_serial + source_aware_corefinement_weight * corefine_delta
+            else:
+                corefine_delta = self.corefinement_fusion(
+                    torch.cat(
+                        [
+                            resid_serial,
+                            resid_adapted,
+                            temporal_mechanism_context,
+                            (resid_serial - temporal_mechanism_context).abs(),
+                        ],
+                        dim=-1,
+                    )
+                )
+                corefinement_weight = torch.sigmoid(self.corefinement_logit)
+                resid_corefined = resid_serial + corefinement_weight * corefine_delta
             stage1_feat, A_temp = self.temporal_graph(resid_corefined, A_proximity=A_adaptive)
         elif self.use_state_aware_fusion and self.use_channel_graph and self.use_temporal_graph:
             resid_serial, A_temp = self.temporal_graph(resid_adapted, A_proximity=A_adaptive)
@@ -1307,6 +1362,11 @@ class SparseGCN(nn.Module):
             aux_losses['mechanism_predictive_blend_weight'] = mechanism_predictive_blend_weight.detach()
         if corefinement_weight is not None:
             aux_losses['corefinement_weight'] = corefinement_weight.detach()
+        if source_aware_corefinement_weight is not None:
+            aux_losses['source_aware_corefinement_weight'] = (
+                source_aware_corefinement_weight.detach()
+            )
+            aux_losses['source_aware_corefinement_gate_mean'] = source_gate.detach().mean()
         if source_gate is not None:
             aux_losses['source_gate'] = source_gate.detach()
             aux_losses['source_gate_prob'] = source_gate
