@@ -202,6 +202,7 @@ def main():
             "source-bottleneck-contrast-balanced-rca",
             "source-bottleneck-specificity-rca",
             "source-bottleneck-no-mechanism-rca",
+            "source-bottleneck-no-source-gate-rca",
             "source-bottleneck-no-source-bottleneck-rca",
             "source-bottleneck-no-source-propagation-rca",
             "source-bottleneck-corefine-rca",
@@ -2598,6 +2599,19 @@ def main():
         rca_source_mechanism_weight=0.0,
         rca_mechanism_guided_source_weight=0.0,
         rca_mechanism_residual_weight=0.0,
+    )
+    arch_profiles["source-bottleneck-no-source-gate-rca"] = dict(
+        arch_profiles["source-bottleneck-specificity-rca"],
+        use_source_gate=False,
+        lambda_source_gate_sparse=0.0,
+        lambda_interventional_source_bce=0.0,
+        interventional_rank_signal="mechanism",
+        lambda_source_bottleneck=0.0,
+        source_bottleneck_bce_weight=0.0,
+        source_bottleneck_rank_weight=0.0,
+        source_bottleneck_effect_suppress_weight=0.0,
+        source_bottleneck_specificity_weight=0.0,
+        rca_source_gate_weight=0.0,
     )
     arch_profiles["source-bottleneck-no-source-bottleneck-rca"] = dict(
         arch_profiles["source-bottleneck-specificity-rca"],

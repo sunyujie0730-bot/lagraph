@@ -97,6 +97,22 @@ ABLATIONS = [
         run_static_baselines=False,
     ),
     Experiment(
+        "ablation_no_source_gate_wadi_e8",
+        "WADI_A1_2017_ds10.csv",
+        "source-bottleneck-no-source-gate-rca",
+        8,
+        "Remove only the source gate to test whether gate-based source selection is necessary.",
+        run_static_baselines=False,
+    ),
+    Experiment(
+        "ablation_no_source_gate_swat_e8",
+        "SWAT_A1A2_Physical_v1.csv",
+        "source-bottleneck-no-source-gate-rca",
+        8,
+        "Remove only the source gate to test whether gate-based source selection is necessary.",
+        run_static_baselines=False,
+    ),
+    Experiment(
         "ablation_no_source_bottleneck_wadi_e8",
         "WADI_A1_2017_ds10.csv",
         "source-bottleneck-no-source-bottleneck-rca",
