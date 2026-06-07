@@ -48,6 +48,8 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "kernel_size": 25,
     "decomposition": 0,
     "lradj": "type1",
+    "num_workers": 2,
+    "prefetch_factor": 2,
 }
 
 
@@ -167,6 +169,8 @@ class ModernTCN:
             win_size=config.seq_len,
             step=1,
             mode="val",
+            num_workers=config.num_workers,
+            prefetch_factor=config.prefetch_factor,
         )
 
         self.train_data_loader = anomaly_detection_data_provider(
@@ -175,6 +179,8 @@ class ModernTCN:
             win_size=config.seq_len,
             step=1,
             mode="train",
+            num_workers=config.num_workers,
+            prefetch_factor=config.prefetch_factor,
         )
 
         total_params = sum(
@@ -270,6 +276,8 @@ class ModernTCN:
             win_size=config.seq_len,
             step=1,
             mode="thre",
+            num_workers=config.num_workers,
+            prefetch_factor=config.prefetch_factor,
         )
 
         self.model.to(self.device)
@@ -310,6 +318,8 @@ class ModernTCN:
             win_size=config.seq_len,
             step=1,
             mode="test",
+            num_workers=config.num_workers,
+            prefetch_factor=config.prefetch_factor,
         )
 
         self.thre_loader = anomaly_detection_data_provider(
@@ -318,6 +328,8 @@ class ModernTCN:
             win_size=config.seq_len,
             step=1,
             mode="thre",
+            num_workers=config.num_workers,
+            prefetch_factor=config.prefetch_factor,
         )
 
         attens_energy = []
