@@ -469,6 +469,7 @@ class SparseGCN(nn.Module):
                  mechanism_predictive_blend_init=0.30,
                  use_source_gate=False,
                  source_gate_init=0.20,
+                 use_root_score_head=False,
                  use_channel_temporal_corefinement=False,
                  corefinement_init=0.10,
                  corefinement_detach_first_pass=True,
@@ -544,6 +545,7 @@ class SparseGCN(nn.Module):
         self.mechanism_predictive_blend_init = float(mechanism_predictive_blend_init)
         self.use_source_gate = bool(use_source_gate)
         self.source_gate_init = float(source_gate_init)
+        self.use_root_score_head = bool(use_root_score_head)
         self.use_channel_temporal_corefinement = bool(use_channel_temporal_corefinement)
         self.corefinement_init = float(corefinement_init)
         self.corefinement_detach_first_pass = bool(corefinement_detach_first_pass)
@@ -762,6 +764,15 @@ class SparseGCN(nn.Module):
         nn.init.zeros_(self.source_gate_net[-1].bias)
         self.source_gate_bias = nn.Parameter(torch.full((1, 1, c_out), source_gate_bias))
 
+        root_hidden = max(16, min(64, c_out))
+        self.root_score_head = nn.Sequential(
+            nn.Linear(7, root_hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(root_hidden, 1),
+        )
+        nn.init.constant_(self.root_score_head[-1].bias, -2.0)
+
         self.vq_bottleneck = VQBottleneck(
             dim=c_out,
             codebook_size=64,
@@ -873,6 +884,7 @@ class SparseGCN(nn.Module):
         self.mechanism_predictive_blend_logit.requires_grad = self.use_mechanism_predictive_head
         self._set_trainable(self.source_gate_net, self.use_source_gate)
         self.source_gate_bias.requires_grad = self.use_source_gate
+        self._set_trainable(self.root_score_head, self.use_root_score_head)
         self._set_trainable(self.corefinement_fusion, self.use_channel_temporal_corefinement)
         self.corefinement_logit.requires_grad = self.use_channel_temporal_corefinement
         self._set_trainable(
@@ -1096,6 +1108,7 @@ class SparseGCN(nn.Module):
         source_aware_corefinement_weight = None
         source_gate = None
         source_gate_score = None
+        root_score_logits = None
 
         if self.use_lagged_causal_graph and self.lagged_causal_graph is not None:
             causal_input = resid.detach() if self.causal_detach_backbone else resid
@@ -1357,6 +1370,36 @@ class SparseGCN(nn.Module):
         trend_out = self.trend_linear(trend)
         x_rec = resid_out + trend_out
 
+        if self.use_root_score_head:
+            if channel_mechanism_error is not None:
+                mechanism_error_feat = channel_mechanism_error.to(dtype=resid.dtype)
+            elif self.use_channel_graph:
+                mechanism_error_feat = torch.abs(resid - self._graph_neighbor_context(resid, A_adaptive))
+            else:
+                mechanism_error_feat = torch.zeros_like(resid)
+            causal_error_feat = (
+                causal_channel_error.to(dtype=resid.dtype)
+                if causal_channel_error is not None
+                else torch.zeros_like(resid)
+            )
+            gate_feat = source_gate if source_gate is not None else torch.zeros_like(resid)
+            graph_delta = torch.abs(resid_adapted - resid)
+            stage_delta = torch.abs(stage1_feat - resid)
+            recon_error = torch.abs(x_rec - x)
+            root_features = torch.stack(
+                [
+                    torch.log1p(recon_error),
+                    torch.log1p(torch.abs(resid)),
+                    torch.log1p(torch.abs(mechanism_error_feat)),
+                    torch.log1p(torch.abs(causal_error_feat)),
+                    gate_feat,
+                    torch.log1p(graph_delta),
+                    torch.log1p(stage_delta),
+                ],
+                dim=-1,
+            )
+            root_score_logits = self.root_score_head(root_features).squeeze(-1)
+
         aux_losses = {}
         aux_losses['sparse_loss'] = self.get_sparse_loss()
         aux_losses['vq_loss'] = vq_loss_val
@@ -1401,6 +1444,9 @@ class SparseGCN(nn.Module):
             aux_losses['source_gate_prob'] = source_gate
             aux_losses['source_gate_score'] = source_gate_score
             aux_losses['source_gate_sparse_loss'] = source_gate.mean()
+        if root_score_logits is not None:
+            aux_losses['root_score_logits'] = root_score_logits
+            aux_losses['root_score_prob'] = torch.sigmoid(root_score_logits)
         if synthetic_logits is not None:
             aux_losses['synthetic_logits'] = synthetic_logits
         if synthetic_rca_logits is not None:

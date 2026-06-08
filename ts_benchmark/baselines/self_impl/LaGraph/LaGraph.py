@@ -135,6 +135,11 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "lambda_source_effect_rca_head": 0.0,
     "source_effect_rca_head_bce_weight": 1.0,
     "source_effect_rca_head_rank_weight": 1.0,
+    "use_root_score_head": False,
+    "lambda_source_effect_root_score": 0.0,
+    "root_score_bce_weight": 1.0,
+    "root_score_rank_weight": 1.0,
+    "root_score_effect_suppress_weight": 0.5,
     "lambda_source_bottleneck": 0.0,
     "source_bottleneck_bce_weight": 1.0,
     "source_bottleneck_rank_weight": 0.5,
@@ -261,6 +266,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_causal_weight": 0.0,
     "rca_synthetic_weight": 0.0,
     "rca_source_gate_weight": 0.0,
+    "rca_root_score_weight": 0.0,
     "rca_source_interaction_weight": 0.0,
     "rca_source_innovation_weight": 0.0,
     "rca_source_innovation_mode": "series",
@@ -991,6 +997,7 @@ class LaGraph:
         self._last_mechanism_channel_scores = None
         self._last_causal_channel_scores = None
         self._last_source_gate_channel_scores = None
+        self._last_root_score_channel_scores = None
         self._last_synthetic_rca_channel_scores = None
         self._last_channel_names = None
         self._channel_corr_prior = None
@@ -1268,6 +1275,15 @@ class LaGraph:
                 "source_effect_rca_head_rank_weight": getattr(
                     self.config, "source_effect_rca_head_rank_weight", None
                 ),
+                "use_root_score_head": getattr(self.config, "use_root_score_head", None),
+                "lambda_source_effect_root_score": getattr(
+                    self.config, "lambda_source_effect_root_score", None
+                ),
+                "root_score_bce_weight": getattr(self.config, "root_score_bce_weight", None),
+                "root_score_rank_weight": getattr(self.config, "root_score_rank_weight", None),
+                "root_score_effect_suppress_weight": getattr(
+                    self.config, "root_score_effect_suppress_weight", None
+                ),
                 "lambda_source_bottleneck": getattr(self.config, "lambda_source_bottleneck", None),
                 "source_bottleneck_bce_weight": getattr(
                     self.config, "source_bottleneck_bce_weight", None
@@ -1354,6 +1370,7 @@ class LaGraph:
                 "rca_source_weight": getattr(self.config, "rca_source_weight", None),
                 "rca_source_base_weight": getattr(self.config, "rca_source_base_weight", None),
                 "rca_source_score_weight": getattr(self.config, "rca_source_score_weight", None),
+                "rca_root_score_weight": getattr(self.config, "rca_root_score_weight", None),
                 "rca_source_consensus_weight": getattr(self.config, "rca_source_consensus_weight", None),
                 "rca_onset_consensus_weight": getattr(self.config, "rca_onset_consensus_weight", None),
                 "rca_source_consensus_mode": getattr(self.config, "rca_source_consensus_mode", None),
@@ -2179,6 +2196,7 @@ class LaGraph:
         effect_time_sum = effect_time_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
         gate_prob = synth_aux.get("source_gate_prob")
         synth_rca_logits = synth_aux.get("synthetic_rca_logits")
+        root_score_logits = synth_aux.get("root_score_logits")
         gate_channel_scores = None
         if gate_prob is not None:
             gate_channel_scores = (gate_prob * event_mask.unsqueeze(-1)).sum(dim=1) / mask_sum
@@ -2207,6 +2225,7 @@ class LaGraph:
         onset_rank_weight = float(getattr(self.config, "source_effect_onset_rank_weight", 0.0) or 0.0)
         specificity_weight = float(getattr(self.config, "source_effect_specificity_weight", 0.0) or 0.0)
         rca_head_weight = float(getattr(self.config, "lambda_source_effect_rca_head", 0.0) or 0.0)
+        root_score_weight = float(getattr(self.config, "lambda_source_effect_root_score", 0.0) or 0.0)
 
         total = input_data.new_tensor(0.0)
         if gate_channel_scores is not None:
@@ -2250,6 +2269,43 @@ class LaGraph:
                 rca_head_bce_weight * rca_head_bce
                 + rca_head_rank_weight * rca_head_rank
             )
+        if root_score_logits is not None and root_score_weight > 0:
+            root_target = (
+                source_onset_mask.unsqueeze(-1).to(dtype=root_score_logits.dtype)
+                * source_mask.unsqueeze(1).to(dtype=root_score_logits.dtype)
+            )
+            event_focus = event_mask.unsqueeze(-1).to(dtype=root_score_logits.dtype).expand_as(root_score_logits)
+            root_bce_weight = float(getattr(self.config, "root_score_bce_weight", 1.0) or 1.0)
+            root_rank_weight = float(getattr(self.config, "root_score_rank_weight", 1.0) or 1.0)
+            root_effect_suppress_weight = float(
+                getattr(self.config, "root_score_effect_suppress_weight", 0.5) or 0.0
+            )
+            pos = (root_target * event_focus).sum().clamp_min(1.0)
+            neg = ((1.0 - root_target) * event_focus).sum().clamp_min(1.0)
+            pos_weight = (neg / pos).clamp(1.0, 20.0)
+            root_bce = F.binary_cross_entropy_with_logits(
+                root_score_logits,
+                root_target,
+                pos_weight=pos_weight,
+                reduction="none",
+            )
+            root_bce = (root_bce * event_focus).sum() / event_focus.sum().clamp_min(1.0)
+
+            root_prob = torch.sigmoid(root_score_logits)
+            root_onset_scores = (
+                root_prob * source_onset_mask.unsqueeze(-1).to(dtype=root_prob.dtype)
+            ).sum(dim=1) / onset_sum
+            root_rank = self._synthetic_rca_ranking_loss(root_onset_scores, source_mask)
+            root_total = root_bce_weight * root_bce + root_rank_weight * root_rank
+            if root_effect_suppress_weight > 0 and effect_mask.sum() > 0 and effect_time_mask.sum() > 0:
+                root_effect_scores = (
+                    root_prob * effect_time_mask.unsqueeze(-1).to(dtype=root_prob.dtype)
+                ).sum(dim=1) / effect_time_sum
+                effect_suppress = (
+                    root_effect_scores * effect_mask.to(dtype=root_prob.dtype)
+                ).sum() / effect_mask.sum().clamp_min(1.0)
+                root_total = root_total + root_effect_suppress_weight * effect_suppress
+            total = total + root_score_weight * root_total
         if rank_weight > 0:
             total = total + rank_weight * self._synthetic_rca_ranking_loss(channel_scores, source_mask)
         if effect_rank_weight > 0:
@@ -2763,6 +2819,7 @@ class LaGraph:
             mechanism_predictive_blend_init=getattr(self.config, "mechanism_predictive_blend_init", 0.30),
             use_source_gate=getattr(self.config, "use_source_gate", False),
             source_gate_init=getattr(self.config, "source_gate_init", 0.20),
+            use_root_score_head=getattr(self.config, "use_root_score_head", False),
             use_channel_temporal_corefinement=getattr(
                 self.config, "use_channel_temporal_corefinement", False
             ),
@@ -3122,6 +3179,7 @@ class LaGraph:
             mechanism_predictive_blend_init=getattr(self.config, "mechanism_predictive_blend_init", 0.30),
             use_source_gate=getattr(self.config, "use_source_gate", False),
             source_gate_init=getattr(self.config, "source_gate_init", 0.20),
+            use_root_score_head=getattr(self.config, "use_root_score_head", False),
             use_channel_temporal_corefinement=getattr(
                 self.config, "use_channel_temporal_corefinement", False
             ),
@@ -3379,6 +3437,16 @@ class LaGraph:
                 "use_source_effect_synthetic": getattr(self.config, "use_source_effect_synthetic", None),
                 "lambda_source_effect": getattr(self.config, "lambda_source_effect", None),
                 "source_effect_interval": getattr(self.config, "source_effect_interval", None),
+                "use_root_score_head": getattr(self.config, "use_root_score_head", None),
+                "lambda_source_effect_root_score": getattr(
+                    self.config, "lambda_source_effect_root_score", None
+                ),
+                "root_score_bce_weight": getattr(self.config, "root_score_bce_weight", None),
+                "root_score_rank_weight": getattr(self.config, "root_score_rank_weight", None),
+                "root_score_effect_suppress_weight": getattr(
+                    self.config, "root_score_effect_suppress_weight", None
+                ),
+                "rca_root_score_weight": getattr(self.config, "rca_root_score_weight", None),
                 "rca_source_innovation_weight": getattr(self.config, "rca_source_innovation_weight", None),
                 "rca_source_innovation_mode": getattr(self.config, "rca_source_innovation_mode", None),
                 "rca_source_innovation_neighbor_weight": getattr(
@@ -3678,6 +3746,11 @@ class LaGraph:
                 device=channel_err.device,
                 dtype=channel_err.dtype,
             )
+        root_score_err = None
+        if aux_losses:
+            root_score_err = aux_losses.get("root_score_prob")
+        if root_score_err is None:
+            root_score_err = torch.zeros_like(channel_err)
         return (
             score.cpu().numpy(),
             channel_err.cpu().numpy(),
@@ -3686,6 +3759,7 @@ class LaGraph:
             causal_err.cpu().numpy(),
             source_gate_err.cpu().numpy(),
             synthetic_rca_window_scores.cpu().numpy(),
+            root_score_err.cpu().numpy(),
         )
 
     def _graph_propagated_channel_error(self, channel_err, A_adaptive):
@@ -3817,6 +3891,7 @@ class LaGraph:
         mechanism_channel_sums = np.zeros_like(channel_sums)
         causal_channel_sums = np.zeros_like(channel_sums)
         source_gate_channel_sums = np.zeros_like(channel_sums)
+        root_score_channel_sums = np.zeros_like(channel_sums)
         synthetic_rca_channel_diff = np.zeros((total_length + 1, n_channels), dtype=np.float64)
         channel_counts = np.zeros(total_length, dtype=np.float64)
 
@@ -3842,6 +3917,7 @@ class LaGraph:
                     causal_channel_err,
                     source_gate_channel_err,
                     synthetic_rca_channel_err,
+                    root_score_channel_err,
                 ) = self._detect_forward_with_channels(input_data)
                 self._add_window_channel_score_group(
                     [
@@ -3850,6 +3926,7 @@ class LaGraph:
                         mechanism_channel_sums,
                         causal_channel_sums,
                         source_gate_channel_sums,
+                        root_score_channel_sums,
                     ],
                     channel_counts,
                     [
@@ -3858,6 +3935,7 @@ class LaGraph:
                         mechanism_channel_err,
                         causal_channel_err,
                         source_gate_channel_err,
+                        root_score_channel_err,
                     ],
                     cursor,
                 )
@@ -3897,6 +3975,12 @@ class LaGraph:
             source_gate_channel_sums,
             channel_counts[:, None],
             out=np.zeros_like(source_gate_channel_sums),
+            where=channel_counts[:, None] > 0,
+        ).astype(np.float32)
+        self._last_root_score_channel_scores = np.divide(
+            root_score_channel_sums,
+            channel_counts[:, None],
+            out=np.zeros_like(root_score_channel_sums),
             where=channel_counts[:, None] > 0,
         ).astype(np.float32)
         synthetic_rca_channel_sums = np.cumsum(synthetic_rca_channel_diff[:-1], axis=0)
@@ -4174,6 +4258,7 @@ class LaGraph:
         mechanism_channel_sums = None
         causal_channel_sums = None
         source_gate_channel_sums = None
+        root_score_channel_sums = None
         synthetic_rca_channel_diff = None
         channel_counts = None
         window_cursor = 0
@@ -4183,6 +4268,7 @@ class LaGraph:
             mechanism_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             causal_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             source_gate_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
+            root_score_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             synthetic_rca_channel_diff = np.zeros((total_length + 1, scaled_test.shape[1]), dtype=np.float64)
             channel_counts = np.zeros(total_length, dtype=np.float64)
 
@@ -4197,6 +4283,7 @@ class LaGraph:
                     causal_channel_err,
                     source_gate_channel_err,
                     synthetic_rca_channel_err,
+                    root_score_channel_err,
                 ) = self._detect_forward_with_channels(input_data)
                 self._add_window_channel_score_group(
                     [
@@ -4205,6 +4292,7 @@ class LaGraph:
                         mechanism_channel_sums,
                         causal_channel_sums,
                         source_gate_channel_sums,
+                        root_score_channel_sums,
                     ],
                     channel_counts,
                     [
@@ -4213,6 +4301,7 @@ class LaGraph:
                         mechanism_channel_err,
                         causal_channel_err,
                         source_gate_channel_err,
+                        root_score_channel_err,
                     ],
                     window_cursor,
                 )
@@ -4264,6 +4353,12 @@ class LaGraph:
                 out=np.zeros_like(source_gate_channel_sums),
                 where=channel_counts[:, None] > 0,
             ).astype(np.float32)
+            self._last_root_score_channel_scores = np.divide(
+                root_score_channel_sums,
+                channel_counts[:, None],
+                out=np.zeros_like(root_score_channel_sums),
+                where=channel_counts[:, None] > 0,
+            ).astype(np.float32)
             synthetic_rca_channel_sums = np.cumsum(synthetic_rca_channel_diff[:-1], axis=0)
             self._last_synthetic_rca_channel_scores = np.divide(
                 synthetic_rca_channel_sums,
@@ -4278,6 +4373,7 @@ class LaGraph:
             self._last_mechanism_channel_scores = None
             self._last_causal_channel_scores = None
             self._last_source_gate_channel_scores = None
+            self._last_root_score_channel_scores = None
             self._last_synthetic_rca_channel_scores = None
             self._last_channel_names = list(test_data.columns) if event_local_rca else None
 
@@ -4733,6 +4829,7 @@ class LaGraph:
         propagation_channel_scores=None,
         causal_channel_scores=None,
         source_gate_channel_scores=None,
+        root_score_channel_scores=None,
         source_innovation_channel_scores=None,
         synthetic_channel_scores=None,
         counterfactual_channel_scores=None,
@@ -4750,6 +4847,7 @@ class LaGraph:
         causal_weight=0.0,
         synthetic_weight=0.0,
         source_gate_weight=0.0,
+        root_score_weight=0.0,
         source_interaction_weight=0.0,
         source_innovation_weight=0.0,
         source_innovation_mode="series",
@@ -4827,6 +4925,11 @@ class LaGraph:
                 if source_gate_channel_scores is not None
                 else np.zeros_like(event_raw_scores)
             )
+            event_root_scores = (
+                root_score_channel_scores[score_start:score_end].mean(axis=0)
+                if root_score_channel_scores is not None
+                else np.zeros_like(event_raw_scores)
+            )
             onset_source_scores = source_channel_scores if source_channel_scores is not None else base_channel_scores
             event_source_innovation_scores = (
                 source_innovation_channel_scores[score_start:score_end].mean(axis=0)
@@ -4892,6 +4995,7 @@ class LaGraph:
                 mechanism_norm = self._normalize_event_component(event_mechanism_scores)
                 causal_norm = self._normalize_event_component(event_causal_scores)
                 source_gate_norm = self._normalize_event_component(event_source_gate_scores)
+                root_score_norm = self._normalize_event_component(event_root_scores)
                 source_innovation_norm = self._normalize_event_component(event_source_innovation_scores)
                 synthetic_norm = self._normalize_event_component(event_synthetic_scores)
                 counterfactual_norm = self._normalize_event_component(event_counterfactual_scores)
@@ -4934,6 +5038,7 @@ class LaGraph:
                     + source_mechanism_weight * mechanism_norm
                     + causal_weight * causal_norm
                     + source_gate_weight * source_gate_norm
+                    + root_score_weight * root_score_norm
                     + source_innovation_weight * source_innovation_norm
                     + mechanism_guided_source_weight * event_mechanism_guided_source_scores
                     + adaptive_mechanism_gate_weight * event_adaptive_mechanism_scores
@@ -4951,6 +5056,7 @@ class LaGraph:
                         + graph_weight * graph_norm
                         + mechanism_weight * mechanism_norm
                         + source_gate_weight * source_gate_norm
+                        + root_score_weight * root_score_norm
                         + source_innovation_weight * source_innovation_norm
                         + synthetic_weight * synthetic_norm
                         + counterfactual_weight * counterfactual_norm
@@ -5095,6 +5201,7 @@ class LaGraph:
                     "propagation_score": float(event_propagation_scores[idx]),
                     "causal_score": float(event_causal_scores[idx]),
                     "source_gate_score": float(event_source_gate_scores[idx]),
+                    "root_score": float(event_root_scores[idx]),
                     "source_innovation_score": float(event_source_innovation_scores[idx]),
                     "mechanism_guided_source_score": float(event_mechanism_guided_source_scores[idx]),
                     "adaptive_mechanism_gate_score": float(event_adaptive_mechanism_gate_scores[idx]),
@@ -5339,6 +5446,11 @@ class LaGraph:
             source_gate_channel_scores = np.zeros_like(base_channel_scores)
         else:
             source_gate_channel_scores = source_gate_channel_scores[score_slice]
+        root_score_channel_scores = getattr(self, "_last_root_score_channel_scores", None)
+        if root_score_channel_scores is None:
+            root_score_channel_scores = np.zeros_like(base_channel_scores)
+        else:
+            root_score_channel_scores = root_score_channel_scores[score_slice]
         synthetic_channel_scores = getattr(self, "_last_synthetic_rca_channel_scores", None)
         if synthetic_channel_scores is None:
             synthetic_channel_scores = np.zeros_like(base_channel_scores)
@@ -5366,6 +5478,7 @@ class LaGraph:
         causal_weight = _cfg_float("rca_causal_weight", 0.0)
         synthetic_weight = _cfg_float("rca_synthetic_weight", 0.0)
         source_gate_weight = _cfg_float("rca_source_gate_weight", 0.0)
+        root_score_weight = _cfg_float("rca_root_score_weight", 0.0)
         source_interaction_weight = _cfg_float("rca_source_interaction_weight", 0.0)
         source_innovation_weight = _cfg_float("rca_source_innovation_weight", 0.0)
         source_innovation_mode = str(
@@ -5422,6 +5535,7 @@ class LaGraph:
                 + source_mechanism_weight * mechanism_channel_scores
                 + causal_weight * causal_channel_scores
                 + source_gate_weight * source_gate_channel_scores
+                + root_score_weight * root_score_channel_scores
                 + source_innovation_weight * (
                     source_innovation_channel_scores
                     if source_innovation_channel_scores is not None
@@ -5444,6 +5558,7 @@ class LaGraph:
                 + source_mechanism_weight * mechanism_channel_scores
                 + causal_weight * causal_channel_scores
                 + source_gate_weight * source_gate_channel_scores
+                + root_score_weight * root_score_channel_scores
                 + source_innovation_weight * (
                     source_innovation_channel_scores
                     if source_innovation_channel_scores is not None
@@ -5467,6 +5582,7 @@ class LaGraph:
                 + graph_weight * graph_channel_scores
                 + mechanism_weight * mechanism_channel_scores
                 + source_gate_weight * source_gate_channel_scores
+                + root_score_weight * root_score_channel_scores
                 + source_innovation_weight * (
                     source_innovation_channel_scores
                     if source_innovation_channel_scores is not None
@@ -5498,6 +5614,7 @@ class LaGraph:
             propagation_channel_scores=propagation_channel_scores,
             causal_channel_scores=causal_channel_scores,
             source_gate_channel_scores=source_gate_channel_scores,
+            root_score_channel_scores=root_score_channel_scores,
             source_innovation_channel_scores=source_innovation_channel_scores,
             synthetic_channel_scores=synthetic_channel_scores,
             counterfactual_channel_scores=counterfactual_channel_scores,
@@ -5515,6 +5632,7 @@ class LaGraph:
             causal_weight=causal_weight,
             synthetic_weight=synthetic_weight,
             source_gate_weight=source_gate_weight,
+            root_score_weight=root_score_weight,
             source_interaction_weight=source_interaction_weight,
             source_innovation_weight=source_innovation_weight,
             source_innovation_mode=source_innovation_mode,
@@ -5568,6 +5686,7 @@ class LaGraph:
                     propagation_channel_scores=propagation_channel_scores,
                     causal_channel_scores=causal_channel_scores,
                     source_gate_channel_scores=source_gate_channel_scores,
+                    root_score_channel_scores=root_score_channel_scores,
                     source_innovation_channel_scores=source_innovation_channel_scores,
                     synthetic_channel_scores=synthetic_channel_scores,
                     counterfactual_channel_scores=counterfactual_channel_scores,
@@ -5585,6 +5704,7 @@ class LaGraph:
                     causal_weight=causal_weight,
                     synthetic_weight=synthetic_weight,
                     source_gate_weight=source_gate_weight,
+                    root_score_weight=root_score_weight,
                     source_interaction_weight=source_interaction_weight,
                     source_innovation_weight=source_innovation_weight,
                     source_innovation_mode=source_innovation_mode,
@@ -5631,6 +5751,7 @@ class LaGraph:
                     propagation_channel_scores=propagation_channel_scores,
                     causal_channel_scores=causal_channel_scores,
                     source_gate_channel_scores=source_gate_channel_scores,
+                    root_score_channel_scores=root_score_channel_scores,
                     source_innovation_channel_scores=source_innovation_channel_scores,
                     synthetic_channel_scores=synthetic_channel_scores,
                     counterfactual_channel_scores=counterfactual_channel_scores,
@@ -5648,6 +5769,7 @@ class LaGraph:
                     causal_weight=causal_weight,
                     synthetic_weight=synthetic_weight,
                     source_gate_weight=source_gate_weight,
+                    root_score_weight=root_score_weight,
                     source_interaction_weight=source_interaction_weight,
                     source_innovation_weight=source_innovation_weight,
                     source_innovation_mode=source_innovation_mode,
@@ -5692,6 +5814,7 @@ class LaGraph:
                 propagation_channel_scores=propagation_channel_scores,
                 causal_channel_scores=causal_channel_scores,
                 source_gate_channel_scores=source_gate_channel_scores,
+                root_score_channel_scores=root_score_channel_scores,
                 source_innovation_channel_scores=source_innovation_channel_scores,
                 synthetic_channel_scores=synthetic_channel_scores,
                 counterfactual_channel_scores=counterfactual_channel_scores,
@@ -5709,6 +5832,7 @@ class LaGraph:
                 causal_weight=causal_weight,
                 synthetic_weight=synthetic_weight,
                 source_gate_weight=source_gate_weight,
+                root_score_weight=root_score_weight,
                 source_interaction_weight=source_interaction_weight,
                 source_innovation_weight=source_innovation_weight,
                 source_innovation_mode=source_innovation_mode,
@@ -5760,6 +5884,7 @@ class LaGraph:
                 propagation_channel_scores=propagation_channel_scores,
                 causal_channel_scores=causal_channel_scores,
                 source_gate_channel_scores=source_gate_channel_scores,
+                root_score_channel_scores=root_score_channel_scores,
                 source_innovation_channel_scores=source_innovation_channel_scores,
                 synthetic_channel_scores=synthetic_channel_scores,
                 counterfactual_channel_scores=counterfactual_channel_scores,
@@ -5777,6 +5902,7 @@ class LaGraph:
                 causal_weight=causal_weight,
                 synthetic_weight=synthetic_weight,
                 source_gate_weight=source_gate_weight,
+                root_score_weight=root_score_weight,
                 source_interaction_weight=source_interaction_weight,
                 source_innovation_weight=source_innovation_weight,
                 source_innovation_mode=source_innovation_mode,
@@ -5817,7 +5943,7 @@ class LaGraph:
         output_path = os.path.join(output_dir, f"{timestamp}_rca.json")
         score_method = (
             "event-level source/propagation RCA: "
-            "source=(weighted base residual + fused source score + consensus-gated source evidence + mechanism prior deviation + source innovation + mechanism-guided source interaction + lagged causal deviation + model source-gate score + synthetic responsibility + event-local counterfactual responsibility), "
+            "source=(weighted base residual + learned RootScore + fused source score + consensus-gated source evidence + mechanism prior deviation + source innovation + mechanism-guided source interaction + lagged causal deviation + model source-gate score + synthetic responsibility + event-local counterfactual responsibility), "
             "propagation=graph-propagated residual, "
             "onset=early local-baseline crossing"
             if use_source_propagation
@@ -5843,6 +5969,7 @@ class LaGraph:
             "rca_causal_weight": causal_weight,
             "rca_synthetic_weight": synthetic_weight,
             "rca_source_gate_weight": source_gate_weight,
+            "rca_root_score_weight": root_score_weight,
             "rca_source_interaction_weight": source_interaction_weight,
             "rca_source_innovation_weight": source_innovation_weight,
             "rca_source_innovation_mode": source_innovation_mode,
@@ -5924,6 +6051,14 @@ class LaGraph:
             "source_effect_rca_head_rank_weight": _cfg_float(
                 "source_effect_rca_head_rank_weight",
                 1.0,
+            ),
+            "use_root_score_head": bool(getattr(self.config, "use_root_score_head", False)),
+            "lambda_source_effect_root_score": _cfg_float("lambda_source_effect_root_score", 0.0),
+            "root_score_bce_weight": _cfg_float("root_score_bce_weight", 1.0),
+            "root_score_rank_weight": _cfg_float("root_score_rank_weight", 1.0),
+            "root_score_effect_suppress_weight": _cfg_float(
+                "root_score_effect_suppress_weight",
+                0.5,
             ),
             "lambda_source_bottleneck": _cfg_float("lambda_source_bottleneck", 0.0),
             "source_bottleneck_bce_weight": _cfg_float("source_bottleneck_bce_weight", 1.0),

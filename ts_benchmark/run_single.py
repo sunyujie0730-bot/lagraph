@@ -216,6 +216,7 @@ def main():
             "source-bottleneck-contrast-balanced-rca",
             "source-bottleneck-specificity-rca",
             "source-bottleneck-topk-rerank-rca",
+            "source-bottleneck-root-score-rca",
             "source-bottleneck-rca-aware-checkpoint",
             "source-bottleneck-normalized-rca-checkpoint",
             "source-bottleneck-adaptive-mechanism-rca",
@@ -2677,6 +2678,20 @@ def main():
         rca_topk_rerank_source_gate_weight=0.0,
         rca_topk_rerank_mechanism_residual_weight=0.0,
         rca_topk_rerank_graph_penalty_weight=0.0,
+    )
+    arch_profiles["source-bottleneck-root-score-rca"] = dict(
+        arch_profiles["source-bottleneck-specificity-rca"],
+        use_root_score_head=True,
+        lambda_source_effect_root_score=2.0,
+        root_score_bce_weight=1.0,
+        root_score_rank_weight=1.0,
+        root_score_effect_suppress_weight=0.5,
+        rca_root_score_weight=0.80,
+        rca_source_base_weight=0.70,
+        rca_source_gate_weight=0.35,
+        rca_onset_weight=0.60,
+        rca_source_interaction_weight=0.75,
+        rca_topk_rerank=False,
     )
     arch_profiles["source-bottleneck-rca-aware-checkpoint"] = dict(
         arch_profiles["source-bottleneck-specificity-rca"],
