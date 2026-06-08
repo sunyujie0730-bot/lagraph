@@ -40,6 +40,8 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "small_kernel_merged": False,
     "call_structural_reparam": False,
     "use_multi_scale": True,
+    "dropout": 0.1,
+    "head_dropout": 0.0,
     "pct_start": 0.3,
     "revin": 1,
     "affine": 0,
