@@ -133,6 +133,12 @@ def main():
         help="每个 DataLoader worker 预取 batch 数 (default: 2; num_workers=0 时自动忽略)",
     )
     parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="Override training batch size for sensitivity tests (default: fixed profile value 256)",
+    )
+    parser.add_argument(
         "--robust-input-preprocess",
         action="store_true",
         help="Clip each channel by normal-training quantiles before StandardScaler.",
@@ -980,6 +986,8 @@ def main():
     #     重建：每个窗口包含几乎相同的正常模式，大 batch 冗余
     #   因此 batch=256 比 2048 更合理。
     per_gpu_batch = 256
+    if args.batch_size is not None:
+        per_gpu_batch = max(1, int(args.batch_size))
 
     # ---- v10 固定 LR（不含 sqrt 缩放，因为模型容量固定） ----
     scaled_lr = 1e-4
