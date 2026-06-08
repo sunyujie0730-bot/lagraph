@@ -217,6 +217,7 @@ def main():
             "source-bottleneck-specificity-rca",
             "source-bottleneck-topk-rerank-rca",
             "source-bottleneck-root-score-rca",
+            "source-bottleneck-root-score-w03-rca",
             "source-bottleneck-rca-aware-checkpoint",
             "source-bottleneck-normalized-rca-checkpoint",
             "source-bottleneck-adaptive-mechanism-rca",
@@ -2692,6 +2693,10 @@ def main():
         rca_onset_weight=0.60,
         rca_source_interaction_weight=0.75,
         rca_topk_rerank=False,
+    )
+    arch_profiles["source-bottleneck-root-score-w03-rca"] = dict(
+        arch_profiles["source-bottleneck-root-score-rca"],
+        rca_root_score_weight=0.30,
     )
     arch_profiles["source-bottleneck-rca-aware-checkpoint"] = dict(
         arch_profiles["source-bottleneck-specificity-rca"],
