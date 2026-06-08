@@ -301,6 +301,14 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_event_specificity_top_k": 1,
     "rca_event_specificity_threshold": 0.35,
     "rca_event_specificity_min_events": 20,
+    "rca_topk_rerank": False,
+    "rca_topk_rerank_k": 5,
+    "rca_topk_rerank_original_weight": 1.0,
+    "rca_topk_rerank_group_weight": 0.0,
+    "rca_topk_rerank_onset_weight": 0.0,
+    "rca_topk_rerank_source_gate_weight": 0.0,
+    "rca_topk_rerank_mechanism_residual_weight": 0.0,
+    "rca_topk_rerank_graph_penalty_weight": 0.0,
     # --- v11.4 P0-2: POT 阈值参数 ---
     "pot_risk": 1e-4,            # POT EVT 风险水平
     "pot_num_quantiles": 1000,   # POT 分位数数量
@@ -1364,6 +1372,26 @@ class LaGraph:
                 "rca_onset_weight": getattr(self.config, "rca_onset_weight", None),
                 "rca_onset_baseline_window": getattr(self.config, "rca_onset_baseline_window", None),
                 "rca_onset_z": getattr(self.config, "rca_onset_z", None),
+                "rca_topk_rerank": getattr(self.config, "rca_topk_rerank", None),
+                "rca_topk_rerank_k": getattr(self.config, "rca_topk_rerank_k", None),
+                "rca_topk_rerank_original_weight": getattr(
+                    self.config, "rca_topk_rerank_original_weight", None
+                ),
+                "rca_topk_rerank_group_weight": getattr(
+                    self.config, "rca_topk_rerank_group_weight", None
+                ),
+                "rca_topk_rerank_onset_weight": getattr(
+                    self.config, "rca_topk_rerank_onset_weight", None
+                ),
+                "rca_topk_rerank_source_gate_weight": getattr(
+                    self.config, "rca_topk_rerank_source_gate_weight", None
+                ),
+                "rca_topk_rerank_mechanism_residual_weight": getattr(
+                    self.config, "rca_topk_rerank_mechanism_residual_weight", None
+                ),
+                "rca_topk_rerank_graph_penalty_weight": getattr(
+                    self.config, "rca_topk_rerank_graph_penalty_weight", None
+                ),
                 "use_state_aware_fusion": getattr(self.config, "use_state_aware_fusion", None),
                 "state_aware_num_states": getattr(self.config, "state_aware_num_states", None),
                 "state_aware_graph_gate_init": getattr(self.config, "state_aware_graph_gate_init", None),
@@ -3359,6 +3387,26 @@ class LaGraph:
                 "rca_source_innovation_lead_points": getattr(
                     self.config, "rca_source_innovation_lead_points", None
                 ),
+                "rca_topk_rerank": getattr(self.config, "rca_topk_rerank", None),
+                "rca_topk_rerank_k": getattr(self.config, "rca_topk_rerank_k", None),
+                "rca_topk_rerank_original_weight": getattr(
+                    self.config, "rca_topk_rerank_original_weight", None
+                ),
+                "rca_topk_rerank_group_weight": getattr(
+                    self.config, "rca_topk_rerank_group_weight", None
+                ),
+                "rca_topk_rerank_onset_weight": getattr(
+                    self.config, "rca_topk_rerank_onset_weight", None
+                ),
+                "rca_topk_rerank_source_gate_weight": getattr(
+                    self.config, "rca_topk_rerank_source_gate_weight", None
+                ),
+                "rca_topk_rerank_mechanism_residual_weight": getattr(
+                    self.config, "rca_topk_rerank_mechanism_residual_weight", None
+                ),
+                "rca_topk_rerank_graph_penalty_weight": getattr(
+                    self.config, "rca_topk_rerank_graph_penalty_weight", None
+                ),
                 "use_synthetic_score": getattr(self.config, "use_synthetic_score", None),
                 "synthetic_score_weight": getattr(self.config, "synthetic_score_weight", None),
                 "score_smoothing_window": getattr(self.config, "score_smoothing_window", None),
@@ -4578,6 +4626,94 @@ class LaGraph:
             neginf=0.0,
         ).astype(np.float32)
 
+    def _apply_topk_root_rerank(
+        self,
+        order,
+        event_scores,
+        feature_names,
+        group_scores,
+        event_onset_scores,
+        event_source_gate_scores,
+        event_mechanism_residual_scores,
+        event_graph_scores,
+    ):
+        """Conservatively reorder only the current Top-K RCA candidates."""
+        if not bool(getattr(self.config, "rca_topk_rerank", False)):
+            return order, np.asarray(event_scores, dtype=np.float64), {}
+
+        order_list = [int(idx) for idx in np.asarray(order).tolist()]
+        top_k = int(getattr(self.config, "rca_topk_rerank_k", 5) or 5)
+        top_k = min(max(2, top_k), len(order_list))
+        if top_k < 2:
+            return order, np.asarray(event_scores, dtype=np.float64), {}
+
+        candidate_indices = order_list[:top_k]
+
+        def _candidate_norm(values):
+            arr = np.asarray([values[idx] for idx in candidate_indices], dtype=np.float64)
+            return self._normalize_event_component(arr)
+
+        event_scores = np.asarray(event_scores, dtype=np.float64)
+        group_values = np.asarray(
+            [
+                float(group_scores.get(self._root_cause_group_name(feature_names[idx]), 0.0))
+                for idx in candidate_indices
+            ],
+            dtype=np.float64,
+        )
+        group_norm = self._normalize_event_component(group_values)
+        original_norm = _candidate_norm(event_scores)
+        onset_norm = _candidate_norm(event_onset_scores)
+        source_gate_norm = _candidate_norm(event_source_gate_scores)
+        mechanism_residual_norm = _candidate_norm(event_mechanism_residual_scores)
+        graph_norm = _candidate_norm(event_graph_scores)
+
+        original_weight = float(getattr(self.config, "rca_topk_rerank_original_weight", 1.0) or 0.0)
+        group_weight = float(getattr(self.config, "rca_topk_rerank_group_weight", 0.0) or 0.0)
+        onset_weight = float(getattr(self.config, "rca_topk_rerank_onset_weight", 0.0) or 0.0)
+        source_gate_weight = float(
+            getattr(self.config, "rca_topk_rerank_source_gate_weight", 0.0) or 0.0
+        )
+        mechanism_residual_weight = float(
+            getattr(self.config, "rca_topk_rerank_mechanism_residual_weight", 0.0) or 0.0
+        )
+        graph_penalty_weight = float(
+            getattr(self.config, "rca_topk_rerank_graph_penalty_weight", 0.0) or 0.0
+        )
+
+        rerank_signal = (
+            original_weight * original_norm
+            + group_weight * group_norm
+            + onset_weight * onset_norm
+            + source_gate_weight * source_gate_norm
+            + mechanism_residual_weight * mechanism_residual_norm
+            - graph_penalty_weight * graph_norm
+        )
+        reranked_pairs = sorted(
+            zip(candidate_indices, rerank_signal.tolist()),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        reranked_top = [idx for idx, _ in reranked_pairs]
+
+        adjusted_scores = event_scores.copy()
+        original_top_scores = sorted(
+            [float(event_scores[idx]) for idx in candidate_indices],
+            reverse=True,
+        )
+        for idx, score in zip(reranked_top, original_top_scores):
+            adjusted_scores[idx] = score
+
+        rerank_info = {
+            int(idx): {
+                "topk_rerank_score": float(score),
+                "topk_rerank_original_rank": int(candidate_indices.index(idx) + 1),
+            }
+            for idx, score in reranked_pairs
+        }
+        final_order = np.asarray(reranked_top + order_list[top_k:], dtype=np.int64)
+        return final_order, adjusted_scores, rerank_info
+
     def _build_rca_events(
         self,
         segments,
@@ -4918,6 +5054,18 @@ class LaGraph:
             else:
                 order = np.argsort(-event_scores)
 
+            pre_rerank_scores = np.asarray(event_scores, dtype=np.float64).copy()
+            order, ranking_scores, topk_rerank_info = self._apply_topk_root_rerank(
+                order,
+                event_scores,
+                feature_names,
+                group_scores,
+                event_onset_scores,
+                event_source_gate_scores,
+                event_mechanism_residual_scores,
+                event_graph_scores,
+            )
+
             within_group_rank = {}
             for group, _ in sorted_groups:
                 indices = [
@@ -4925,7 +5073,7 @@ class LaGraph:
                     for idx, name in enumerate(feature_names)
                     if self._root_cause_group_name(name) == group
                 ]
-                indices = sorted(indices, key=lambda idx: float(event_scores[idx]), reverse=True)
+                indices = sorted(indices, key=lambda idx: float(ranking_scores[idx]), reverse=True)
                 for rank, idx in enumerate(indices, start=1):
                     within_group_rank[idx] = int(rank)
 
@@ -4933,7 +5081,8 @@ class LaGraph:
                 {
                     "rank": int(rank + 1),
                     "name": feature_names[idx],
-                    "score": float(event_scores[idx]),
+                    "score": float(ranking_scores[idx]),
+                    "pre_rerank_score": float(pre_rerank_scores[idx]),
                     "hierarchical_score": float(hierarchical_scores[idx]),
                     "group": self._root_cause_group_name(feature_names[idx]),
                     "group_rank": int(group_rank.get(self._root_cause_group_name(feature_names[idx]), 0)),
@@ -4955,6 +5104,13 @@ class LaGraph:
                     "onset_score": float(event_onset_scores[idx]),
                     "mechanism_residual_score": float(event_mechanism_residual_scores[idx]),
                     "contrast_score": float(event_contrast_scores[idx]),
+                    "topk_rerank_applied": bool(idx in topk_rerank_info),
+                    "topk_rerank_score": float(
+                        topk_rerank_info.get(int(idx), {}).get("topk_rerank_score", 0.0)
+                    ),
+                    "topk_rerank_original_rank": int(
+                        topk_rerank_info.get(int(idx), {}).get("topk_rerank_original_rank", 0)
+                    ),
                 }
                 for rank, idx in enumerate(order)
             ]
@@ -5718,6 +5874,26 @@ class LaGraph:
             "rca_event_specificity_top_k": event_specificity_top_k,
             "rca_event_specificity_threshold": event_specificity_threshold,
             "rca_event_specificity_min_events": event_specificity_min_events,
+            "rca_topk_rerank": bool(getattr(self.config, "rca_topk_rerank", False)),
+            "rca_topk_rerank_k": _cfg_int("rca_topk_rerank_k", 5),
+            "rca_topk_rerank_original_weight": _cfg_float(
+                "rca_topk_rerank_original_weight",
+                1.0,
+            ),
+            "rca_topk_rerank_group_weight": _cfg_float("rca_topk_rerank_group_weight", 0.0),
+            "rca_topk_rerank_onset_weight": _cfg_float("rca_topk_rerank_onset_weight", 0.0),
+            "rca_topk_rerank_source_gate_weight": _cfg_float(
+                "rca_topk_rerank_source_gate_weight",
+                0.0,
+            ),
+            "rca_topk_rerank_mechanism_residual_weight": _cfg_float(
+                "rca_topk_rerank_mechanism_residual_weight",
+                0.0,
+            ),
+            "rca_topk_rerank_graph_penalty_weight": _cfg_float(
+                "rca_topk_rerank_graph_penalty_weight",
+                0.0,
+            ),
             "rca_event_head_ratio": event_head_ratio,
             "rca_event_head_points": event_head_points,
             "rca_align_event_onset": bool(getattr(self.config, "rca_align_event_onset", False)),
