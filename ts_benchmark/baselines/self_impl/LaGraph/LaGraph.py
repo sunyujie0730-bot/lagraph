@@ -59,6 +59,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "eval_batch_size": 64,
     "enable_visualization_hooks": False,
     "patience": 15,
+    "checkpoint_policy": "best_val_loss",
     "use_latest_checkpoint": False,
     "use_rca_aware_checkpoint": False,
     "rca_checkpoint_normalize": False,
@@ -868,10 +869,12 @@ class EarlyStopping:
         self.delta = delta
         self.relative_delta = relative_delta
         self.best_epoch = 0
+        self.last_epoch = 0
         self.best_monitor_value = np.Inf
         self.monitor_name = "val_loss"
 
     def __call__(self, val_loss, model, epoch, selection_score=None, selection_note=None):
+        self.last_epoch = epoch
         monitor_value = val_loss if selection_score is None else float(selection_score)
         monitor_name = "val_loss" if selection_score is None else "rca_aware_score"
         if selection_note:
@@ -1164,6 +1167,7 @@ class LaGraph:
                     "dataset_name": self.dataset_name,
                     "best_val_loss": float(self.early_stopping.val_loss_min),
                     "best_epoch": int(self.early_stopping.best_epoch),
+                    "last_epoch": int(getattr(self.early_stopping, "last_epoch", 0)),
                     "best_monitor_value": float(
                         getattr(self.early_stopping, "best_monitor_value", np.nan)
                     ),
@@ -1190,7 +1194,9 @@ class LaGraph:
                 ),
                 "monitor_name": getattr(self.early_stopping, "monitor_name", "val_loss"),
                 "best_epoch": self.early_stopping.best_epoch,
-                "total_epochs_run": self.early_stopping.best_epoch,
+                "selected_checkpoint_epoch": self.early_stopping.best_epoch,
+                "total_epochs_run": int(getattr(self.early_stopping, "last_epoch", 0)),
+                "max_epochs": int(getattr(self.config, "num_epochs", 0)),
                 "total_train_time_seconds": round(total_time, 1),
                 "total_train_time_human": _format_duration(total_time),
             },
@@ -1204,6 +1210,7 @@ class LaGraph:
                 "num_epochs": self.config.num_epochs,
                 "batch_size": self.config.batch_size,
                 "patience": self.config.patience,
+                "checkpoint_policy": getattr(self.config, "checkpoint_policy", None),
                 "use_rca_aware_checkpoint": getattr(
                     self.config, "use_rca_aware_checkpoint", None
                 ),
@@ -2972,6 +2979,17 @@ class LaGraph:
             scheduler.step()
 
         total_time = time.time() - train_start_time
+        if self._should_load_best_checkpoint():
+            self._get_raw_model().load_state_dict(self.early_stopping.check_point)
+            print(
+                f"  [Checkpoint] Using validation-selected checkpoint: "
+                f"epoch {self.early_stopping.best_epoch}/"
+                f"{getattr(self.early_stopping, 'last_epoch', self.config.num_epochs)} "
+                f"(monitor={getattr(self.early_stopping, 'monitor_name', 'val_loss')})"
+            )
+        elif bool(getattr(self.config, "use_latest_checkpoint", False)):
+            print("  [Checkpoint] Using latest epoch checkpoint for evaluation.")
+
         saved_path = self._save_best_params(total_params=total_params, total_time=total_time)
 
         self._save_train_history(total_params=total_params, total_time=total_time)
@@ -2979,6 +2997,7 @@ class LaGraph:
         print("─" * 70)
         print(f"  [OK] Training Complete!")
         print(f"     Best Val Loss: {self.early_stopping.val_loss_min:.6f}  @  Epoch {self.early_stopping.best_epoch}")
+        print(f"     Epochs Run:    {getattr(self.early_stopping, 'last_epoch', self.config.num_epochs)} / {self.config.num_epochs}")
         print(f"     Total Time:    {_format_duration(total_time)}")
         print(f"     Device:        {_get_gpu_info(self.device)}")
         print(f"     Best params saved to: {saved_path}")
@@ -3214,12 +3233,24 @@ class LaGraph:
             scheduler.step()
 
         total_time = time.time() - train_start_time
+        if self._should_load_best_checkpoint():
+            self._get_raw_model().load_state_dict(self.early_stopping.check_point)
+            print(
+                f"  [Checkpoint] Using validation-selected checkpoint: "
+                f"epoch {self.early_stopping.best_epoch}/"
+                f"{getattr(self.early_stopping, 'last_epoch', self.config.num_epochs)} "
+                f"(monitor={getattr(self.early_stopping, 'monitor_name', 'val_loss')})"
+            )
+        elif bool(getattr(self.config, "use_latest_checkpoint", False)):
+            print("  [Checkpoint] Using latest epoch checkpoint for evaluation.")
+
         self._save_best_params(total_params=total_params, total_time=total_time)
         self._save_train_history(total_params=total_params, total_time=total_time)
 
         print("─" * 70)
         print(f"  [OK] Reweight Training Complete!")
         print(f"     Best Val Loss: {self.early_stopping.val_loss_min:.6f}")
+        print(f"     Epochs Run:    {getattr(self.early_stopping, 'last_epoch', self.config.num_epochs)} / {self.config.num_epochs}")
         print("─" * 70)
         print()
 
@@ -3245,7 +3276,9 @@ class LaGraph:
                 "lr": self.config.lr,
                 "num_epochs": self.config.num_epochs,
                 "patience": self.config.patience,
+                "checkpoint_policy": getattr(self.config, "checkpoint_policy", None),
                 "use_rca_aware_checkpoint": getattr(self.config, "use_rca_aware_checkpoint", None),
+                "rca_checkpoint_normalize": getattr(self.config, "rca_checkpoint_normalize", None),
                 "rca_checkpoint_proxy_weight": getattr(
                     self.config, "rca_checkpoint_proxy_weight", None
                 ),
@@ -3351,6 +3384,9 @@ class LaGraph:
             ),
             "monitor_name": getattr(self.early_stopping, "monitor_name", "val_loss"),
             "best_epoch": self.early_stopping.best_epoch,
+            "selected_checkpoint_epoch": self.early_stopping.best_epoch,
+            "total_epochs_run": int(getattr(self.early_stopping, "last_epoch", 0)),
+            "max_epochs": int(getattr(self.config, "num_epochs", 0)),
             "early_stopped": self.early_stopping.early_stop,
         }
 

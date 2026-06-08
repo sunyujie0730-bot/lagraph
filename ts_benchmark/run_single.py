@@ -82,6 +82,14 @@ def main():
         help=f"训练轮次 (default: {DEFAULT_EPOCHS}, --fast: {FAST_EPOCHS})",
     )
     parser.add_argument(
+        "--paper-protocol",
+        action="store_true",
+        help=(
+            "Use the paper main protocol when --epochs is not set: "
+            "max epochs=15 and validation-best checkpoint selection."
+        ),
+    )
+    parser.add_argument(
         "--fast",
         action="store_true",
         help=f"快速测试模式 ({FAST_EPOCHS} epochs)",
@@ -667,6 +675,16 @@ def main():
         help="Use the latest trained checkpoint for evaluation instead of the best validation-loss checkpoint.",
     )
     parser.add_argument(
+        "--checkpoint-policy",
+        choices=["profile", "best-val", "latest", "rca-aware", "normalized-rca-aware"],
+        default="profile",
+        help=(
+            "Checkpoint selection policy. 'profile' keeps arch-profile defaults; "
+            "'best-val' forces validation-loss checkpoint selection; 'latest' evaluates "
+            "the last epoch. RCA-aware policies are experimental."
+        ),
+    )
+    parser.add_argument(
         "--rca-aware-checkpoint",
         action="store_true",
         help="Select checkpoints using validation loss plus a synthetic source-RCA proxy.",
@@ -904,6 +922,8 @@ def main():
         train_epochs = args.epochs
     elif args.fast:
         train_epochs = FAST_EPOCHS
+    elif args.paper_protocol:
+        train_epochs = 15
     else:
         train_epochs = DEFAULT_EPOCHS
 
@@ -3064,6 +3084,27 @@ def main():
         score_hyper_params["rca_split_max_event_len"] = max(1, int(args.rca_split_max_event_len))
     if args.rca_split_stride is not None:
         score_hyper_params["rca_split_stride"] = max(1, int(args.rca_split_stride))
+    checkpoint_policy = args.checkpoint_policy
+    if args.paper_protocol and checkpoint_policy == "profile":
+        checkpoint_policy = "best-val"
+
+    if checkpoint_policy == "best-val":
+        score_hyper_params["use_latest_checkpoint"] = False
+        score_hyper_params["use_rca_aware_checkpoint"] = False
+        score_hyper_params["rca_checkpoint_normalize"] = False
+    elif checkpoint_policy == "latest":
+        score_hyper_params["use_latest_checkpoint"] = True
+        score_hyper_params["use_rca_aware_checkpoint"] = False
+        score_hyper_params["rca_checkpoint_normalize"] = False
+    elif checkpoint_policy == "rca-aware":
+        score_hyper_params["use_latest_checkpoint"] = False
+        score_hyper_params["use_rca_aware_checkpoint"] = True
+        score_hyper_params["rca_checkpoint_normalize"] = False
+    elif checkpoint_policy == "normalized-rca-aware":
+        score_hyper_params["use_latest_checkpoint"] = False
+        score_hyper_params["use_rca_aware_checkpoint"] = True
+        score_hyper_params["rca_checkpoint_normalize"] = True
+
     if args.use_latest_checkpoint:
         score_hyper_params["use_latest_checkpoint"] = True
     if args.rca_aware_checkpoint:
@@ -3104,6 +3145,17 @@ def main():
         **vq_hyper_params,
         **score_hyper_params,
     }
+    if bool(effective_switches.get("use_latest_checkpoint", False)):
+        actual_checkpoint_policy = "latest"
+    elif bool(effective_switches.get("use_rca_aware_checkpoint", False)):
+        if bool(effective_switches.get("rca_checkpoint_normalize", False)):
+            actual_checkpoint_policy = "normalized_rca_aware"
+        else:
+            actual_checkpoint_policy = "rca_aware"
+    else:
+        actual_checkpoint_policy = "best_val_loss"
+    score_hyper_params["checkpoint_policy"] = actual_checkpoint_policy
+    effective_switches["checkpoint_policy"] = actual_checkpoint_policy
 
     model_config = {
         "models": [
@@ -3137,6 +3189,8 @@ def main():
     print(f"  [v10 数据] workers={dataloader_num_workers}, prefetch={dataloader_prefetch_factor}")
     print(f"  [v10 架构] profile={args.arch_profile}, switches={effective_switches}")
     print()
+
+    print(f"  [protocol] max_epochs={train_epochs}, checkpoint_policy={actual_checkpoint_policy}")
 
     with open(os.path.join(CONFIG_PATH, args.eval_config), "r") as f:
         evaluation_config = json.load(f)["evaluation_config"]

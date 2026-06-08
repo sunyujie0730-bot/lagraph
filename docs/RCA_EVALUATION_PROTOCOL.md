@@ -47,6 +47,41 @@ flowchart LR
     E --> H["Random/component baselines"]
 ```
 
+## Epoch And Checkpoint Protocol
+
+The main paper protocol must separate training budget from checkpoint
+selection. SWaT and WADI may converge at different epochs, but the selection
+rule must be identical.
+
+Main protocol:
+
+```text
+max_epochs = 15
+checkpoint_policy = best_val_loss
+selection_signal = validation reconstruction loss
+test_RCA_metrics are never used to select the checkpoint
+```
+
+This means that one dataset can select epoch 8 and another can select epoch 15
+without becoming dataset-specific tuning. Both runs share the same maximum
+training budget and the same validation-only selection rule.
+
+The command-line interface supports this explicitly:
+
+```powershell
+D:\Anaconda3\envs\lagraph5070\python.exe D:\la_v12\ts_benchmark\run_single.py --paper-protocol --datasets SWAT_A1A2_Physical_v1.csv WADI_A1_2017_ds10.csv --arch-profile source-bottleneck-specificity-rca --export-rca --rca-export-lite --num-workers 2 --prefetch-factor 2
+```
+
+Equivalent explicit form:
+
+```powershell
+D:\Anaconda3\envs\lagraph5070\python.exe D:\la_v12\ts_benchmark\run_single.py --epochs 15 --checkpoint-policy best-val --datasets SWAT_A1A2_Physical_v1.csv WADI_A1_2017_ds10.csv --arch-profile source-bottleneck-specificity-rca --export-rca --rca-export-lite --num-workers 2 --prefetch-factor 2
+```
+
+Short `epochs=8` runs remain valid only as screening experiments. They should
+be reported as quick screens, not as the final main protocol, unless the entire
+comparison table uses the same `epochs=8` budget.
+
 ## Predicted-Event Matching
 
 Predicted-event RCA uses two levels of event matching.
