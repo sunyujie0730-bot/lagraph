@@ -201,6 +201,7 @@ def main():
             "source-bottleneck-aligned-wide-rca",
             "source-bottleneck-contrast-balanced-rca",
             "source-bottleneck-specificity-rca",
+            "source-bottleneck-rca-aware-checkpoint",
             "source-bottleneck-adaptive-mechanism-rca",
             "source-bottleneck-no-mechanism-rca",
             "source-bottleneck-no-source-gate-rca",
@@ -657,6 +658,29 @@ def main():
         "--use-latest-checkpoint",
         action="store_true",
         help="Use the latest trained checkpoint for evaluation instead of the best validation-loss checkpoint.",
+    )
+    parser.add_argument(
+        "--rca-aware-checkpoint",
+        action="store_true",
+        help="Select checkpoints using validation loss plus a synthetic source-RCA proxy.",
+    )
+    parser.add_argument(
+        "--rca-checkpoint-proxy-weight",
+        type=float,
+        default=None,
+        help="Weight of the synthetic source-RCA proxy used for RCA-aware checkpoint selection.",
+    )
+    parser.add_argument(
+        "--rca-checkpoint-proxy-batches",
+        type=int,
+        default=None,
+        help="Number of validation batches used by RCA-aware checkpoint proxy.",
+    )
+    parser.add_argument(
+        "--rca-checkpoint-min-epoch",
+        type=int,
+        default=None,
+        help="First epoch allowed to use RCA-aware checkpoint selection.",
     )
     parser.add_argument(
         "--enable-visualization-hooks",
@@ -2608,6 +2632,13 @@ def main():
         rca_event_specificity_threshold=0.35,
         rca_event_specificity_min_events=20,
     )
+    arch_profiles["source-bottleneck-rca-aware-checkpoint"] = dict(
+        arch_profiles["source-bottleneck-specificity-rca"],
+        use_rca_aware_checkpoint=True,
+        rca_checkpoint_proxy_weight=0.02,
+        rca_checkpoint_proxy_batches=2,
+        rca_checkpoint_min_epoch=4,
+    )
     arch_profiles["source-bottleneck-adaptive-mechanism-rca"] = dict(
         arch_profiles["source-bottleneck-specificity-rca"],
         rca_adaptive_mechanism_gate_weight=0.20,
@@ -3013,6 +3044,22 @@ def main():
         score_hyper_params["rca_split_stride"] = max(1, int(args.rca_split_stride))
     if args.use_latest_checkpoint:
         score_hyper_params["use_latest_checkpoint"] = True
+    if args.rca_aware_checkpoint:
+        score_hyper_params["use_rca_aware_checkpoint"] = True
+    if args.rca_checkpoint_proxy_weight is not None:
+        score_hyper_params["rca_checkpoint_proxy_weight"] = max(
+            0.0, float(args.rca_checkpoint_proxy_weight)
+        )
+        if args.rca_checkpoint_proxy_weight > 0:
+            score_hyper_params["use_rca_aware_checkpoint"] = True
+    if args.rca_checkpoint_proxy_batches is not None:
+        score_hyper_params["rca_checkpoint_proxy_batches"] = max(
+            0, int(args.rca_checkpoint_proxy_batches)
+        )
+    if args.rca_checkpoint_min_epoch is not None:
+        score_hyper_params["rca_checkpoint_min_epoch"] = max(
+            1, int(args.rca_checkpoint_min_epoch)
+        )
     if args.enable_visualization_hooks:
         score_hyper_params["enable_visualization_hooks"] = True
     if args.robust_input_preprocess:

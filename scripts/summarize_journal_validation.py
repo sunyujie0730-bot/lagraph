@@ -106,6 +106,7 @@ def method_short(profile_or_method: str) -> str:
         "zscore": "z-score",
         "correlation_prior": "static correlation",
         "random_graph_prior": "random graph prior",
+        "granger_prior": "Granger causal prior",
     }.get(text, text)
 
 

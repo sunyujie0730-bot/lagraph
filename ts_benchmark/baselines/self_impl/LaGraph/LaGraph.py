@@ -59,6 +59,10 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "enable_visualization_hooks": False,
     "patience": 15,
     "use_latest_checkpoint": False,
+    "use_rca_aware_checkpoint": False,
+    "rca_checkpoint_proxy_weight": 0.0,
+    "rca_checkpoint_proxy_batches": 2,
+    "rca_checkpoint_min_epoch": 1,
     "topk": 5,
     "anomaly_ratio": [0.5, 1.0, 2, 5, 10, 15],
     # --- 自适应图参数 ---
@@ -862,21 +866,33 @@ class EarlyStopping:
         self.delta = delta
         self.relative_delta = relative_delta
         self.best_epoch = 0
+        self.best_monitor_value = np.Inf
+        self.monitor_name = "val_loss"
 
-    def __call__(self, val_loss, model, epoch):
+    def __call__(self, val_loss, model, epoch, selection_score=None, selection_note=None):
+        monitor_value = val_loss if selection_score is None else float(selection_score)
+        monitor_name = "val_loss" if selection_score is None else "rca_aware_score"
+        if selection_note:
+            print(f"  [RCA CKPT] {monitor_name}={monitor_value:.8f}, {selection_note}")
         if self.best_score is None:
-            self.best_score = -val_loss
+            self.best_score = -monitor_value
             self.best_val_loss = val_loss
+            self.best_monitor_value = monitor_value
+            self.monitor_name = monitor_name
             self.save_checkpoint(val_loss, model)
             self.best_epoch = epoch
             print(f"  [ES DBG] init: val_loss={val_loss:.8f}, best={val_loss:.8f}")
             return "initial"
 
-        rel_improvement = (self.best_val_loss - val_loss) / max(self.best_val_loss, 1e-10)
+        rel_improvement = (
+            self.best_monitor_value - monitor_value
+        ) / max(abs(self.best_monitor_value), 1e-10)
 
         if rel_improvement >= self.relative_delta:
-            self.best_score = -val_loss
+            self.best_score = -monitor_value
             self.best_val_loss = val_loss
+            self.best_monitor_value = monitor_value
+            self.monitor_name = monitor_name
             self.save_checkpoint(val_loss, model)
             self.counter = 0
             self.best_epoch = epoch
@@ -1146,6 +1162,10 @@ class LaGraph:
                     "dataset_name": self.dataset_name,
                     "best_val_loss": float(self.early_stopping.val_loss_min),
                     "best_epoch": int(self.early_stopping.best_epoch),
+                    "best_monitor_value": float(
+                        getattr(self.early_stopping, "best_monitor_value", np.nan)
+                    ),
+                    "monitor_name": getattr(self.early_stopping, "monitor_name", "val_loss"),
                 },
                 checkpoint_path,
             )
@@ -1163,6 +1183,10 @@ class LaGraph:
             },
             "results": {
                 "best_val_loss": float(self.early_stopping.val_loss_min),
+                "best_monitor_value": float(
+                    getattr(self.early_stopping, "best_monitor_value", np.nan)
+                ),
+                "monitor_name": getattr(self.early_stopping, "monitor_name", "val_loss"),
                 "best_epoch": self.early_stopping.best_epoch,
                 "total_epochs_run": self.early_stopping.best_epoch,
                 "total_train_time_seconds": round(total_time, 1),
@@ -1178,6 +1202,18 @@ class LaGraph:
                 "num_epochs": self.config.num_epochs,
                 "batch_size": self.config.batch_size,
                 "patience": self.config.patience,
+                "use_rca_aware_checkpoint": getattr(
+                    self.config, "use_rca_aware_checkpoint", None
+                ),
+                "rca_checkpoint_proxy_weight": getattr(
+                    self.config, "rca_checkpoint_proxy_weight", None
+                ),
+                "rca_checkpoint_proxy_batches": getattr(
+                    self.config, "rca_checkpoint_proxy_batches", None
+                ),
+                "rca_checkpoint_min_epoch": getattr(
+                    self.config, "rca_checkpoint_min_epoch", None
+                ),
                 "topk": self.config.topk,
                 "anomaly_ratio": self.config.anomaly_ratio,
                 "sparse_topk": getattr(self.config, 'sparse_topk', None),
@@ -1370,6 +1406,78 @@ class LaGraph:
                 loss = self._add_temporal_graph_regularization(loss, aux_losses)
                 loss_list.append(loss.item())
         return np.average(loss_list) if loss_list else 0.0
+
+    def _compute_rca_checkpoint_proxy(self, vali_loader):
+        if not bool(getattr(self.config, "use_rca_aware_checkpoint", False)):
+            return None
+        max_batches = int(getattr(self.config, "rca_checkpoint_proxy_batches", 2) or 0)
+        if max_batches <= 0:
+            return None
+
+        self.model.eval()
+        reciprocal_ranks = []
+        hit1 = []
+        margins = []
+        with torch.inference_mode():
+            for batch_idx, (input_data, _) in enumerate(vali_loader):
+                if batch_idx >= max_batches:
+                    break
+                input_data = input_data.float().to(self.device, non_blocking=True)
+                (
+                    synth_data,
+                    event_mask,
+                    source_mask,
+                    _effect_mask,
+                    source_onset_mask,
+                    _effect_time_mask,
+                ) = self._make_source_effect_synthetic_batch(input_data)
+                synth_rec, _, _, _, _, synth_aux, _ = self.model(synth_data)
+                source_score = None
+                if synth_aux:
+                    source_score = synth_aux.get("source_gate_score")
+                    if source_score is None:
+                        source_score = synth_aux.get("channel_mechanism_error")
+                if source_score is None:
+                    source_score = F.l1_loss(synth_rec, synth_data, reduction="none")
+
+                if source_score.dim() == 3:
+                    focus_mask = source_onset_mask
+                    if focus_mask.sum() <= 0:
+                        focus_mask = event_mask
+                    denom = focus_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
+                    channel_scores = (
+                        source_score * focus_mask.unsqueeze(-1).to(dtype=source_score.dtype)
+                    ).sum(dim=1) / denom
+                elif source_score.dim() == 2:
+                    channel_scores = source_score
+                else:
+                    continue
+
+                B, C = channel_scores.shape
+                ranks_template = torch.arange(C, device=channel_scores.device)
+                for b in range(B):
+                    roots = source_mask[b] > 0.5
+                    non_roots = ~roots
+                    if roots.sum() == 0 or non_roots.sum() == 0:
+                        continue
+                    order = torch.argsort(channel_scores[b], descending=True)
+                    rank_pos = torch.empty_like(order)
+                    rank_pos[order] = ranks_template
+                    best_rank = rank_pos[roots].min().float() + 1.0
+                    reciprocal_ranks.append(float((1.0 / best_rank).detach().cpu().item()))
+                    hit1.append(float(best_rank.detach().cpu().item() <= 1.0))
+                    pos_score = channel_scores[b, roots].mean()
+                    neg_score = channel_scores[b, non_roots].max()
+                    margins.append(float((pos_score - neg_score).detach().cpu().item()))
+
+        if not reciprocal_ranks:
+            return None
+        return {
+            "source_mrr": float(np.mean(reciprocal_ranks)),
+            "source_hit1": float(np.mean(hit1)),
+            "source_margin": float(np.mean(margins)) if margins else 0.0,
+            "num_synthetic_events": int(len(reciprocal_ranks)),
+        }
 
 
     def _reconstruction_loss(self, rec, target):
@@ -2785,7 +2893,32 @@ class LaGraph:
             val_loss = self.vali(self.valid_loader)
             current_lr = self.optimizer.param_groups[0]["lr"]
 
-            es_status = self.early_stopping(val_loss, self.model, epoch + 1)
+            selection_score = None
+            selection_note = None
+            if (
+                bool(getattr(self.config, "use_rca_aware_checkpoint", False))
+                and (epoch + 1) >= int(getattr(self.config, "rca_checkpoint_min_epoch", 1) or 1)
+            ):
+                proxy = self._compute_rca_checkpoint_proxy(self.valid_loader)
+                if proxy is not None:
+                    proxy_weight = float(
+                        getattr(self.config, "rca_checkpoint_proxy_weight", 0.0) or 0.0
+                    )
+                    selection_score = val_loss - proxy_weight * proxy["source_mrr"]
+                    selection_note = (
+                        f"source_mrr={proxy['source_mrr']:.4f}, "
+                        f"source_hit1={proxy['source_hit1']:.4f}, "
+                        f"source_margin={proxy['source_margin']:.4f}, "
+                        f"n={proxy['num_synthetic_events']}"
+                    )
+
+            es_status = self.early_stopping(
+                val_loss,
+                self.model,
+                epoch + 1,
+                selection_score=selection_score,
+                selection_note=selection_note,
+            )
 
             self._print_epoch_result(
                 epoch=epoch + 1, epoch_time=epoch_time,
@@ -3075,6 +3208,14 @@ class LaGraph:
                 "lr": self.config.lr,
                 "num_epochs": self.config.num_epochs,
                 "patience": self.config.patience,
+                "use_rca_aware_checkpoint": getattr(self.config, "use_rca_aware_checkpoint", None),
+                "rca_checkpoint_proxy_weight": getattr(
+                    self.config, "rca_checkpoint_proxy_weight", None
+                ),
+                "rca_checkpoint_proxy_batches": getattr(
+                    self.config, "rca_checkpoint_proxy_batches", None
+                ),
+                "rca_checkpoint_min_epoch": getattr(self.config, "rca_checkpoint_min_epoch", None),
                 "warmup_epochs": self.config.warmup_epochs,
                 "lambda_vq": getattr(self.config, "lambda_vq", None),
                 "vq_cooldown_epochs": getattr(self.config, "vq_cooldown_epochs", None),
@@ -3168,6 +3309,10 @@ class LaGraph:
             "total_time_seconds": round(total_time, 1),
             "total_time_human": _format_duration(total_time),
             "best_val_loss": float(self.early_stopping.val_loss_min),
+            "best_monitor_value": float(
+                getattr(self.early_stopping, "best_monitor_value", np.nan)
+            ),
+            "monitor_name": getattr(self.early_stopping, "monitor_name", "val_loss"),
             "best_epoch": self.early_stopping.best_epoch,
             "early_stopped": self.early_stopping.early_stop,
         }
