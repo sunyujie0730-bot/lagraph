@@ -26,6 +26,7 @@ import copy
 import json
 import math
 import os
+import random
 import re
 import socket
 import subprocess
@@ -60,6 +61,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "patience": 15,
     "use_latest_checkpoint": False,
     "use_rca_aware_checkpoint": False,
+    "rca_checkpoint_normalize": False,
     "rca_checkpoint_proxy_weight": 0.0,
     "rca_checkpoint_proxy_batches": 2,
     "rca_checkpoint_min_epoch": 1,
@@ -1205,6 +1207,9 @@ class LaGraph:
                 "use_rca_aware_checkpoint": getattr(
                     self.config, "use_rca_aware_checkpoint", None
                 ),
+                "rca_checkpoint_normalize": getattr(
+                    self.config, "rca_checkpoint_normalize", None
+                ),
                 "rca_checkpoint_proxy_weight": getattr(
                     self.config, "rca_checkpoint_proxy_weight", None
                 ),
@@ -1414,61 +1419,80 @@ class LaGraph:
         if max_batches <= 0:
             return None
 
+        was_training = bool(self.model.training)
+        py_random_state = random.getstate()
+        np_random_state = np.random.get_state()
+        torch_random_state = torch.random.get_rng_state()
+        cuda_random_states = (
+            torch.cuda.get_rng_state_all()
+            if torch.cuda.is_available()
+            else None
+        )
+
         self.model.eval()
         reciprocal_ranks = []
         hit1 = []
         margins = []
-        with torch.inference_mode():
-            for batch_idx, (input_data, _) in enumerate(vali_loader):
-                if batch_idx >= max_batches:
-                    break
-                input_data = input_data.float().to(self.device, non_blocking=True)
-                (
-                    synth_data,
-                    event_mask,
-                    source_mask,
-                    _effect_mask,
-                    source_onset_mask,
-                    _effect_time_mask,
-                ) = self._make_source_effect_synthetic_batch(input_data)
-                synth_rec, _, _, _, _, synth_aux, _ = self.model(synth_data)
-                source_score = None
-                if synth_aux:
-                    source_score = synth_aux.get("source_gate_score")
+        try:
+            with torch.inference_mode():
+                for batch_idx, (input_data, _) in enumerate(vali_loader):
+                    if batch_idx >= max_batches:
+                        break
+                    input_data = input_data.float().to(self.device, non_blocking=True)
+                    (
+                        synth_data,
+                        event_mask,
+                        source_mask,
+                        _effect_mask,
+                        source_onset_mask,
+                        _effect_time_mask,
+                    ) = self._make_source_effect_synthetic_batch(input_data)
+                    synth_rec, _, _, _, _, synth_aux, _ = self.model(synth_data)
+                    source_score = None
+                    if synth_aux:
+                        source_score = synth_aux.get("source_gate_score")
+                        if source_score is None:
+                            source_score = synth_aux.get("channel_mechanism_error")
                     if source_score is None:
-                        source_score = synth_aux.get("channel_mechanism_error")
-                if source_score is None:
-                    source_score = F.l1_loss(synth_rec, synth_data, reduction="none")
+                        source_score = F.l1_loss(synth_rec, synth_data, reduction="none")
 
-                if source_score.dim() == 3:
-                    focus_mask = source_onset_mask
-                    if focus_mask.sum() <= 0:
-                        focus_mask = event_mask
-                    denom = focus_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
-                    channel_scores = (
-                        source_score * focus_mask.unsqueeze(-1).to(dtype=source_score.dtype)
-                    ).sum(dim=1) / denom
-                elif source_score.dim() == 2:
-                    channel_scores = source_score
-                else:
-                    continue
-
-                B, C = channel_scores.shape
-                ranks_template = torch.arange(C, device=channel_scores.device)
-                for b in range(B):
-                    roots = source_mask[b] > 0.5
-                    non_roots = ~roots
-                    if roots.sum() == 0 or non_roots.sum() == 0:
+                    if source_score.dim() == 3:
+                        focus_mask = source_onset_mask
+                        if focus_mask.sum() <= 0:
+                            focus_mask = event_mask
+                        denom = focus_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
+                        channel_scores = (
+                            source_score * focus_mask.unsqueeze(-1).to(dtype=source_score.dtype)
+                        ).sum(dim=1) / denom
+                    elif source_score.dim() == 2:
+                        channel_scores = source_score
+                    else:
                         continue
-                    order = torch.argsort(channel_scores[b], descending=True)
-                    rank_pos = torch.empty_like(order)
-                    rank_pos[order] = ranks_template
-                    best_rank = rank_pos[roots].min().float() + 1.0
-                    reciprocal_ranks.append(float((1.0 / best_rank).detach().cpu().item()))
-                    hit1.append(float(best_rank.detach().cpu().item() <= 1.0))
-                    pos_score = channel_scores[b, roots].mean()
-                    neg_score = channel_scores[b, non_roots].max()
-                    margins.append(float((pos_score - neg_score).detach().cpu().item()))
+
+                    B, C = channel_scores.shape
+                    ranks_template = torch.arange(C, device=channel_scores.device)
+                    for b in range(B):
+                        roots = source_mask[b] > 0.5
+                        non_roots = ~roots
+                        if roots.sum() == 0 or non_roots.sum() == 0:
+                            continue
+                        order = torch.argsort(channel_scores[b], descending=True)
+                        rank_pos = torch.empty_like(order)
+                        rank_pos[order] = ranks_template
+                        best_rank = rank_pos[roots].min().float() + 1.0
+                        reciprocal_ranks.append(float((1.0 / best_rank).detach().cpu().item()))
+                        hit1.append(float(best_rank.detach().cpu().item() <= 1.0))
+                        pos_score = channel_scores[b, roots].mean()
+                        neg_score = channel_scores[b, non_roots].max()
+                        margins.append(float((pos_score - neg_score).detach().cpu().item()))
+        finally:
+            random.setstate(py_random_state)
+            np.random.set_state(np_random_state)
+            torch.random.set_rng_state(torch_random_state)
+            if cuda_random_states is not None:
+                torch.cuda.set_rng_state_all(cuda_random_states)
+            if was_training:
+                self.model.train()
 
         if not reciprocal_ranks:
             return None
@@ -2904,8 +2928,21 @@ class LaGraph:
                     proxy_weight = float(
                         getattr(self.config, "rca_checkpoint_proxy_weight", 0.0) or 0.0
                     )
-                    selection_score = val_loss - proxy_weight * proxy["source_mrr"]
+                    if bool(getattr(self.config, "rca_checkpoint_normalize", False)):
+                        if not hasattr(self, "_rca_checkpoint_val_ref"):
+                            self._rca_checkpoint_val_ref = max(abs(float(val_loss)), 1e-10)
+                        val_norm = float(val_loss) / max(float(self._rca_checkpoint_val_ref), 1e-10)
+                        proxy_norm = min(max(float(proxy["source_mrr"]), 0.0), 1.0)
+                        selection_score = val_norm - proxy_weight * proxy_norm
+                        selection_note = (
+                            f"val_norm={val_norm:.4f}, "
+                            f"proxy_weight={proxy_weight:.3f}, "
+                        )
+                    else:
+                        selection_score = val_loss - proxy_weight * proxy["source_mrr"]
+                        selection_note = ""
                     selection_note = (
+                        selection_note +
                         f"source_mrr={proxy['source_mrr']:.4f}, "
                         f"source_hit1={proxy['source_hit1']:.4f}, "
                         f"source_margin={proxy['source_margin']:.4f}, "

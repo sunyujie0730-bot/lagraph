@@ -208,6 +208,7 @@ def main():
             "source-bottleneck-contrast-balanced-rca",
             "source-bottleneck-specificity-rca",
             "source-bottleneck-rca-aware-checkpoint",
+            "source-bottleneck-normalized-rca-checkpoint",
             "source-bottleneck-adaptive-mechanism-rca",
             "source-bottleneck-no-mechanism-rca",
             "source-bottleneck-no-source-gate-rca",
@@ -669,6 +670,11 @@ def main():
         "--rca-aware-checkpoint",
         action="store_true",
         help="Select checkpoints using validation loss plus a synthetic source-RCA proxy.",
+    )
+    parser.add_argument(
+        "--rca-checkpoint-normalize",
+        action="store_true",
+        help="Use normalized validation loss for RCA-aware checkpoint selection.",
     )
     parser.add_argument(
         "--rca-checkpoint-proxy-weight",
@@ -2647,6 +2653,14 @@ def main():
         rca_checkpoint_proxy_batches=2,
         rca_checkpoint_min_epoch=4,
     )
+    arch_profiles["source-bottleneck-normalized-rca-checkpoint"] = dict(
+        arch_profiles["source-bottleneck-specificity-rca"],
+        use_rca_aware_checkpoint=True,
+        rca_checkpoint_normalize=True,
+        rca_checkpoint_proxy_weight=0.5,
+        rca_checkpoint_proxy_batches=2,
+        rca_checkpoint_min_epoch=4,
+    )
     arch_profiles["source-bottleneck-adaptive-mechanism-rca"] = dict(
         arch_profiles["source-bottleneck-specificity-rca"],
         rca_adaptive_mechanism_gate_weight=0.20,
@@ -3054,6 +3068,9 @@ def main():
         score_hyper_params["use_latest_checkpoint"] = True
     if args.rca_aware_checkpoint:
         score_hyper_params["use_rca_aware_checkpoint"] = True
+    if args.rca_checkpoint_normalize:
+        score_hyper_params["use_rca_aware_checkpoint"] = True
+        score_hyper_params["rca_checkpoint_normalize"] = True
     if args.rca_checkpoint_proxy_weight is not None:
         score_hyper_params["rca_checkpoint_proxy_weight"] = max(
             0.0, float(args.rca_checkpoint_proxy_weight)
