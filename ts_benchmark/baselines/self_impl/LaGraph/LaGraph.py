@@ -2187,7 +2187,10 @@ class LaGraph:
             source_onset_mask,
             effect_time_mask,
         ) = self._make_source_effect_synthetic_batch(input_data)
-        synth_rec, _, _, _, _, synth_aux, _ = self.model(synth_data)
+        synth_rec, _, _, _, _, synth_aux, _ = self.model(
+            synth_data,
+            return_root_score=bool(getattr(self.config, "use_root_score_head", False)),
+        )
         if not synth_aux:
             return input_data.new_tensor(0.0)
 
@@ -3712,7 +3715,10 @@ class LaGraph:
     def _detect_forward_with_channels(self, input_data):
         score, _ = self.model.multi_scale_forward(input_data)
         raw_model = self._get_raw_model()
-        x_rec, A_adaptive, _, _, _, aux_losses, _ = raw_model(input_data)
+        x_rec, A_adaptive, _, _, _, aux_losses, _ = raw_model(
+            input_data,
+            return_root_score=bool(getattr(self.config, "use_root_score_head", False)),
+        )
         channel_err = F.l1_loss(x_rec, input_data, reduction="none")
         if hasattr(raw_model, "_normalize_score_error"):
             channel_err = raw_model._normalize_score_error(channel_err)

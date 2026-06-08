@@ -1072,7 +1072,7 @@ class SparseGCN(nn.Module):
             return err / scale
         return (err - center).clamp_min(0.0) / scale
 
-    def forward(self, x):
+    def forward(self, x, return_root_score=False):
         """
         x: (B, L, C)
 
@@ -1370,7 +1370,7 @@ class SparseGCN(nn.Module):
         trend_out = self.trend_linear(trend)
         x_rec = resid_out + trend_out
 
-        if self.use_root_score_head:
+        if self.use_root_score_head and return_root_score:
             if channel_mechanism_error is not None:
                 mechanism_error_feat = channel_mechanism_error.to(dtype=resid.dtype)
             elif self.use_channel_graph:
@@ -1398,6 +1398,8 @@ class SparseGCN(nn.Module):
                 ],
                 dim=-1,
             )
+            if self.training:
+                root_features = root_features.detach()
             root_score_logits = self.root_score_head(root_features).squeeze(-1)
 
         aux_losses = {}
