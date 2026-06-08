@@ -751,6 +751,18 @@ def main():
         help="Weight for the fused source score inside normalized source/propagation RCA.",
     )
     parser.add_argument(
+        "--rca-source-gate-weight",
+        type=float,
+        default=None,
+        help="Weight for learned source-gate evidence inside RCA rankings.",
+    )
+    parser.add_argument(
+        "--rca-root-score-weight",
+        type=float,
+        default=None,
+        help="Weight for learned RootScore evidence inside RCA rankings.",
+    )
+    parser.add_argument(
         "--rca-source-consensus-weight",
         type=float,
         default=None,
@@ -3031,6 +3043,10 @@ def main():
         score_hyper_params["rca_source_base_weight"] = max(0.0, float(args.rca_source_base_weight))
     if args.rca_source_score_weight is not None:
         score_hyper_params["rca_source_score_weight"] = max(0.0, float(args.rca_source_score_weight))
+    if args.rca_source_gate_weight is not None:
+        score_hyper_params["rca_source_gate_weight"] = max(0.0, float(args.rca_source_gate_weight))
+    if args.rca_root_score_weight is not None:
+        score_hyper_params["rca_root_score_weight"] = max(0.0, float(args.rca_root_score_weight))
     if args.rca_source_consensus_weight is not None:
         score_hyper_params["rca_source_consensus_weight"] = max(
             0.0, float(args.rca_source_consensus_weight)
