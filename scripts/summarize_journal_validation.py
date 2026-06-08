@@ -110,42 +110,50 @@ def method_short(profile_or_method: str) -> str:
 
 
 def read_mean(path: Path) -> dict[str, Any] | None:
-    if not path.exists():
+    rows = read_mean_rows(path)
+    if not rows:
         return None
+    return rows[-1]
+
+
+def read_mean_rows(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
     df = pd.read_csv(path)
     if df.empty:
-        return None
+        return []
     first_col = df.columns[0]
     mean = df[df[first_col].astype(str).eq("MEAN")]
     if mean.empty:
-        return None
-    return mean.iloc[-1].to_dict()
+        return []
+    return mean.to_dict("records")
 
 
 def mean_rows_for_pattern(pattern: str, source_type: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for path in sorted(ANALYSIS_DIR.glob(pattern)):
-        mean = read_mean(path)
-        if mean is None:
+        means = read_mean_rows(path)
+        if not means:
             continue
-        method = mean.get("method", path.stem)
-        if pd.isna(method) or str(method).strip() in {"", "-", "nan", "None"}:
-            if "channel_random" in path.name or "group_random" in path.name:
-                method = "random"
-            elif "channel_residual_only" in path.name or "group_residual_only" in path.name:
-                method = "residual_only"
-            else:
-                method = path.stem
         exp_id = path.name.split("_channel_")[0].split("_group_")[0].split("_hierarchical_")[0]
-        rows.append(
-            {
-                **mean,
-                "exp_id": exp_id,
-                "source_type": source_type,
-                "file": str(path),
-                "method": method_short(str(method)),
-            }
-        )
+        for mean in means:
+            method = mean.get("method", path.stem)
+            if pd.isna(method) or str(method).strip() in {"", "-", "nan", "None"}:
+                if "channel_random" in path.name or "group_random" in path.name:
+                    method = "random"
+                elif "channel_residual_only" in path.name or "group_residual_only" in path.name:
+                    method = "residual_only"
+                else:
+                    method = path.stem
+            rows.append(
+                {
+                    **mean,
+                    "exp_id": exp_id,
+                    "source_type": source_type,
+                    "file": str(path),
+                    "method": method_short(str(method)),
+                }
+            )
     return rows
 
 
