@@ -50,9 +50,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--all-prediction-keys", action="store_true")
     parser.add_argument(
         "--event-mode",
-        choices=["rerank-only", "refine"],
+        choices=["rerank-only", "refine", "adaptive", "auto"],
         default="refine",
-        help="rerank-only keeps predicted event boundaries; refine merges/expands fragmented predicted events.",
+        help=(
+            "rerank-only keeps predicted event boundaries; refine merges/expands fragmented predicted events; "
+            "adaptive only merges nearby events with consistent Top-K RCA evidence; "
+            "auto enables refinement only when the whole event stream has consistent nearby RCA evidence."
+        ),
     )
     parser.add_argument(
         "--rerank-mode",
@@ -72,6 +76,11 @@ def parse_args() -> argparse.Namespace:
         help="Do not merge another event if the raw cluster span would exceed this value; 0 disables the cap.",
     )
     parser.add_argument("--top-k", type=int, default=20)
+    parser.add_argument("--merge-sim-top-k", type=int, default=5)
+    parser.add_argument("--min-channel-jaccard", type=float, default=0.50)
+    parser.add_argument("--min-group-jaccard", type=float, default=0.0)
+    parser.add_argument("--auto-min-channel-jaccard", type=float, default=0.40)
+    parser.add_argument("--auto-min-pairs", type=int, default=10)
     parser.add_argument("--aggregation", choices=["max", "mean"], default="max")
     parser.add_argument(
         "--exported-weight",
@@ -132,9 +141,70 @@ def normalize(values: list[float]) -> list[float]:
     return [(v - lo) / span for v in values]
 
 
+def jaccard(left: set[str], right: set[str]) -> float:
+    if not left and not right:
+        return 1.0
+    return len(left & right) / max(len(left | right), 1)
+
+
 def sorted_channel_items(event: dict[str, Any]) -> list[dict[str, Any]]:
     items = event.get("channel_ranking") or event.get("top_channels") or []
     return [copy.deepcopy(item) for item in items if isinstance(item, dict) and item.get("name")]
+
+
+def event_signature(event: dict[str, Any], top_k: int) -> tuple[set[str], set[str]]:
+    items = sorted_channel_items(event)[: max(1, top_k)]
+    channels = {str(item.get("name")) for item in items if item.get("name")}
+    groups = {root_cause_group_name(str(item.get("group") or item.get("name"))) for item in items}
+    return channels, groups
+
+
+def merge_consistent(cluster: list[dict[str, Any]], event: dict[str, Any], args: argparse.Namespace) -> bool:
+    cluster_channels: set[str] = set()
+    cluster_groups: set[str] = set()
+    for item in cluster:
+        channels, groups = event_signature(item, args.merge_sim_top_k)
+        cluster_channels.update(channels)
+        cluster_groups.update(groups)
+    event_channels, event_groups = event_signature(event, args.merge_sim_top_k)
+    return (
+        jaccard(cluster_channels, event_channels) >= args.min_channel_jaccard
+        and jaccard(cluster_groups, event_groups) >= args.min_group_jaccard
+    )
+
+
+def event_stream_consistency(events: list[dict[str, Any]], args: argparse.Namespace) -> dict[str, float]:
+    valid = [
+        event
+        for event in sorted(events, key=lambda e: (int(e.get("start", 0)), int(e.get("end", 0))))
+        if int(event.get("end", 0)) > int(event.get("start", 0))
+    ]
+    channel_scores = []
+    group_scores = []
+    for left, right in zip(valid, valid[1:]):
+        gap = int(right.get("start", 0)) - int(left.get("end", 0))
+        if gap > max(0, args.merge_gap):
+            continue
+        left_channels, left_groups = event_signature(left, args.merge_sim_top_k)
+        right_channels, right_groups = event_signature(right, args.merge_sim_top_k)
+        channel_scores.append(jaccard(left_channels, right_channels))
+        group_scores.append(jaccard(left_groups, right_groups))
+    if not channel_scores:
+        return {"pairs": 0.0, "channel_jaccard_mean": 0.0, "group_jaccard_mean": 0.0}
+    return {
+        "pairs": float(len(channel_scores)),
+        "channel_jaccard_mean": sum(channel_scores) / len(channel_scores),
+        "group_jaccard_mean": sum(group_scores) / len(group_scores),
+    }
+
+
+def auto_should_refine(events: list[dict[str, Any]], args: argparse.Namespace) -> tuple[bool, dict[str, float]]:
+    stats = event_stream_consistency(events, args)
+    should_refine = (
+        stats["pairs"] >= args.auto_min_pairs
+        and stats["channel_jaccard_mean"] >= args.auto_min_channel_jaccard
+    )
+    return should_refine, stats
 
 
 def aggregate_channel_items(events: list[dict[str, Any]], args: argparse.Namespace) -> list[dict[str, Any]]:
@@ -351,7 +421,8 @@ def refine_event_list(events: list[dict[str, Any]], args: argparse.Namespace) ->
         end = int(event.get("end", 0))
         candidate_span = max(current_end, end) - min(current_start, start)
         span_ok = args.max_merge_span <= 0 or candidate_span <= args.max_merge_span
-        if start <= current_end + max(0, args.merge_gap) and span_ok:
+        consistency_ok = args.event_mode not in {"adaptive"} or merge_consistent(current, event, args)
+        if start <= current_end + max(0, args.merge_gap) and span_ok and consistency_ok:
             current.append(event)
             current_start = min(current_start, start)
             current_end = max(current_end, end)
@@ -414,6 +485,11 @@ def main() -> None:
         "max_merge_span": args.max_merge_span,
         "event_mode": args.event_mode,
         "rerank_mode": args.rerank_mode,
+        "merge_sim_top_k": args.merge_sim_top_k,
+        "min_channel_jaccard": args.min_channel_jaccard,
+        "min_group_jaccard": args.min_group_jaccard,
+        "auto_min_channel_jaccard": args.auto_min_channel_jaccard,
+        "auto_min_pairs": args.auto_min_pairs,
         "top_k": args.top_k,
         "aggregation": args.aggregation,
     }
@@ -442,14 +518,31 @@ def main() -> None:
         keys = list(pred_by_key.keys()) if args.all_prediction_keys else [str(args.prediction_key)]
         for key in keys:
             if key in pred_by_key:
-                if args.event_mode == "rerank-only":
+                effective_mode = args.event_mode
+                auto_stats = None
+                if args.event_mode == "auto":
+                    should_refine, auto_stats = auto_should_refine(pred_by_key.get(key, []), args)
+                    effective_mode = "refine" if should_refine else "rerank-only"
+                if effective_mode == "rerank-only":
                     pred_by_key[key] = rerank_predicted_events(pred_by_key.get(key, []), args)
                 else:
                     pred_by_key[key] = refine_event_list(pred_by_key.get(key, []), args)
+                if auto_stats is not None:
+                    report.setdefault("event_source_refinement_auto", {})[str(key)] = {
+                        **auto_stats,
+                        "effective_mode": effective_mode,
+                    }
         if str(args.prediction_key) in pred_by_key:
             report["predicted_events"] = pred_by_key[str(args.prediction_key)]
     elif "predicted_events" in report:
-        if args.event_mode == "rerank-only":
+        effective_mode = args.event_mode
+        if args.event_mode == "auto":
+            should_refine, auto_stats = auto_should_refine(report.get("predicted_events", []), args)
+            effective_mode = "refine" if should_refine else "rerank-only"
+            report["event_source_refinement_auto"] = {
+                "predicted_events": {**auto_stats, "effective_mode": effective_mode}
+            }
+        if effective_mode == "rerank-only":
             report["predicted_events"] = rerank_predicted_events(report.get("predicted_events", []), args)
         else:
             report["predicted_events"] = refine_event_list(report.get("predicted_events", []), args)

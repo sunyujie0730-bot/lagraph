@@ -2,12 +2,13 @@
 """Run post-hoc ablations for unified event-aware source RCA.
 
 This runner uses fixed exported RCA JSON files and does not retrain models. It
-produces four comparable settings per dataset:
+produces five comparable settings per dataset:
 
 1. original: existing RCA export.
 2. event_only: event refinement without source reranking.
 3. rerank_only: conservative source reranking without event refinement.
 4. full: event refinement plus conservative source reranking.
+5. auto_full: context-quality-aware event refinement plus source reranking.
 """
 
 from __future__ import annotations
@@ -49,6 +50,7 @@ VARIANTS = [
     Variant("event_only", "refine", "none", False),
     Variant("rerank_only", "rerank-only", "source", False),
     Variant("full", "refine", "source", False),
+    Variant("auto_full", "auto", "source", False),
 ]
 
 
@@ -108,6 +110,16 @@ def apply_variant(dataset: DatasetSpec, variant: Variant, args: argparse.Namespa
         str(args.expand_right),
         "--top-k",
         str(args.top_k),
+        "--merge-sim-top-k",
+        "5",
+        "--min-channel-jaccard",
+        "0.50",
+        "--min-group-jaccard",
+        "0.0",
+        "--auto-min-channel-jaccard",
+        "0.40",
+        "--auto-min-pairs",
+        "10",
         "--exported-weight",
         "1.0",
         "--base-weight",
