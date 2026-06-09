@@ -236,6 +236,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     # --- RTX 5070 single-GPU training path ---
     "dataloader_num_workers": 2,
     "dataloader_prefetch_factor": 2,
+    "inference_dataloader_num_workers": 0,
     # --- Affiliation-oriented inference shaping ---
     "score_aggregation": "mean",
     "score_aggregation_quantile": 0.9,
@@ -4128,6 +4129,9 @@ class LaGraph:
         )
         return output
 
+    def _inference_dataloader_num_workers(self) -> int:
+        return max(0, int(getattr(self.config, "inference_dataloader_num_workers", 0) or 0))
+
     def detect_score(self, train: pd.DataFrame) -> np.ndarray:
         if not self.trained:
             raise RuntimeError("Model not trained yet. Call detect_fit first.")
@@ -4168,7 +4172,7 @@ class LaGraph:
         loader = anomaly_detection_data_provider(
             scaled_data, batch_size=eval_batch_size,
             win_size=self.config.win_size, step=1, mode="test",
-            num_workers=getattr(self.config, "dataloader_num_workers", 0),
+            num_workers=self._inference_dataloader_num_workers(),
             prefetch_factor=getattr(self.config, "dataloader_prefetch_factor", 2),
         )
 
@@ -4251,7 +4255,7 @@ class LaGraph:
         test_loader = anomaly_detection_data_provider(
             scaled_test, batch_size=eval_batch_size,
             win_size=self.config.win_size, step=1, mode="test",
-            num_workers=getattr(self.config, "dataloader_num_workers", 0),
+            num_workers=self._inference_dataloader_num_workers(),
             prefetch_factor=getattr(self.config, "dataloader_prefetch_factor", 2),
         )
 

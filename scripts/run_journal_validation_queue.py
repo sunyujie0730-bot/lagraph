@@ -333,6 +333,8 @@ def training_command(exp: Experiment) -> list[str]:
         "2",
         "--prefetch-factor",
         "2",
+        "--inference-num-workers",
+        "0",
         "--save-dir",
         save_dir,
     ]

@@ -141,6 +141,15 @@ def main():
         help="每个 DataLoader worker 预取 batch 数 (default: 2; num_workers=0 时自动忽略)",
     )
     parser.add_argument(
+        "--inference-num-workers",
+        type=int,
+        default=0,
+        help=(
+            "DataLoader worker count for post-training scoring/RCA export "
+            "(default: 0 for Windows stability on large SWaT/WADI runs)."
+        ),
+    )
+    parser.add_argument(
         "--batch-size",
         type=int,
         default=None,
@@ -993,6 +1002,7 @@ def main():
     n_gpus = 0 if args.n_gpus == 0 else 1
     dataloader_num_workers = max(0, args.num_workers)
     dataloader_prefetch_factor = max(1, args.prefetch_factor)
+    inference_dataloader_num_workers = max(0, args.inference_num_workers)
     vq_cooldown_epochs = args.vq_cooldown_epochs
     lambda_vq = args.lambda_vq
     vq_score_weight = args.vq_score_weight
@@ -3219,6 +3229,7 @@ def main():
                     "warmup_epochs": warmup_epochs,
                     "dataloader_num_workers": dataloader_num_workers,
                     "dataloader_prefetch_factor": dataloader_prefetch_factor,
+                    "inference_dataloader_num_workers": inference_dataloader_num_workers,
                     "export_rca": args.export_rca,
                     **arch_switches,
                     **vq_hyper_params,
