@@ -261,11 +261,78 @@ CANDIDATES = [
 ]
 
 
+ADAPTIVE_PROOF = [
+    Experiment(
+        "proof_event_selection_swat_e8",
+        "SWAT_A1A2_Physical_v1.csv",
+        "source-bottleneck-event-adaptive-mechanism-rca",
+        8,
+        "Proof run: new event-level mechanism selection gate on SWaT.",
+        run_static_baselines=False,
+    ),
+    Experiment(
+        "proof_main_swat_e8",
+        "SWAT_A1A2_Physical_v1.csv",
+        MAIN_PROFILE,
+        8,
+        "Proof run: main specificity baseline on SWaT under the same worker/export protocol.",
+    ),
+    Experiment(
+        "proof_old_adaptive_swat_e8",
+        "SWAT_A1A2_Physical_v1.csv",
+        "source-bottleneck-adaptive-mechanism-rca",
+        8,
+        "Proof run: old additive adaptive mechanism gate on SWaT.",
+        run_static_baselines=False,
+    ),
+    Experiment(
+        "proof_no_mechanism_swat_e8",
+        "SWAT_A1A2_Physical_v1.csv",
+        "source-bottleneck-no-mechanism-rca",
+        8,
+        "Proof run: remove mechanism modeling on SWaT.",
+        run_static_baselines=False,
+    ),
+    Experiment(
+        "proof_event_selection_wadi_e8",
+        "WADI_A1_2017_ds10.csv",
+        "source-bottleneck-event-adaptive-mechanism-rca",
+        8,
+        "Proof run: new event-level mechanism selection gate on WADI.",
+        run_static_baselines=False,
+    ),
+    Experiment(
+        "proof_main_wadi_e8",
+        "WADI_A1_2017_ds10.csv",
+        MAIN_PROFILE,
+        8,
+        "Proof run: main specificity baseline on WADI under the same worker/export protocol.",
+    ),
+    Experiment(
+        "proof_old_adaptive_wadi_e8",
+        "WADI_A1_2017_ds10.csv",
+        "source-bottleneck-adaptive-mechanism-rca",
+        8,
+        "Proof run: old additive adaptive mechanism gate on WADI.",
+        run_static_baselines=False,
+    ),
+    Experiment(
+        "proof_no_mechanism_wadi_e8",
+        "WADI_A1_2017_ds10.csv",
+        "source-bottleneck-no-mechanism-rca",
+        8,
+        "Proof run: remove mechanism modeling on WADI.",
+        run_static_baselines=False,
+    ),
+]
+
+
 SUITES = {
     "confirmation": CONFIRMATION,
     "ablation": ABLATIONS,
     "p0-risk": P0_RISK_CHECKS,
     "candidate": CANDIDATES,
+    "adaptive-proof": ADAPTIVE_PROOF,
     "all": CONFIRMATION + ABLATIONS + P0_RISK_CHECKS + CANDIDATES,
 }
 
@@ -613,29 +680,33 @@ def run_experiment(exp: Experiment) -> dict:
         "label_csv": str(label_path) if label_path else "",
     }
     if returncode == 0 and rca_path is not None:
-        outputs = eval_rca(rca_path, exp.exp_id)
-        if exp.run_static_baselines:
-            outputs.update(eval_static_baselines(rca_path, exp))
-        channel = read_mean_row(outputs["channel"])
-        group = read_mean_row(outputs["group"])
-        hier = read_mean_row(outputs["hierarchical"])
-        row.update(
-            {
-                "channel_MRR": float(channel.get("MRR", 0.0) or 0.0),
-                "channel_Hit@1": float(channel.get("Hit@1", 0.0) or 0.0),
-                "channel_Hit@3": float(channel.get("Hit@3", 0.0) or 0.0),
-                "channel_Hit@5": float(channel.get("Hit@5", 0.0) or 0.0),
-                "group_MRR": float(group.get("MRR", 0.0) or 0.0),
-                "group_Hit@1": float(group.get("Hit@1", 0.0) or 0.0),
-                "group_Hit@3": float(group.get("Hit@3", 0.0) or 0.0),
-                "group_Hit@5": float(group.get("Hit@5", 0.0) or 0.0),
-                "conditional_variable_MRR": float(hier.get("conditional_variable_MRR", 0.0) or 0.0),
-                "conditional_variable_Hit@1": float(hier.get("conditional_variable_Hit@1", 0.0) or 0.0),
-                "conditional_variable_Hit@3": float(hier.get("conditional_variable_Hit@3", 0.0) or 0.0),
-                "conditional_variable_Hit@5": float(hier.get("conditional_variable_Hit@5", 0.0) or 0.0),
-            }
-        )
-        row.update(read_label_summary(label_path))
+        try:
+            outputs = eval_rca(rca_path, exp.exp_id)
+            if exp.run_static_baselines:
+                outputs.update(eval_static_baselines(rca_path, exp))
+            channel = read_mean_row(outputs["channel"])
+            group = read_mean_row(outputs["group"])
+            hier = read_mean_row(outputs["hierarchical"])
+            row.update(
+                {
+                    "channel_MRR": float(channel.get("MRR", 0.0) or 0.0),
+                    "channel_Hit@1": float(channel.get("Hit@1", 0.0) or 0.0),
+                    "channel_Hit@3": float(channel.get("Hit@3", 0.0) or 0.0),
+                    "channel_Hit@5": float(channel.get("Hit@5", 0.0) or 0.0),
+                    "group_MRR": float(group.get("MRR", 0.0) or 0.0),
+                    "group_Hit@1": float(group.get("Hit@1", 0.0) or 0.0),
+                    "group_Hit@3": float(group.get("Hit@3", 0.0) or 0.0),
+                    "group_Hit@5": float(group.get("Hit@5", 0.0) or 0.0),
+                    "conditional_variable_MRR": float(hier.get("conditional_variable_MRR", 0.0) or 0.0),
+                    "conditional_variable_Hit@1": float(hier.get("conditional_variable_Hit@1", 0.0) or 0.0),
+                    "conditional_variable_Hit@3": float(hier.get("conditional_variable_Hit@3", 0.0) or 0.0),
+                    "conditional_variable_Hit@5": float(hier.get("conditional_variable_Hit@5", 0.0) or 0.0),
+                }
+            )
+            row.update(read_label_summary(label_path))
+        except Exception as exc:
+            row["status"] = f"eval_failed:{type(exc).__name__}"
+            row["eval_error"] = str(exc)
 
     meta.update(
         {
