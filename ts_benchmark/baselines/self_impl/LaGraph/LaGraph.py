@@ -277,6 +277,9 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_adaptive_mechanism_gate_weight": 0.0,
     "rca_adaptive_mechanism_gate_floor": 0.05,
     "rca_adaptive_mechanism_gate_mode": "source_onset",
+    "rca_adaptive_mechanism_selection_weight": 0.0,
+    "rca_adaptive_mechanism_selection_floor": 0.05,
+    "rca_adaptive_mechanism_selection_mode": "source_onset",
     "rca_counterfactual_weight": 0.0,
     "rca_counterfactual_candidates": 12,
     "rca_counterfactual_max_windows": 32,
@@ -4867,6 +4870,9 @@ class LaGraph:
         adaptive_mechanism_gate_weight=0.0,
         adaptive_mechanism_gate_floor=0.05,
         adaptive_mechanism_gate_mode="source_onset",
+        adaptive_mechanism_selection_weight=0.0,
+        adaptive_mechanism_selection_floor=0.05,
+        adaptive_mechanism_selection_mode="source_onset",
         counterfactual_weight=0.0,
         onset_weight=0.0,
         onset_baseline_window=200,
@@ -4986,6 +4992,7 @@ class LaGraph:
                 or mechanism_guided_source_weight > 0.0
                 or source_interaction_weight > 0.0
                 or adaptive_mechanism_gate_weight > 0.0
+                or adaptive_mechanism_selection_weight > 0.0
             )
             if mechanism_residual_window > 0 and needs_mechanism_residual and event_anchor_start > 0:
                 baseline_start = max(0, event_anchor_start - mechanism_residual_window)
@@ -4999,6 +5006,8 @@ class LaGraph:
             event_mechanism_guided_source_scores = np.zeros_like(event_raw_scores)
             event_adaptive_mechanism_gate_scores = np.zeros_like(event_raw_scores)
             event_adaptive_mechanism_scores = np.zeros_like(event_raw_scores)
+            event_adaptive_mechanism_selection_gate_scores = np.zeros_like(event_raw_scores)
+            event_adaptive_mechanism_selection_scores = np.zeros_like(event_raw_scores)
             if event_component_normalize:
                 base_norm = self._normalize_event_component(event_base_scores)
                 graph_norm = self._normalize_event_component(event_graph_scores)
@@ -5042,6 +5051,52 @@ class LaGraph:
                         * mechanism_source_evidence_norm
                         * event_adaptive_mechanism_gate_scores
                     )
+                direct_source_norm = (
+                    source_base_weight * base_norm
+                    + source_score_weight * source_score_norm
+                    + causal_weight * causal_norm
+                    + source_gate_weight * source_gate_norm
+                    + root_score_weight * root_score_norm
+                    + source_innovation_weight * source_innovation_norm
+                    + synthetic_weight * synthetic_norm
+                    + counterfactual_weight * counterfactual_norm
+                )
+                if source_interaction_weight > 0.0:
+                    direct_source_norm = (
+                        direct_source_norm
+                        + source_interaction_weight * base_norm * np.maximum(onset_norm, source_gate_norm)
+                    )
+                if adaptive_mechanism_selection_weight > 0.0:
+                    mode = str(adaptive_mechanism_selection_mode or "source_onset").lower()
+                    if mode == "source_gate":
+                        selection_support_norm = source_gate_norm
+                    elif mode == "onset":
+                        selection_support_norm = onset_norm
+                    elif mode == "base":
+                        selection_support_norm = base_norm
+                    elif mode == "base_source_onset":
+                        selection_support_norm = np.maximum.reduce([base_norm, source_gate_norm, onset_norm])
+                    else:
+                        selection_support_norm = np.maximum(source_gate_norm, onset_norm)
+                    raw_selection_gate = np.sqrt(
+                        np.maximum(mechanism_source_evidence_norm * selection_support_norm, 0.0)
+                    )
+                    selection_floor = min(
+                        max(float(adaptive_mechanism_selection_floor or 0.0), 0.0),
+                        1.0,
+                    )
+                    event_adaptive_mechanism_selection_gate_scores = (
+                        selection_floor + (1.0 - selection_floor) * raw_selection_gate
+                    )
+                    mechanism_selected_norm = (
+                        source_base_weight * base_norm
+                        + mechanism_source_evidence_norm
+                        + mechanism_guided_source_weight * event_mechanism_guided_source_scores
+                    )
+                    event_adaptive_mechanism_selection_scores = (
+                        (1.0 - event_adaptive_mechanism_selection_gate_scores) * direct_source_norm
+                        + event_adaptive_mechanism_selection_gate_scores * mechanism_selected_norm
+                    )
                 source_norm = (
                     source_base_weight * base_norm
                     + source_score_weight * source_score_norm
@@ -5058,6 +5113,12 @@ class LaGraph:
                 if source_interaction_weight > 0.0:
                     source_evidence_norm = np.maximum(onset_norm, mechanism_residual_norm)
                     source_norm = source_norm + source_interaction_weight * base_norm * source_evidence_norm
+                if adaptive_mechanism_selection_weight > 0.0:
+                    selection_weight = min(max(float(adaptive_mechanism_selection_weight), 0.0), 1.0)
+                    source_norm = (
+                        (1.0 - selection_weight) * source_norm
+                        + selection_weight * event_adaptive_mechanism_selection_scores
+                    )
                 if use_source_propagation:
                     event_scores = source_weight * source_norm + propagation_weight * graph_norm
                 else:
@@ -5216,6 +5277,12 @@ class LaGraph:
                     "mechanism_guided_source_score": float(event_mechanism_guided_source_scores[idx]),
                     "adaptive_mechanism_gate_score": float(event_adaptive_mechanism_gate_scores[idx]),
                     "adaptive_mechanism_score": float(event_adaptive_mechanism_scores[idx]),
+                    "adaptive_mechanism_selection_gate_score": float(
+                        event_adaptive_mechanism_selection_gate_scores[idx]
+                    ),
+                    "adaptive_mechanism_selection_score": float(
+                        event_adaptive_mechanism_selection_scores[idx]
+                    ),
                     "synthetic_rca_score": float(event_synthetic_scores[idx]),
                     "counterfactual_score": float(event_counterfactual_scores[idx]),
                     "onset_score": float(event_onset_scores[idx]),
@@ -5502,6 +5569,18 @@ class LaGraph:
         adaptive_mechanism_gate_mode = str(
             getattr(self.config, "rca_adaptive_mechanism_gate_mode", "source_onset") or "source_onset"
         )
+        adaptive_mechanism_selection_weight = _cfg_float(
+            "rca_adaptive_mechanism_selection_weight",
+            0.0,
+        )
+        adaptive_mechanism_selection_floor = _cfg_float(
+            "rca_adaptive_mechanism_selection_floor",
+            0.05,
+        )
+        adaptive_mechanism_selection_mode = str(
+            getattr(self.config, "rca_adaptive_mechanism_selection_mode", "source_onset")
+            or "source_onset"
+        )
         counterfactual_weight = _cfg_float("rca_counterfactual_weight", 0.0)
         contrast_window = _cfg_int("rca_contrast_window", 0)
         contrast_weight = _cfg_float("rca_contrast_weight", 0.0)
@@ -5652,6 +5731,9 @@ class LaGraph:
             adaptive_mechanism_gate_weight=adaptive_mechanism_gate_weight,
             adaptive_mechanism_gate_floor=adaptive_mechanism_gate_floor,
             adaptive_mechanism_gate_mode=adaptive_mechanism_gate_mode,
+            adaptive_mechanism_selection_weight=adaptive_mechanism_selection_weight,
+            adaptive_mechanism_selection_floor=adaptive_mechanism_selection_floor,
+            adaptive_mechanism_selection_mode=adaptive_mechanism_selection_mode,
             counterfactual_weight=counterfactual_weight,
             onset_weight=onset_weight,
             onset_baseline_window=onset_baseline_window,
@@ -5724,6 +5806,9 @@ class LaGraph:
                     adaptive_mechanism_gate_weight=adaptive_mechanism_gate_weight,
                     adaptive_mechanism_gate_floor=adaptive_mechanism_gate_floor,
                     adaptive_mechanism_gate_mode=adaptive_mechanism_gate_mode,
+                    adaptive_mechanism_selection_weight=adaptive_mechanism_selection_weight,
+                    adaptive_mechanism_selection_floor=adaptive_mechanism_selection_floor,
+                    adaptive_mechanism_selection_mode=adaptive_mechanism_selection_mode,
                     counterfactual_weight=counterfactual_weight,
                     onset_weight=onset_weight,
                     onset_baseline_window=onset_baseline_window,
@@ -5789,6 +5874,9 @@ class LaGraph:
                     adaptive_mechanism_gate_weight=adaptive_mechanism_gate_weight,
                     adaptive_mechanism_gate_floor=adaptive_mechanism_gate_floor,
                     adaptive_mechanism_gate_mode=adaptive_mechanism_gate_mode,
+                    adaptive_mechanism_selection_weight=adaptive_mechanism_selection_weight,
+                    adaptive_mechanism_selection_floor=adaptive_mechanism_selection_floor,
+                    adaptive_mechanism_selection_mode=adaptive_mechanism_selection_mode,
                     counterfactual_weight=counterfactual_weight,
                     onset_weight=onset_weight,
                     onset_baseline_window=onset_baseline_window,
@@ -5852,6 +5940,9 @@ class LaGraph:
                 adaptive_mechanism_gate_weight=adaptive_mechanism_gate_weight,
                 adaptive_mechanism_gate_floor=adaptive_mechanism_gate_floor,
                 adaptive_mechanism_gate_mode=adaptive_mechanism_gate_mode,
+                adaptive_mechanism_selection_weight=adaptive_mechanism_selection_weight,
+                adaptive_mechanism_selection_floor=adaptive_mechanism_selection_floor,
+                adaptive_mechanism_selection_mode=adaptive_mechanism_selection_mode,
                 counterfactual_weight=counterfactual_weight,
                 onset_weight=onset_weight,
                 onset_baseline_window=onset_baseline_window,
@@ -5922,6 +6013,9 @@ class LaGraph:
                 adaptive_mechanism_gate_weight=adaptive_mechanism_gate_weight,
                 adaptive_mechanism_gate_floor=adaptive_mechanism_gate_floor,
                 adaptive_mechanism_gate_mode=adaptive_mechanism_gate_mode,
+                adaptive_mechanism_selection_weight=adaptive_mechanism_selection_weight,
+                adaptive_mechanism_selection_floor=adaptive_mechanism_selection_floor,
+                adaptive_mechanism_selection_mode=adaptive_mechanism_selection_mode,
                 counterfactual_weight=counterfactual_weight,
                 onset_weight=onset_weight,
                 onset_baseline_window=onset_baseline_window,
@@ -5989,6 +6083,9 @@ class LaGraph:
             "rca_adaptive_mechanism_gate_weight": adaptive_mechanism_gate_weight,
             "rca_adaptive_mechanism_gate_floor": adaptive_mechanism_gate_floor,
             "rca_adaptive_mechanism_gate_mode": adaptive_mechanism_gate_mode,
+            "rca_adaptive_mechanism_selection_weight": adaptive_mechanism_selection_weight,
+            "rca_adaptive_mechanism_selection_floor": adaptive_mechanism_selection_floor,
+            "rca_adaptive_mechanism_selection_mode": adaptive_mechanism_selection_mode,
             "rca_counterfactual_weight": counterfactual_weight,
             "rca_counterfactual_candidates": _cfg_int("rca_counterfactual_candidates", 12),
             "rca_counterfactual_max_windows": _cfg_int("rca_counterfactual_max_windows", 32),
