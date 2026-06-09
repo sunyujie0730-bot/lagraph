@@ -174,6 +174,25 @@ ABLATIONS = [
     ),
 ]
 
+P0_RISK_CHECKS = [
+    Experiment(
+        "p0_no_mechanism_wadi_e12",
+        "WADI_A1_2017_ds10.csv",
+        "source-bottleneck-no-mechanism-rca",
+        12,
+        "P0 risk check: rerun no-mechanism on WADI at 12 epochs to test cross-dataset stability.",
+        run_static_baselines=False,
+    ),
+    Experiment(
+        "p0_no_mechanism_swat_e12",
+        "SWAT_A1A2_Physical_v1.csv",
+        "source-bottleneck-no-mechanism-rca",
+        12,
+        "P0 risk check: rerun no-mechanism on SWaT at 12 epochs to test whether the e8 gain is stable.",
+        run_static_baselines=False,
+    ),
+]
+
 CANDIDATES = [
     Experiment(
         "candidate_adaptive_mechanism_wadi_e8",
@@ -245,8 +264,9 @@ CANDIDATES = [
 SUITES = {
     "confirmation": CONFIRMATION,
     "ablation": ABLATIONS,
+    "p0-risk": P0_RISK_CHECKS,
     "candidate": CANDIDATES,
-    "all": CONFIRMATION + ABLATIONS + CANDIDATES,
+    "all": CONFIRMATION + ABLATIONS + P0_RISK_CHECKS + CANDIDATES,
 }
 
 
