@@ -54,6 +54,12 @@ def parse_args() -> argparse.Namespace:
         default="refine",
         help="rerank-only keeps predicted event boundaries; refine merges/expands fragmented predicted events.",
     )
+    parser.add_argument(
+        "--rerank-mode",
+        choices=["none", "source"],
+        default="source",
+        help="none keeps exported RCA scores; source applies conservative source-oriented reranking.",
+    )
     parser.add_argument("--merge-gap", type=int, default=30)
     parser.add_argument("--min-event-len", type=int, default=5)
     parser.add_argument("--expand-left", type=int, default=20)
@@ -229,6 +235,45 @@ def source_rerank_items(items: list[dict[str, Any]], args: argparse.Namespace) -
     return ranked[: max(1, args.top_k)]
 
 
+def exported_rank_items(items: list[dict[str, Any]], args: argparse.Namespace) -> list[dict[str, Any]]:
+    ranked = []
+    for item in items:
+        updated = copy.deepcopy(item)
+        updated["group"] = root_cause_group_name(str(updated.get("group") or updated.get("name")))
+        updated["score"] = as_float(updated.get("score"))
+        updated["hierarchical_score"] = as_float(updated.get("hierarchical_score", updated.get("score")))
+        ranked.append(updated)
+    ranked = sorted(ranked, key=lambda item: as_float(item.get("hierarchical_score", item.get("score"))), reverse=True)
+    group_scores: dict[str, float] = {}
+    for item in ranked:
+        group = str(item.get("group"))
+        group_scores[group] = max(group_scores.get(group, float("-inf")), as_float(item.get("score")))
+    group_rank = {
+        group: rank
+        for rank, (group, _) in enumerate(sorted(group_scores.items(), key=lambda kv: kv[1], reverse=True), start=1)
+    }
+    for rank, item in enumerate(ranked, start=1):
+        group = str(item.get("group"))
+        item["rank"] = rank
+        item["group_score"] = float(group_scores.get(group, 0.0))
+        item["group_rank"] = int(group_rank.get(group, 0))
+        item["source_rerank_applied"] = False
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in ranked:
+        grouped[str(item.get("group"))].append(item)
+    for group_items in grouped.values():
+        local = sorted(group_items, key=lambda item: as_float(item.get("score")), reverse=True)
+        for rank, item in enumerate(local, start=1):
+            item["within_group_rank"] = rank
+    return ranked[: max(1, args.top_k)]
+
+
+def rank_items(items: list[dict[str, Any]], args: argparse.Namespace) -> list[dict[str, Any]]:
+    if args.rerank_mode == "none":
+        return exported_rank_items(items, args)
+    return source_rerank_items(items, args)
+
+
 def group_ranking_from_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     scores: dict[str, float] = {}
     for item in items:
@@ -244,7 +289,7 @@ def build_refined_event(events: list[dict[str, Any]], event_id: int, args: argpa
     start = max(0, min(int(event.get("start", 0)) for event in events) - max(0, args.expand_left))
     end = max(int(event.get("end", 0)) for event in events) + max(0, args.expand_right)
     items = aggregate_channel_items(events, args)
-    ranked = source_rerank_items(items, args)
+    ranked = rank_items(items, args)
     refined = copy.deepcopy(events[0])
     refined.update(
         {
@@ -333,7 +378,7 @@ def rerank_predicted_events(events: list[dict[str, Any]], args: argparse.Namespa
     out = []
     for event_id, event in enumerate(events, start=1):
         updated = copy.deepcopy(event)
-        ranked = source_rerank_items(sorted_channel_items(updated), args)
+        ranked = rank_items(sorted_channel_items(updated), args)
         updated["event_id"] = int(updated.get("event_id", event_id))
         updated["channel_ranking"] = ranked
         updated["top_channels"] = ranked
@@ -348,7 +393,7 @@ def rerank_true_events(events: list[dict[str, Any]], args: argparse.Namespace) -
     out = []
     for event in events:
         updated = copy.deepcopy(event)
-        ranked = source_rerank_items(sorted_channel_items(updated), args)
+        ranked = rank_items(sorted_channel_items(updated), args)
         updated["channel_ranking"] = ranked
         updated["top_channels"] = ranked
         updated["group_ranking"] = group_ranking_from_items(ranked)
@@ -368,6 +413,7 @@ def main() -> None:
         "max_event_len": args.max_event_len,
         "max_merge_span": args.max_merge_span,
         "event_mode": args.event_mode,
+        "rerank_mode": args.rerank_mode,
         "top_k": args.top_k,
         "aggregation": args.aggregation,
     }
