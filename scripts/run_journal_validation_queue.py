@@ -326,6 +326,55 @@ ADAPTIVE_PROOF = [
     ),
 ]
 
+CONSERVATIVE_MECHANISM_PROOF = [
+    Experiment(
+        "proof_conservative_mechanism_swat_e8",
+        "SWAT_A1A2_Physical_v1.csv",
+        "source-bottleneck-conservative-mechanism-rca",
+        8,
+        "Proof run: source-first conservative mechanism RCA on SWaT.",
+        run_static_baselines=False,
+    ),
+    Experiment(
+        "proof_main_swat_e8",
+        "SWAT_A1A2_Physical_v1.csv",
+        MAIN_PROFILE,
+        8,
+        "Proof run: main specificity baseline on SWaT under the same worker/export protocol.",
+    ),
+    Experiment(
+        "proof_no_mechanism_swat_e8",
+        "SWAT_A1A2_Physical_v1.csv",
+        "source-bottleneck-no-mechanism-rca",
+        8,
+        "Proof run: remove mechanism modeling on SWaT.",
+        run_static_baselines=False,
+    ),
+    Experiment(
+        "proof_conservative_mechanism_wadi_e8",
+        "WADI_A1_2017_ds10.csv",
+        "source-bottleneck-conservative-mechanism-rca",
+        8,
+        "Proof run: source-first conservative mechanism RCA on WADI.",
+        run_static_baselines=False,
+    ),
+    Experiment(
+        "proof_main_wadi_e8",
+        "WADI_A1_2017_ds10.csv",
+        MAIN_PROFILE,
+        8,
+        "Proof run: main specificity baseline on WADI under the same worker/export protocol.",
+    ),
+    Experiment(
+        "proof_no_mechanism_wadi_e8",
+        "WADI_A1_2017_ds10.csv",
+        "source-bottleneck-no-mechanism-rca",
+        8,
+        "Proof run: remove mechanism modeling on WADI.",
+        run_static_baselines=False,
+    ),
+]
+
 
 SUITES = {
     "confirmation": CONFIRMATION,
@@ -333,6 +382,7 @@ SUITES = {
     "p0-risk": P0_RISK_CHECKS,
     "candidate": CANDIDATES,
     "adaptive-proof": ADAPTIVE_PROOF,
+    "conservative-mechanism-proof": CONSERVATIVE_MECHANISM_PROOF,
     "all": CONFIRMATION + ABLATIONS + P0_RISK_CHECKS + CANDIDATES,
 }
 

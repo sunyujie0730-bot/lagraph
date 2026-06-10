@@ -231,6 +231,7 @@ def main():
             "source-bottleneck-normalized-rca-checkpoint",
             "source-bottleneck-adaptive-mechanism-rca",
             "source-bottleneck-event-adaptive-mechanism-rca",
+            "source-bottleneck-conservative-mechanism-rca",
             "source-bottleneck-no-mechanism-rca",
             "source-bottleneck-no-source-gate-rca",
             "source-bottleneck-no-source-bottleneck-rca",
@@ -939,6 +940,30 @@ def main():
         choices=["source_onset", "source_gate", "onset", "base", "base_source_onset"],
         default=None,
         help="Support signal used to select mechanism evidence at event level.",
+    )
+    parser.add_argument(
+        "--rca-conservative-mechanism-weight",
+        type=float,
+        default=None,
+        help="Weight for mechanism evidence that is gated by source/onset support.",
+    )
+    parser.add_argument(
+        "--rca-conservative-mechanism-support-floor",
+        type=float,
+        default=None,
+        help="Minimum normalized source/onset support required before mechanism evidence can boost RCA.",
+    )
+    parser.add_argument(
+        "--rca-conservative-mechanism-candidate-topk",
+        type=int,
+        default=None,
+        help="Restrict conservative mechanism boosting to the top-K direct source candidates; 0 disables the mask.",
+    )
+    parser.add_argument(
+        "--rca-conservative-mechanism-support-mode",
+        choices=["source_onset", "source_gate", "onset", "source_score", "base", "base_source_onset"],
+        default=None,
+        help="Support signal used by conservative mechanism RCA.",
     )
     parser.add_argument(
         "--rca-event-head-ratio",
@@ -2767,6 +2792,15 @@ def main():
         rca_adaptive_mechanism_selection_floor=0.05,
         rca_adaptive_mechanism_selection_mode="source_onset",
     )
+    arch_profiles["source-bottleneck-conservative-mechanism-rca"] = dict(
+        arch_profiles["source-bottleneck-specificity-rca"],
+        rca_adaptive_mechanism_gate_weight=0.0,
+        rca_adaptive_mechanism_selection_weight=0.0,
+        rca_conservative_mechanism_weight=0.25,
+        rca_conservative_mechanism_support_floor=0.25,
+        rca_conservative_mechanism_candidate_topk=8,
+        rca_conservative_mechanism_support_mode="source_onset",
+    )
     arch_profiles["source-bottleneck-no-mechanism-rca"] = dict(
         arch_profiles["source-bottleneck-specificity-rca"],
         use_mechanism_predictive_head=False,
@@ -3161,6 +3195,23 @@ def main():
     if args.rca_adaptive_mechanism_selection_mode is not None:
         score_hyper_params["rca_adaptive_mechanism_selection_mode"] = (
             args.rca_adaptive_mechanism_selection_mode
+        )
+    if args.rca_conservative_mechanism_weight is not None:
+        score_hyper_params["rca_conservative_mechanism_weight"] = max(
+            0.0, float(args.rca_conservative_mechanism_weight)
+        )
+    if args.rca_conservative_mechanism_support_floor is not None:
+        score_hyper_params["rca_conservative_mechanism_support_floor"] = min(
+            max(float(args.rca_conservative_mechanism_support_floor), 0.0),
+            1.0,
+        )
+    if args.rca_conservative_mechanism_candidate_topk is not None:
+        score_hyper_params["rca_conservative_mechanism_candidate_topk"] = max(
+            0, int(args.rca_conservative_mechanism_candidate_topk)
+        )
+    if args.rca_conservative_mechanism_support_mode is not None:
+        score_hyper_params["rca_conservative_mechanism_support_mode"] = (
+            args.rca_conservative_mechanism_support_mode
         )
     if args.rca_event_head_ratio is not None:
         score_hyper_params["rca_event_head_ratio"] = min(max(float(args.rca_event_head_ratio), 1e-6), 1.0)

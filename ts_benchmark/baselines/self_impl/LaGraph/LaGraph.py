@@ -280,6 +280,10 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_adaptive_mechanism_selection_weight": 0.0,
     "rca_adaptive_mechanism_selection_floor": 0.05,
     "rca_adaptive_mechanism_selection_mode": "source_onset",
+    "rca_conservative_mechanism_weight": 0.0,
+    "rca_conservative_mechanism_support_floor": 0.20,
+    "rca_conservative_mechanism_candidate_topk": 0,
+    "rca_conservative_mechanism_support_mode": "source_onset",
     "rca_counterfactual_weight": 0.0,
     "rca_counterfactual_candidates": 12,
     "rca_counterfactual_max_windows": 32,
@@ -4873,6 +4877,10 @@ class LaGraph:
         adaptive_mechanism_selection_weight=0.0,
         adaptive_mechanism_selection_floor=0.05,
         adaptive_mechanism_selection_mode="source_onset",
+        conservative_mechanism_weight=0.0,
+        conservative_mechanism_support_floor=0.20,
+        conservative_mechanism_candidate_topk=0,
+        conservative_mechanism_support_mode="source_onset",
         counterfactual_weight=0.0,
         onset_weight=0.0,
         onset_baseline_window=200,
@@ -4993,6 +5001,7 @@ class LaGraph:
                 or source_interaction_weight > 0.0
                 or adaptive_mechanism_gate_weight > 0.0
                 or adaptive_mechanism_selection_weight > 0.0
+                or conservative_mechanism_weight > 0.0
             )
             if mechanism_residual_window > 0 and needs_mechanism_residual and event_anchor_start > 0:
                 baseline_start = max(0, event_anchor_start - mechanism_residual_window)
@@ -5008,6 +5017,8 @@ class LaGraph:
             event_adaptive_mechanism_scores = np.zeros_like(event_raw_scores)
             event_adaptive_mechanism_selection_gate_scores = np.zeros_like(event_raw_scores)
             event_adaptive_mechanism_selection_scores = np.zeros_like(event_raw_scores)
+            event_conservative_mechanism_gate_scores = np.zeros_like(event_raw_scores)
+            event_conservative_mechanism_scores = np.zeros_like(event_raw_scores)
             if event_component_normalize:
                 base_norm = self._normalize_event_component(event_base_scores)
                 graph_norm = self._normalize_event_component(event_graph_scores)
@@ -5118,6 +5129,52 @@ class LaGraph:
                     source_norm = (
                         (1.0 - selection_weight) * source_norm
                         + selection_weight * event_adaptive_mechanism_selection_scores
+                    )
+                if conservative_mechanism_weight > 0.0:
+                    mode = str(conservative_mechanism_support_mode or "source_onset").lower()
+                    if mode == "source_gate":
+                        conservative_support_norm = source_gate_norm
+                    elif mode == "onset":
+                        conservative_support_norm = onset_norm
+                    elif mode == "source_score":
+                        conservative_support_norm = source_score_norm
+                    elif mode == "base":
+                        conservative_support_norm = base_norm
+                    elif mode == "base_source_onset":
+                        conservative_support_norm = np.maximum.reduce(
+                            [base_norm, source_score_norm, source_gate_norm, onset_norm]
+                        )
+                    else:
+                        conservative_support_norm = np.maximum.reduce(
+                            [source_score_norm, source_gate_norm, onset_norm]
+                        )
+                    floor = min(
+                        max(float(conservative_mechanism_support_floor or 0.0), 0.0),
+                        1.0,
+                    )
+                    if floor >= 1.0:
+                        support_gate = np.zeros_like(conservative_support_norm)
+                    else:
+                        support_gate = np.clip(
+                            (conservative_support_norm - floor) / max(1.0 - floor, 1e-12),
+                            0.0,
+                            1.0,
+                        )
+                    candidate_topk = max(0, int(conservative_mechanism_candidate_topk or 0))
+                    if candidate_topk > 0 and direct_source_norm.size > candidate_topk:
+                        candidate_order = np.argsort(-direct_source_norm)[:candidate_topk]
+                        candidate_mask = np.zeros_like(support_gate)
+                        candidate_mask[candidate_order] = 1.0
+                        support_gate = support_gate * candidate_mask
+                    event_conservative_mechanism_gate_scores = support_gate
+                    event_conservative_mechanism_scores = (
+                        mechanism_source_evidence_norm
+                        * support_gate
+                        * np.maximum(source_score_norm, base_norm)
+                    )
+                    source_norm = (
+                        source_norm
+                        + conservative_mechanism_weight * event_conservative_mechanism_scores
                     )
                 if use_source_propagation:
                     event_scores = source_weight * source_norm + propagation_weight * graph_norm
@@ -5283,6 +5340,10 @@ class LaGraph:
                     "adaptive_mechanism_selection_score": float(
                         event_adaptive_mechanism_selection_scores[idx]
                     ),
+                    "conservative_mechanism_gate_score": float(
+                        event_conservative_mechanism_gate_scores[idx]
+                    ),
+                    "conservative_mechanism_score": float(event_conservative_mechanism_scores[idx]),
                     "synthetic_rca_score": float(event_synthetic_scores[idx]),
                     "counterfactual_score": float(event_counterfactual_scores[idx]),
                     "onset_score": float(event_onset_scores[idx]),
@@ -5581,6 +5642,19 @@ class LaGraph:
             getattr(self.config, "rca_adaptive_mechanism_selection_mode", "source_onset")
             or "source_onset"
         )
+        conservative_mechanism_weight = _cfg_float("rca_conservative_mechanism_weight", 0.0)
+        conservative_mechanism_support_floor = _cfg_float(
+            "rca_conservative_mechanism_support_floor",
+            0.20,
+        )
+        conservative_mechanism_candidate_topk = _cfg_int(
+            "rca_conservative_mechanism_candidate_topk",
+            0,
+        )
+        conservative_mechanism_support_mode = str(
+            getattr(self.config, "rca_conservative_mechanism_support_mode", "source_onset")
+            or "source_onset"
+        )
         counterfactual_weight = _cfg_float("rca_counterfactual_weight", 0.0)
         contrast_window = _cfg_int("rca_contrast_window", 0)
         contrast_weight = _cfg_float("rca_contrast_weight", 0.0)
@@ -5734,6 +5808,10 @@ class LaGraph:
             adaptive_mechanism_selection_weight=adaptive_mechanism_selection_weight,
             adaptive_mechanism_selection_floor=adaptive_mechanism_selection_floor,
             adaptive_mechanism_selection_mode=adaptive_mechanism_selection_mode,
+            conservative_mechanism_weight=conservative_mechanism_weight,
+            conservative_mechanism_support_floor=conservative_mechanism_support_floor,
+            conservative_mechanism_candidate_topk=conservative_mechanism_candidate_topk,
+            conservative_mechanism_support_mode=conservative_mechanism_support_mode,
             counterfactual_weight=counterfactual_weight,
             onset_weight=onset_weight,
             onset_baseline_window=onset_baseline_window,
@@ -5809,6 +5887,10 @@ class LaGraph:
                     adaptive_mechanism_selection_weight=adaptive_mechanism_selection_weight,
                     adaptive_mechanism_selection_floor=adaptive_mechanism_selection_floor,
                     adaptive_mechanism_selection_mode=adaptive_mechanism_selection_mode,
+                    conservative_mechanism_weight=conservative_mechanism_weight,
+                    conservative_mechanism_support_floor=conservative_mechanism_support_floor,
+                    conservative_mechanism_candidate_topk=conservative_mechanism_candidate_topk,
+                    conservative_mechanism_support_mode=conservative_mechanism_support_mode,
                     counterfactual_weight=counterfactual_weight,
                     onset_weight=onset_weight,
                     onset_baseline_window=onset_baseline_window,
@@ -5877,6 +5959,10 @@ class LaGraph:
                     adaptive_mechanism_selection_weight=adaptive_mechanism_selection_weight,
                     adaptive_mechanism_selection_floor=adaptive_mechanism_selection_floor,
                     adaptive_mechanism_selection_mode=adaptive_mechanism_selection_mode,
+                    conservative_mechanism_weight=conservative_mechanism_weight,
+                    conservative_mechanism_support_floor=conservative_mechanism_support_floor,
+                    conservative_mechanism_candidate_topk=conservative_mechanism_candidate_topk,
+                    conservative_mechanism_support_mode=conservative_mechanism_support_mode,
                     counterfactual_weight=counterfactual_weight,
                     onset_weight=onset_weight,
                     onset_baseline_window=onset_baseline_window,
@@ -5943,6 +6029,10 @@ class LaGraph:
                 adaptive_mechanism_selection_weight=adaptive_mechanism_selection_weight,
                 adaptive_mechanism_selection_floor=adaptive_mechanism_selection_floor,
                 adaptive_mechanism_selection_mode=adaptive_mechanism_selection_mode,
+                conservative_mechanism_weight=conservative_mechanism_weight,
+                conservative_mechanism_support_floor=conservative_mechanism_support_floor,
+                conservative_mechanism_candidate_topk=conservative_mechanism_candidate_topk,
+                conservative_mechanism_support_mode=conservative_mechanism_support_mode,
                 counterfactual_weight=counterfactual_weight,
                 onset_weight=onset_weight,
                 onset_baseline_window=onset_baseline_window,
@@ -6016,6 +6106,10 @@ class LaGraph:
                 adaptive_mechanism_selection_weight=adaptive_mechanism_selection_weight,
                 adaptive_mechanism_selection_floor=adaptive_mechanism_selection_floor,
                 adaptive_mechanism_selection_mode=adaptive_mechanism_selection_mode,
+                conservative_mechanism_weight=conservative_mechanism_weight,
+                conservative_mechanism_support_floor=conservative_mechanism_support_floor,
+                conservative_mechanism_candidate_topk=conservative_mechanism_candidate_topk,
+                conservative_mechanism_support_mode=conservative_mechanism_support_mode,
                 counterfactual_weight=counterfactual_weight,
                 onset_weight=onset_weight,
                 onset_baseline_window=onset_baseline_window,
@@ -6086,6 +6180,10 @@ class LaGraph:
             "rca_adaptive_mechanism_selection_weight": adaptive_mechanism_selection_weight,
             "rca_adaptive_mechanism_selection_floor": adaptive_mechanism_selection_floor,
             "rca_adaptive_mechanism_selection_mode": adaptive_mechanism_selection_mode,
+            "rca_conservative_mechanism_weight": conservative_mechanism_weight,
+            "rca_conservative_mechanism_support_floor": conservative_mechanism_support_floor,
+            "rca_conservative_mechanism_candidate_topk": conservative_mechanism_candidate_topk,
+            "rca_conservative_mechanism_support_mode": conservative_mechanism_support_mode,
             "rca_counterfactual_weight": counterfactual_weight,
             "rca_counterfactual_candidates": _cfg_int("rca_counterfactual_candidates", 12),
             "rca_counterfactual_max_windows": _cfg_int("rca_counterfactual_max_windows", 32),
