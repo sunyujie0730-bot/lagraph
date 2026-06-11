@@ -232,6 +232,10 @@ def main():
             "source-bottleneck-adaptive-mechanism-rca",
             "source-bottleneck-event-adaptive-mechanism-rca",
             "source-bottleneck-conservative-mechanism-rca",
+            "source-bottleneck-source-gated-mechanism-rca",
+            "source-bottleneck-mechanism-train-only-rca",
+            "source-bottleneck-no-mechanism-decoder-rca",
+            "source-bottleneck-no-channel-masked-rca",
             "source-bottleneck-no-mechanism-rca",
             "source-bottleneck-no-source-gate-rca",
             "source-bottleneck-no-source-bottleneck-rca",
@@ -964,6 +968,30 @@ def main():
         choices=["source_onset", "source_gate", "onset", "source_score", "base", "base_source_onset"],
         default=None,
         help="Support signal used by conservative mechanism RCA.",
+    )
+    parser.add_argument(
+        "--rca-source-gated-mechanism-weight",
+        type=float,
+        default=None,
+        help="Weight for strict source-gated mechanism evidence in exported RCA rankings.",
+    )
+    parser.add_argument(
+        "--rca-source-gated-mechanism-support-floor",
+        type=float,
+        default=None,
+        help="Minimum normalized source support required before strict mechanism evidence can boost RCA.",
+    )
+    parser.add_argument(
+        "--rca-source-gated-mechanism-candidate-topk",
+        type=int,
+        default=None,
+        help="Restrict strict source-gated mechanism boosting to the top-K direct source candidates; 0 disables the mask.",
+    )
+    parser.add_argument(
+        "--rca-source-gated-mechanism-support-mode",
+        choices=["source_onset", "source_gate", "onset", "source_score", "base", "base_source_onset"],
+        default=None,
+        help="Support signal used by strict source-gated mechanism RCA.",
     )
     parser.add_argument(
         "--rca-event-head-ratio",
@@ -2801,6 +2829,36 @@ def main():
         rca_conservative_mechanism_candidate_topk=8,
         rca_conservative_mechanism_support_mode="source_onset",
     )
+    arch_profiles["source-bottleneck-source-gated-mechanism-rca"] = dict(
+        arch_profiles["source-bottleneck-specificity-rca"],
+        rca_adaptive_mechanism_gate_weight=0.0,
+        rca_adaptive_mechanism_selection_weight=0.0,
+        rca_conservative_mechanism_weight=0.0,
+        rca_source_gated_mechanism_weight=0.25,
+        rca_source_gated_mechanism_support_floor=0.20,
+        rca_source_gated_mechanism_candidate_topk=8,
+        rca_source_gated_mechanism_support_mode="source_onset",
+    )
+    arch_profiles["source-bottleneck-mechanism-train-only-rca"] = dict(
+        arch_profiles["source-bottleneck-specificity-rca"],
+        rca_source_mechanism_weight=0.0,
+        rca_mechanism_guided_source_weight=0.0,
+        rca_mechanism_residual_weight=0.0,
+        rca_adaptive_mechanism_gate_weight=0.0,
+        rca_adaptive_mechanism_selection_weight=0.0,
+        rca_conservative_mechanism_weight=0.0,
+        rca_source_gated_mechanism_weight=0.0,
+    )
+    arch_profiles["source-bottleneck-no-mechanism-decoder-rca"] = dict(
+        arch_profiles["source-bottleneck-specificity-rca"],
+        use_mechanism_coupled_decoder=False,
+        lambda_channel_mechanism=0.0,
+    )
+    arch_profiles["source-bottleneck-no-channel-masked-rca"] = dict(
+        arch_profiles["source-bottleneck-specificity-rca"],
+        use_channel_masked_modeling=False,
+        lambda_channel_masked=0.0,
+    )
     arch_profiles["source-bottleneck-no-mechanism-rca"] = dict(
         arch_profiles["source-bottleneck-specificity-rca"],
         use_mechanism_predictive_head=False,
@@ -3212,6 +3270,23 @@ def main():
     if args.rca_conservative_mechanism_support_mode is not None:
         score_hyper_params["rca_conservative_mechanism_support_mode"] = (
             args.rca_conservative_mechanism_support_mode
+        )
+    if args.rca_source_gated_mechanism_weight is not None:
+        score_hyper_params["rca_source_gated_mechanism_weight"] = max(
+            0.0, float(args.rca_source_gated_mechanism_weight)
+        )
+    if args.rca_source_gated_mechanism_support_floor is not None:
+        score_hyper_params["rca_source_gated_mechanism_support_floor"] = min(
+            max(float(args.rca_source_gated_mechanism_support_floor), 0.0),
+            1.0,
+        )
+    if args.rca_source_gated_mechanism_candidate_topk is not None:
+        score_hyper_params["rca_source_gated_mechanism_candidate_topk"] = max(
+            0, int(args.rca_source_gated_mechanism_candidate_topk)
+        )
+    if args.rca_source_gated_mechanism_support_mode is not None:
+        score_hyper_params["rca_source_gated_mechanism_support_mode"] = (
+            args.rca_source_gated_mechanism_support_mode
         )
     if args.rca_event_head_ratio is not None:
         score_hyper_params["rca_event_head_ratio"] = min(max(float(args.rca_event_head_ratio), 1e-6), 1.0)

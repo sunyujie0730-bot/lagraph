@@ -284,6 +284,10 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_conservative_mechanism_support_floor": 0.20,
     "rca_conservative_mechanism_candidate_topk": 0,
     "rca_conservative_mechanism_support_mode": "source_onset",
+    "rca_source_gated_mechanism_weight": 0.0,
+    "rca_source_gated_mechanism_support_floor": 0.20,
+    "rca_source_gated_mechanism_candidate_topk": 0,
+    "rca_source_gated_mechanism_support_mode": "source_onset",
     "rca_counterfactual_weight": 0.0,
     "rca_counterfactual_candidates": 12,
     "rca_counterfactual_max_windows": 32,
@@ -4881,6 +4885,10 @@ class LaGraph:
         conservative_mechanism_support_floor=0.20,
         conservative_mechanism_candidate_topk=0,
         conservative_mechanism_support_mode="source_onset",
+        source_gated_mechanism_weight=0.0,
+        source_gated_mechanism_support_floor=0.20,
+        source_gated_mechanism_candidate_topk=0,
+        source_gated_mechanism_support_mode="source_onset",
         counterfactual_weight=0.0,
         onset_weight=0.0,
         onset_baseline_window=200,
@@ -5002,6 +5010,7 @@ class LaGraph:
                 or adaptive_mechanism_gate_weight > 0.0
                 or adaptive_mechanism_selection_weight > 0.0
                 or conservative_mechanism_weight > 0.0
+                or source_gated_mechanism_weight > 0.0
             )
             if mechanism_residual_window > 0 and needs_mechanism_residual and event_anchor_start > 0:
                 baseline_start = max(0, event_anchor_start - mechanism_residual_window)
@@ -5019,6 +5028,8 @@ class LaGraph:
             event_adaptive_mechanism_selection_scores = np.zeros_like(event_raw_scores)
             event_conservative_mechanism_gate_scores = np.zeros_like(event_raw_scores)
             event_conservative_mechanism_scores = np.zeros_like(event_raw_scores)
+            event_source_gated_mechanism_gate_scores = np.zeros_like(event_raw_scores)
+            event_source_gated_mechanism_scores = np.zeros_like(event_raw_scores)
             if event_component_normalize:
                 base_norm = self._normalize_event_component(event_base_scores)
                 graph_norm = self._normalize_event_component(event_graph_scores)
@@ -5175,6 +5186,56 @@ class LaGraph:
                     source_norm = (
                         source_norm
                         + conservative_mechanism_weight * event_conservative_mechanism_scores
+                    )
+                if source_gated_mechanism_weight > 0.0:
+                    mode = str(source_gated_mechanism_support_mode or "source_onset").lower()
+                    if mode == "source_gate":
+                        gated_support_norm = source_gate_norm
+                    elif mode == "onset":
+                        gated_support_norm = onset_norm
+                    elif mode == "source_score":
+                        gated_support_norm = source_score_norm
+                    elif mode == "base":
+                        gated_support_norm = base_norm
+                    elif mode == "base_source_onset":
+                        gated_support_norm = np.sqrt(
+                            np.maximum(
+                                base_norm
+                                * np.maximum.reduce([source_score_norm, source_gate_norm, onset_norm]),
+                                0.0,
+                            )
+                        )
+                    else:
+                        gated_support_norm = np.sqrt(
+                            np.maximum(source_score_norm * np.maximum(source_gate_norm, onset_norm), 0.0)
+                        )
+                    floor = min(
+                        max(float(source_gated_mechanism_support_floor or 0.0), 0.0),
+                        1.0,
+                    )
+                    if floor >= 1.0:
+                        gated_support = np.zeros_like(gated_support_norm)
+                    else:
+                        gated_support = np.clip(
+                            (gated_support_norm - floor) / max(1.0 - floor, 1e-12),
+                            0.0,
+                            1.0,
+                        )
+                    candidate_topk = max(0, int(source_gated_mechanism_candidate_topk or 0))
+                    direct_source_norm = np.asarray(direct_source_norm, dtype=np.float64)
+                    if candidate_topk > 0 and direct_source_norm.size > candidate_topk:
+                        candidate_order = np.argsort(-direct_source_norm)[:candidate_topk]
+                        candidate_mask = np.zeros_like(gated_support)
+                        candidate_mask[candidate_order] = 1.0
+                        gated_support = gated_support * candidate_mask
+                    event_source_gated_mechanism_gate_scores = gated_support
+                    source_anchor_norm = np.maximum.reduce([base_norm, source_score_norm, source_gate_norm])
+                    event_source_gated_mechanism_scores = (
+                        mechanism_source_evidence_norm * gated_support * source_anchor_norm
+                    )
+                    source_norm = (
+                        source_norm
+                        + source_gated_mechanism_weight * event_source_gated_mechanism_scores
                     )
                 if use_source_propagation:
                     event_scores = source_weight * source_norm + propagation_weight * graph_norm
@@ -5344,6 +5405,12 @@ class LaGraph:
                         event_conservative_mechanism_gate_scores[idx]
                     ),
                     "conservative_mechanism_score": float(event_conservative_mechanism_scores[idx]),
+                    "source_gated_mechanism_gate_score": float(
+                        event_source_gated_mechanism_gate_scores[idx]
+                    ),
+                    "source_gated_mechanism_score": float(
+                        event_source_gated_mechanism_scores[idx]
+                    ),
                     "synthetic_rca_score": float(event_synthetic_scores[idx]),
                     "counterfactual_score": float(event_counterfactual_scores[idx]),
                     "onset_score": float(event_onset_scores[idx]),
@@ -5655,6 +5722,19 @@ class LaGraph:
             getattr(self.config, "rca_conservative_mechanism_support_mode", "source_onset")
             or "source_onset"
         )
+        source_gated_mechanism_weight = _cfg_float("rca_source_gated_mechanism_weight", 0.0)
+        source_gated_mechanism_support_floor = _cfg_float(
+            "rca_source_gated_mechanism_support_floor",
+            0.20,
+        )
+        source_gated_mechanism_candidate_topk = _cfg_int(
+            "rca_source_gated_mechanism_candidate_topk",
+            0,
+        )
+        source_gated_mechanism_support_mode = str(
+            getattr(self.config, "rca_source_gated_mechanism_support_mode", "source_onset")
+            or "source_onset"
+        )
         counterfactual_weight = _cfg_float("rca_counterfactual_weight", 0.0)
         contrast_window = _cfg_int("rca_contrast_window", 0)
         contrast_weight = _cfg_float("rca_contrast_weight", 0.0)
@@ -5812,6 +5892,10 @@ class LaGraph:
             conservative_mechanism_support_floor=conservative_mechanism_support_floor,
             conservative_mechanism_candidate_topk=conservative_mechanism_candidate_topk,
             conservative_mechanism_support_mode=conservative_mechanism_support_mode,
+            source_gated_mechanism_weight=source_gated_mechanism_weight,
+            source_gated_mechanism_support_floor=source_gated_mechanism_support_floor,
+            source_gated_mechanism_candidate_topk=source_gated_mechanism_candidate_topk,
+            source_gated_mechanism_support_mode=source_gated_mechanism_support_mode,
             counterfactual_weight=counterfactual_weight,
             onset_weight=onset_weight,
             onset_baseline_window=onset_baseline_window,
@@ -5891,6 +5975,10 @@ class LaGraph:
                     conservative_mechanism_support_floor=conservative_mechanism_support_floor,
                     conservative_mechanism_candidate_topk=conservative_mechanism_candidate_topk,
                     conservative_mechanism_support_mode=conservative_mechanism_support_mode,
+                    source_gated_mechanism_weight=source_gated_mechanism_weight,
+                    source_gated_mechanism_support_floor=source_gated_mechanism_support_floor,
+                    source_gated_mechanism_candidate_topk=source_gated_mechanism_candidate_topk,
+                    source_gated_mechanism_support_mode=source_gated_mechanism_support_mode,
                     counterfactual_weight=counterfactual_weight,
                     onset_weight=onset_weight,
                     onset_baseline_window=onset_baseline_window,
@@ -5963,6 +6051,10 @@ class LaGraph:
                     conservative_mechanism_support_floor=conservative_mechanism_support_floor,
                     conservative_mechanism_candidate_topk=conservative_mechanism_candidate_topk,
                     conservative_mechanism_support_mode=conservative_mechanism_support_mode,
+                    source_gated_mechanism_weight=source_gated_mechanism_weight,
+                    source_gated_mechanism_support_floor=source_gated_mechanism_support_floor,
+                    source_gated_mechanism_candidate_topk=source_gated_mechanism_candidate_topk,
+                    source_gated_mechanism_support_mode=source_gated_mechanism_support_mode,
                     counterfactual_weight=counterfactual_weight,
                     onset_weight=onset_weight,
                     onset_baseline_window=onset_baseline_window,
@@ -6033,6 +6125,10 @@ class LaGraph:
                 conservative_mechanism_support_floor=conservative_mechanism_support_floor,
                 conservative_mechanism_candidate_topk=conservative_mechanism_candidate_topk,
                 conservative_mechanism_support_mode=conservative_mechanism_support_mode,
+                source_gated_mechanism_weight=source_gated_mechanism_weight,
+                source_gated_mechanism_support_floor=source_gated_mechanism_support_floor,
+                source_gated_mechanism_candidate_topk=source_gated_mechanism_candidate_topk,
+                source_gated_mechanism_support_mode=source_gated_mechanism_support_mode,
                 counterfactual_weight=counterfactual_weight,
                 onset_weight=onset_weight,
                 onset_baseline_window=onset_baseline_window,
@@ -6110,6 +6206,10 @@ class LaGraph:
                 conservative_mechanism_support_floor=conservative_mechanism_support_floor,
                 conservative_mechanism_candidate_topk=conservative_mechanism_candidate_topk,
                 conservative_mechanism_support_mode=conservative_mechanism_support_mode,
+                source_gated_mechanism_weight=source_gated_mechanism_weight,
+                source_gated_mechanism_support_floor=source_gated_mechanism_support_floor,
+                source_gated_mechanism_candidate_topk=source_gated_mechanism_candidate_topk,
+                source_gated_mechanism_support_mode=source_gated_mechanism_support_mode,
                 counterfactual_weight=counterfactual_weight,
                 onset_weight=onset_weight,
                 onset_baseline_window=onset_baseline_window,
@@ -6184,6 +6284,10 @@ class LaGraph:
             "rca_conservative_mechanism_support_floor": conservative_mechanism_support_floor,
             "rca_conservative_mechanism_candidate_topk": conservative_mechanism_candidate_topk,
             "rca_conservative_mechanism_support_mode": conservative_mechanism_support_mode,
+            "rca_source_gated_mechanism_weight": source_gated_mechanism_weight,
+            "rca_source_gated_mechanism_support_floor": source_gated_mechanism_support_floor,
+            "rca_source_gated_mechanism_candidate_topk": source_gated_mechanism_candidate_topk,
+            "rca_source_gated_mechanism_support_mode": source_gated_mechanism_support_mode,
             "rca_counterfactual_weight": counterfactual_weight,
             "rca_counterfactual_candidates": _cfg_int("rca_counterfactual_candidates", 12),
             "rca_counterfactual_max_windows": _cfg_int("rca_counterfactual_max_windows", 32),
