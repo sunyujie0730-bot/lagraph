@@ -83,6 +83,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--auto-min-pairs", type=int, default=10)
     parser.add_argument("--aggregation", choices=["max", "mean"], default="max")
     parser.add_argument(
+        "--cluster-rank-source",
+        choices=["aggregate", "earliest", "strongest"],
+        default="aggregate",
+        help=(
+            "Evidence used to rank variables after merging events. aggregate combines all merged fragments; "
+            "earliest uses the first fragment to preserve onset/source evidence; strongest uses the fragment "
+            "with the largest exported channel score."
+        ),
+    )
+    parser.add_argument(
         "--exported-weight",
         type=float,
         default=1.00,
@@ -355,10 +365,27 @@ def group_ranking_from_items(items: list[dict[str, Any]]) -> list[dict[str, Any]
     ]
 
 
+def select_events_for_ranking(events: list[dict[str, Any]], args: argparse.Namespace) -> list[dict[str, Any]]:
+    if args.cluster_rank_source == "aggregate" or len(events) <= 1:
+        return events
+    ordered = sorted(events, key=lambda event: (int(event.get("start", 0)), int(event.get("end", 0))))
+    if args.cluster_rank_source == "earliest":
+        return [ordered[0]]
+
+    def event_strength(event: dict[str, Any]) -> float:
+        items = sorted_channel_items(event)
+        if not items:
+            return float("-inf")
+        return max(as_float(item.get("score")) for item in items)
+
+    return [max(ordered, key=event_strength)]
+
+
 def build_refined_event(events: list[dict[str, Any]], event_id: int, args: argparse.Namespace) -> dict[str, Any]:
     start = max(0, min(int(event.get("start", 0)) for event in events) - max(0, args.expand_left))
     end = max(int(event.get("end", 0)) for event in events) + max(0, args.expand_right)
-    items = aggregate_channel_items(events, args)
+    rank_events = select_events_for_ranking(events, args)
+    items = aggregate_channel_items(rank_events, args)
     ranked = rank_items(items, args)
     refined = copy.deepcopy(events[0])
     refined.update(
@@ -373,6 +400,8 @@ def build_refined_event(events: list[dict[str, Any]], event_id: int, args: argpa
             "refined_event": True,
             "merged_event_count": len(events),
             "merged_event_ids": [event.get("event_id") for event in events],
+            "cluster_rank_source": args.cluster_rank_source,
+            "rank_event_ids": [event.get("event_id") for event in rank_events],
             "channel_ranking": ranked,
             "top_channels": ranked,
             "group_ranking": group_ranking_from_items(ranked),
@@ -492,6 +521,7 @@ def main() -> None:
         "auto_min_pairs": args.auto_min_pairs,
         "top_k": args.top_k,
         "aggregation": args.aggregation,
+        "cluster_rank_source": args.cluster_rank_source,
     }
     report["source_rerank_params"] = {
         "base_weight": args.base_weight,

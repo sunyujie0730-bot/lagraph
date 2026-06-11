@@ -235,6 +235,7 @@ def main():
             "source-bottleneck-source-gated-mechanism-rca",
             "source-bottleneck-mechanism-train-only-rca",
             "source-bottleneck-no-mechanism-decoder-rca",
+            "source-bottleneck-event-stable-rca",
             "source-bottleneck-no-channel-masked-rca",
             "source-bottleneck-no-mechanism-rca",
             "source-bottleneck-no-source-gate-rca",
@@ -2854,6 +2855,15 @@ def main():
         arch_profiles["source-bottleneck-specificity-rca"],
         use_mechanism_coupled_decoder=False,
         lambda_channel_mechanism=0.0,
+    )
+    arch_profiles["source-bottleneck-event-stable-rca"] = dict(
+        arch_profiles["source-bottleneck-no-mechanism-decoder-rca"],
+        score_smoothing_window=3,
+        score_smoothing_method="mean",
+        prediction_fill_gap=2,
+        prediction_min_len=1,
+        prediction_dilate=1,
+        rca_hierarchical_group_aggregation="mean",
     )
     arch_profiles["source-bottleneck-no-channel-masked-rca"] = dict(
         arch_profiles["source-bottleneck-specificity-rca"],
