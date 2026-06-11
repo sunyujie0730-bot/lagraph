@@ -243,6 +243,7 @@ def main():
             "source-bottleneck-corefine-rca",
             "source-aware-dual-corefine-rca",
             "source-preserving-mechanism-fusion-rca",
+            "lagged-directional-mechanism-rca",
             "source-bottleneck-trained-specificity-rca",
             "source-bottleneck-gate-specificity-rca",
             "source-bottleneck-head-specificity-rca",
@@ -2932,6 +2933,18 @@ def main():
         use_source_preserving_decoder=True,
         source_preserving_init=0.65,
         source_preserving_detach_gate=True,
+    )
+    arch_profiles["lagged-directional-mechanism-rca"] = dict(
+        arch_profiles["source-bottleneck-specificity-rca"],
+        use_lagged_causal_graph=True,
+        causal_lags=[1, 3, 6, 12],
+        causal_topk=5,
+        causal_detach_backbone=False,
+        lambda_causal_mechanism=0.01,
+        lambda_causal_sparse=0.001,
+        use_causal_score=True,
+        causal_score_weight=0.05,
+        rca_causal_weight=0.15,
     )
     arch_profiles["source-bottleneck-trained-specificity-rca"] = dict(
         arch_profiles["source-bottleneck-specificity-rca"],
