@@ -58,6 +58,12 @@ EXPERIMENTS = [
         profile="source-bottleneck-gate-specificity-rca",
         purpose="Sharpen synthetic source-effect gate supervision.",
     ),
+    Experiment(
+        exp_id="swat_effective_specificity_e8",
+        dataset="SWAT_A1A2_Physical_v1.csv",
+        profile="source-bottleneck-effective-specificity-rca",
+        purpose="Use diagnosis-calibrated source specificity strength and a shorter source-effect interval.",
+    ),
 ]
 
 

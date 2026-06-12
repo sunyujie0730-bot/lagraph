@@ -244,9 +244,12 @@ def main():
             "source-bottleneck-corefine-rca",
             "source-aware-dual-corefine-rca",
             "source-preserving-mechanism-fusion-rca",
+            "source-preserving-ultralight-rca",
+            "source-preserving-light-rca",
             "lagged-directional-mechanism-rca",
             "source-bottleneck-trained-specificity-rca",
             "source-bottleneck-gate-specificity-rca",
+            "source-bottleneck-effective-specificity-rca",
             "source-bottleneck-head-specificity-rca",
             "interventional-fused-source-rca",
             "interventional-consensus-source-rca",
@@ -736,6 +739,29 @@ def main():
         "--enable-visualization-hooks",
         action="store_true",
         help="Enable diagnostic visualization hooks and vis_data.json export. Disabled by default for fast experiments.",
+    )
+    parser.add_argument(
+        "--debug-loss-breakdown",
+        action="store_true",
+        help="Record per-epoch training loss component summaries for diagnosis.",
+    )
+    parser.add_argument(
+        "--debug-loss-log-path",
+        type=str,
+        default=None,
+        help="JSONL path for --debug-loss-breakdown summaries.",
+    )
+    parser.add_argument(
+        "--debug-loss-max-batches",
+        type=int,
+        default=None,
+        help="Maximum batches per epoch included in loss breakdown; 0 means all batches.",
+    )
+    parser.add_argument(
+        "--debug-train-max-batches",
+        type=int,
+        default=None,
+        help="Diagnostic-only cap on training batches per epoch; 0 means full training.",
     )
     parser.add_argument(
         "--rca-graph-weight",
@@ -2944,6 +2970,18 @@ def main():
         source_preserving_init=0.65,
         source_preserving_detach_gate=True,
     )
+    arch_profiles["source-preserving-ultralight-rca"] = dict(
+        arch_profiles["source-bottleneck-specificity-rca"],
+        use_source_preserving_decoder=True,
+        source_preserving_init=0.20,
+        source_preserving_detach_gate=True,
+    )
+    arch_profiles["source-preserving-light-rca"] = dict(
+        arch_profiles["source-bottleneck-specificity-rca"],
+        use_source_preserving_decoder=True,
+        source_preserving_init=0.35,
+        source_preserving_detach_gate=True,
+    )
     arch_profiles["lagged-directional-mechanism-rca"] = dict(
         arch_profiles["source-bottleneck-specificity-rca"],
         use_lagged_causal_graph=True,
@@ -2964,6 +3002,12 @@ def main():
         arch_profiles["source-bottleneck-specificity-rca"],
         source_effect_specificity_weight=2.0,
         source_bottleneck_specificity_weight=0.0,
+    )
+    arch_profiles["source-bottleneck-effective-specificity-rca"] = dict(
+        arch_profiles["source-bottleneck-specificity-rca"],
+        source_effect_specificity_weight=100.0,
+        source_bottleneck_specificity_weight=0.0,
+        source_effect_interval=4,
     )
     arch_profiles["source-bottleneck-head-specificity-rca"] = dict(
         arch_profiles["source-bottleneck-specificity-rca"],
@@ -3375,6 +3419,16 @@ def main():
         )
     if args.enable_visualization_hooks:
         score_hyper_params["enable_visualization_hooks"] = True
+    if args.debug_loss_breakdown:
+        score_hyper_params["debug_loss_breakdown"] = True
+    if args.debug_loss_log_path is not None:
+        score_hyper_params["debug_loss_log_path"] = args.debug_loss_log_path
+        score_hyper_params["debug_loss_breakdown"] = True
+    if args.debug_loss_max_batches is not None:
+        score_hyper_params["debug_loss_max_batches"] = max(0, int(args.debug_loss_max_batches))
+        score_hyper_params["debug_loss_breakdown"] = True
+    if args.debug_train_max_batches is not None:
+        score_hyper_params["debug_train_max_batches"] = max(0, int(args.debug_train_max_batches))
     if args.robust_input_preprocess:
         score_hyper_params["use_robust_input_preprocess"] = True
     if args.input_clip_lower_quantile is not None:

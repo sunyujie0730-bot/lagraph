@@ -58,6 +58,10 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "batch_size": 256,
     "eval_batch_size": 64,
     "enable_visualization_hooks": False,
+    "debug_loss_breakdown": False,
+    "debug_loss_log_path": "",
+    "debug_loss_max_batches": 0,
+    "debug_train_max_batches": 0,
     "patience": 15,
     "checkpoint_policy": "best_val_loss",
     "use_latest_checkpoint": False,
@@ -1998,6 +2002,70 @@ class LaGraph:
         loss = -(pos_weight * target * torch.log(probs) + (1.0 - target) * torch.log(1.0 - probs))
         return loss.mean()
 
+    def _loss_debug_enabled(self):
+        return bool(getattr(self.config, "debug_loss_breakdown", False))
+
+    def _loss_debug_batch_allowed(self):
+        if not self._loss_debug_enabled():
+            return False
+        max_batches = int(getattr(self.config, "debug_loss_max_batches", 0) or 0)
+        batch_idx = int(getattr(self, "_current_train_batch", 0) or 0)
+        return max_batches <= 0 or batch_idx < max_batches
+
+    def _begin_loss_debug_epoch(self, epoch):
+        if not self._loss_debug_enabled():
+            return
+        self._loss_debug_epoch = int(epoch)
+        self._loss_debug_components = {}
+
+    def _record_loss_debug(self, name, value):
+        if not self._loss_debug_batch_allowed():
+            return
+        if value is None:
+            return
+        if torch.is_tensor(value):
+            value = float(value.detach().mean().cpu().item())
+        else:
+            value = float(value)
+        components = getattr(self, "_loss_debug_components", None)
+        if components is None:
+            components = {}
+            self._loss_debug_components = components
+        components.setdefault(name, []).append(value)
+
+    def _finish_loss_debug_epoch(self, epoch):
+        if not self._loss_debug_enabled():
+            return
+        components = getattr(self, "_loss_debug_components", {}) or {}
+        if not components:
+            return
+        summary = {
+            "epoch": int(epoch),
+            "dataset": str(getattr(self, "dataset_name", "Unknown")),
+            "components": {},
+        }
+        for name, values in sorted(components.items()):
+            arr = np.asarray(values, dtype=np.float64)
+            summary["components"][name] = {
+                "count": int(arr.size),
+                "mean": float(arr.mean()) if arr.size else 0.0,
+                "max": float(arr.max()) if arr.size else 0.0,
+                "min": float(arr.min()) if arr.size else 0.0,
+            }
+        log_path = str(getattr(self.config, "debug_loss_log_path", "") or "")
+        if log_path:
+            log_dir = os.path.dirname(log_path)
+            if log_dir:
+                os.makedirs(log_dir, exist_ok=True)
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(summary, ensure_ascii=False) + "\n")
+        compact = ", ".join(
+            f"{name}={stats['mean']:.4g}"
+            for name, stats in summary["components"].items()
+            if stats["count"] > 0
+        )
+        print(f"  [loss-debug] epoch={epoch} {compact}")
+
     def _source_bottleneck_loss(
         self,
         gate_prob,
@@ -2039,6 +2107,8 @@ class LaGraph:
             )
             bce = (bce * focus).sum() / focus.sum().clamp_min(1.0)
             total = total + bce_weight * bce
+            self._record_loss_debug("source_bottleneck_bce_raw", bce)
+            self._record_loss_debug("source_bottleneck_bce_inner_weighted", bce_weight * bce)
 
         onset_gate_scores = None
         if rank_weight > 0 or specificity_weight > 0:
@@ -2047,10 +2117,13 @@ class LaGraph:
                 gate_prob * source_onset_mask.unsqueeze(-1).to(dtype=gate_prob.dtype)
             ).sum(dim=1) / onset_sum
         if rank_weight > 0 and onset_gate_scores is not None:
-            total = total + rank_weight * self._synthetic_rca_ranking_loss(
+            rank_loss = self._synthetic_rca_ranking_loss(
                 onset_gate_scores,
                 source_mask,
             )
+            total = total + rank_weight * rank_loss
+            self._record_loss_debug("source_bottleneck_rank_raw", rank_loss)
+            self._record_loss_debug("source_bottleneck_rank_inner_weighted", rank_weight * rank_loss)
 
         if specificity_weight > 0 and onset_gate_scores is not None and onset_gate_scores.shape[0] > 1:
             pred_freq = onset_gate_scores.mean(dim=0)
@@ -2059,6 +2132,11 @@ class LaGraph:
             target_dist = target_freq / target_freq.sum().clamp_min(1e-6)
             specificity_loss = F.mse_loss(pred_dist, target_dist, reduction="sum")
             total = total + specificity_weight * specificity_loss
+            self._record_loss_debug("source_bottleneck_specificity_raw", specificity_loss)
+            self._record_loss_debug(
+                "source_bottleneck_specificity_inner_weighted",
+                specificity_weight * specificity_loss,
+            )
 
         if effect_suppress_weight > 0 and effect_mask.sum() > 0 and effect_time_mask.sum() > 0:
             effect_sum = effect_time_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
@@ -2069,8 +2147,16 @@ class LaGraph:
                 effect_gate_scores * effect_mask.to(dtype=gate_prob.dtype)
             ).sum() / effect_mask.sum().clamp_min(1.0)
             total = total + effect_suppress_weight * suppress
+            self._record_loss_debug("source_bottleneck_effect_suppress_raw", suppress)
+            self._record_loss_debug(
+                "source_bottleneck_effect_suppress_inner_weighted",
+                effect_suppress_weight * suppress,
+            )
 
-        return weight * total
+        scaled = weight * total
+        self._record_loss_debug("source_bottleneck_total_inner", total)
+        self._record_loss_debug("source_bottleneck_total_scaled", scaled)
+        return scaled
 
     def _channel_masked_modeling_loss(self, input_data, batch_idx=None):
         if not bool(getattr(self.config, "use_channel_masked_modeling", False)):
@@ -2244,8 +2330,11 @@ class LaGraph:
 
         total = input_data.new_tensor(0.0)
         if gate_channel_scores is not None:
-            total = total + bce_weight * self._weighted_channel_bce(gate_channel_scores, source_mask)
-            total = total + self._source_bottleneck_loss(
+            gate_bce = self._weighted_channel_bce(gate_channel_scores, source_mask)
+            total = total + bce_weight * gate_bce
+            self._record_loss_debug("source_effect_gate_bce_raw", gate_bce)
+            self._record_loss_debug("source_effect_gate_bce_inner_weighted", bce_weight * gate_bce)
+            bottleneck_loss = self._source_bottleneck_loss(
                 gate_prob,
                 source_mask,
                 effect_mask,
@@ -2253,15 +2342,23 @@ class LaGraph:
                 effect_time_mask,
                 event_mask,
             )
+            total = total + bottleneck_loss
+            self._record_loss_debug("source_effect_bottleneck_inner_scaled", bottleneck_loss)
             if specificity_weight > 0 and gate_channel_scores.shape[0] > 1:
                 pred_freq = gate_channel_scores.clamp_min(0.0).mean(dim=0)
                 target_freq = source_mask.to(dtype=gate_channel_scores.dtype).mean(dim=0)
                 pred_dist = pred_freq / pred_freq.sum().clamp_min(1e-6)
                 target_dist = target_freq / target_freq.sum().clamp_min(1e-6)
-                total = total + specificity_weight * F.mse_loss(
+                gate_specificity = F.mse_loss(
                     pred_dist,
                     target_dist,
                     reduction="sum",
+                )
+                total = total + specificity_weight * gate_specificity
+                self._record_loss_debug("source_effect_specificity_raw", gate_specificity)
+                self._record_loss_debug(
+                    "source_effect_specificity_inner_weighted",
+                    specificity_weight * gate_specificity,
                 )
         if synth_rca_logits is not None and rca_head_weight > 0:
             pos = source_mask.sum().clamp_min(1.0)
@@ -2283,6 +2380,13 @@ class LaGraph:
             total = total + rca_head_weight * (
                 rca_head_bce_weight * rca_head_bce
                 + rca_head_rank_weight * rca_head_rank
+            )
+            self._record_loss_debug("source_effect_rca_head_bce_raw", rca_head_bce)
+            self._record_loss_debug("source_effect_rca_head_rank_raw", rca_head_rank)
+            self._record_loss_debug(
+                "source_effect_rca_head_inner_weighted",
+                rca_head_weight
+                * (rca_head_bce_weight * rca_head_bce + rca_head_rank_weight * rca_head_rank),
             )
         if root_score_logits is not None and root_score_weight > 0:
             root_target = (
@@ -2321,22 +2425,46 @@ class LaGraph:
                 ).sum() / effect_mask.sum().clamp_min(1.0)
                 root_total = root_total + root_effect_suppress_weight * effect_suppress
             total = total + root_score_weight * root_total
+            self._record_loss_debug("source_effect_root_score_bce_raw", root_bce)
+            self._record_loss_debug("source_effect_root_score_rank_raw", root_rank)
+            self._record_loss_debug(
+                "source_effect_root_score_inner_weighted",
+                root_score_weight * root_total,
+            )
         if rank_weight > 0:
-            total = total + rank_weight * self._synthetic_rca_ranking_loss(channel_scores, source_mask)
+            rank_loss = self._synthetic_rca_ranking_loss(channel_scores, source_mask)
+            total = total + rank_weight * rank_loss
+            self._record_loss_debug("source_effect_rank_raw", rank_loss)
+            self._record_loss_debug("source_effect_rank_inner_weighted", rank_weight * rank_loss)
         if effect_rank_weight > 0:
-            total = total + effect_rank_weight * self._source_effect_ranking_loss(
+            effect_rank_loss = self._source_effect_ranking_loss(
                 channel_scores,
                 source_mask,
                 effect_mask,
             )
+            total = total + effect_rank_weight * effect_rank_loss
+            self._record_loss_debug("source_effect_effect_rank_raw", effect_rank_loss)
+            self._record_loss_debug(
+                "source_effect_effect_rank_inner_weighted",
+                effect_rank_weight * effect_rank_loss,
+            )
         if onset_rank_weight > 0:
-            total = total + onset_rank_weight * self._source_effect_onset_ranking_loss(
+            onset_rank_loss = self._source_effect_onset_ranking_loss(
                 onset_channel_scores,
                 effect_channel_scores,
                 source_mask,
                 effect_mask,
             )
-        return lambda_source_effect * total
+            total = total + onset_rank_weight * onset_rank_loss
+            self._record_loss_debug("source_effect_onset_rank_raw", onset_rank_loss)
+            self._record_loss_debug(
+                "source_effect_onset_rank_inner_weighted",
+                onset_rank_weight * onset_rank_loss,
+            )
+        scaled_total = lambda_source_effect * total
+        self._record_loss_debug("source_effect_total_inner", total)
+        self._record_loss_debug("source_effect_total_scaled", scaled_total)
+        return scaled_total
 
     def _synthetic_rca_ranking_loss(self, channel_scores, channel_mask):
         margin = float(getattr(self.config, "synthetic_rca_margin", 0.2) or 0.2)
@@ -2972,6 +3100,7 @@ class LaGraph:
             epoch_start = time.time()
             epoch_losses = []
             self._current_train_epoch = epoch
+            self._begin_loss_debug_epoch(epoch + 1)
 
             warmup_alpha = min(1.0, epoch / max(1, self.config.num_epochs * 0.1))
             self.model.set_warmup_progress(warmup_alpha)
@@ -2985,12 +3114,17 @@ class LaGraph:
 
             self.model.train()
             self.optimizer.zero_grad()
+            debug_train_max_batches = int(getattr(self.config, "debug_train_max_batches", 0) or 0)
 
             for i, (input_data, _) in enumerate(self.train_loader):
+                if debug_train_max_batches > 0 and i >= debug_train_max_batches:
+                    break
+                self._current_train_batch = i
                 input_data = input_data.float().to(self.device, non_blocking=True)
                 rec, _, _, _, _, aux_losses, _ = self.model(input_data)
 
                 loss = self._reconstruction_loss(rec, input_data)
+                self._record_loss_debug("reconstruction_loss", loss)
                 loss = self._add_temporal_difference_loss(loss, rec, input_data)
 
                 # ★ P0-1: lambda_causal_l1 → lambda_locality_l1
@@ -3003,10 +3137,12 @@ class LaGraph:
                 else:
                     if use_vq_bypass and aux_losses and 'vq_loss' in aux_losses:
                         loss = loss + lambda_vq * aux_losses['vq_loss']
+                        self._record_loss_debug("vq_loss_scaled", lambda_vq * aux_losses['vq_loss'])
                     loss = loss + self._synthetic_anomaly_aux_loss(input_data, aux_losses, batch_idx=i)
                     loss = loss + self._source_effect_synthetic_loss(input_data, batch_idx=i)
                     loss = loss + self._channel_masked_modeling_loss(input_data, batch_idx=i)
 
+                self._record_loss_debug("total_train_loss", loss)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 self.optimizer.step()
@@ -3021,6 +3157,7 @@ class LaGraph:
 
             avg_train_loss = np.mean(epoch_losses) if epoch_losses else 0
             epoch_time = time.time() - epoch_start
+            self._finish_loss_debug_epoch(epoch + 1)
             val_loss = self.vali(self.valid_loader)
             current_lr = self.optimizer.param_groups[0]["lr"]
 
@@ -3287,17 +3424,23 @@ class LaGraph:
             epoch_start = time.time()
             epoch_losses = []
             self._current_train_epoch = epoch
+            self._begin_loss_debug_epoch(epoch + 1)
 
             self.model.train()
             self.optimizer.zero_grad()
+            debug_train_max_batches = int(getattr(self.config, "debug_train_max_batches", 0) or 0)
 
             for i, (input_data, labels) in enumerate(self.train_loader):
+                if debug_train_max_batches > 0 and i >= debug_train_max_batches:
+                    break
+                self._current_train_batch = i
                 input_data = input_data.float().to(self.device)
                 labels = labels.float().to(self.device)
 
                 rec, _, _, _, _, aux_losses, _ = self.model(input_data)
 
                 loss = self._reconstruction_loss(rec, input_data)
+                self._record_loss_debug("reconstruction_loss", loss)
                 loss = self._add_temporal_difference_loss(loss, rec, input_data)
 
                 # ★ P0-1: lambda_causal_l1 → lambda_locality_l1
@@ -3307,6 +3450,7 @@ class LaGraph:
                 loss = loss + self._source_effect_synthetic_loss(input_data, batch_idx=i)
                 loss = loss + self._channel_masked_modeling_loss(input_data, batch_idx=i)
 
+                self._record_loss_debug("total_train_loss", loss)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 self.optimizer.step()
@@ -3316,6 +3460,7 @@ class LaGraph:
 
             avg_train_loss = np.mean(epoch_losses) if epoch_losses else 0
             epoch_time = time.time() - epoch_start
+            self._finish_loss_debug_epoch(epoch + 1)
             val_loss = self.vali(self.valid_loader)
             current_lr = self.optimizer.param_groups[0]["lr"]
 
