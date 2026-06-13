@@ -581,6 +581,30 @@ def main():
         help="Propagation-channel suppression weight inside source-gate temporal bottleneck supervision",
     )
     parser.add_argument(
+        "--root-response-penalty-init",
+        type=float,
+        default=None,
+        help="Initial penalty applied to graph-supported response evidence in the root-response RCA head.",
+    )
+    parser.add_argument(
+        "--root-response-source-branch-weight",
+        type=float,
+        default=None,
+        help="Auxiliary weight for supervising root-response source evidence on synthetic source onsets.",
+    )
+    parser.add_argument(
+        "--root-response-response-branch-weight",
+        type=float,
+        default=None,
+        help="Auxiliary weight for ranking graph-supported response evidence on synthetic effect variables.",
+    )
+    parser.add_argument(
+        "--root-response-response-suppress-weight",
+        type=float,
+        default=None,
+        help="Penalty weight that keeps response evidence low on synthetic source variables.",
+    )
+    parser.add_argument(
         "--lambda-channel-masked",
         type=float,
         default=None,
@@ -805,6 +829,30 @@ def main():
         type=float,
         default=None,
         help="Weight for learned RootScore evidence inside RCA rankings.",
+    )
+    parser.add_argument(
+        "--rca-root-score-pooling",
+        choices=["mean", "early_mean", "top_quantile", "max"],
+        default=None,
+        help="Event aggregation used for learned RootScore evidence in RCA rankings.",
+    )
+    parser.add_argument(
+        "--rca-root-score-head-ratio",
+        type=float,
+        default=None,
+        help="Early-event fraction used when --rca-root-score-pooling=early_mean.",
+    )
+    parser.add_argument(
+        "--rca-root-score-head-points",
+        type=int,
+        default=None,
+        help="Maximum leading points used when --rca-root-score-pooling=early_mean.",
+    )
+    parser.add_argument(
+        "--rca-root-score-top-quantile",
+        type=float,
+        default=None,
+        help="Per-channel quantile threshold used when --rca-root-score-pooling=top_quantile.",
     )
     parser.add_argument(
         "--rca-source-consensus-weight",
@@ -2831,7 +2879,14 @@ def main():
         root_score_bce_weight=1.0,
         root_score_rank_weight=1.0,
         root_score_effect_suppress_weight=0.75,
+        root_response_source_branch_weight=0.50,
+        root_response_response_branch_weight=0.35,
+        root_response_response_suppress_weight=0.50,
         rca_root_score_weight=0.60,
+        rca_root_score_pooling="mean",
+        rca_root_score_head_ratio=0.30,
+        rca_root_score_head_points=30,
+        rca_root_score_top_quantile=0.80,
         rca_source_base_weight=0.70,
         rca_source_gate_weight=0.35,
         rca_onset_weight=0.60,
@@ -3225,6 +3280,22 @@ def main():
         score_hyper_params["source_bottleneck_effect_suppress_weight"] = max(
             0.0, float(args.source_bottleneck_effect_suppress_weight)
         )
+    if args.root_response_penalty_init is not None:
+        score_hyper_params["root_response_penalty_init"] = max(
+            1e-4, float(args.root_response_penalty_init)
+        )
+    if args.root_response_source_branch_weight is not None:
+        score_hyper_params["root_response_source_branch_weight"] = max(
+            0.0, float(args.root_response_source_branch_weight)
+        )
+    if args.root_response_response_branch_weight is not None:
+        score_hyper_params["root_response_response_branch_weight"] = max(
+            0.0, float(args.root_response_response_branch_weight)
+        )
+    if args.root_response_response_suppress_weight is not None:
+        score_hyper_params["root_response_response_suppress_weight"] = max(
+            0.0, float(args.root_response_response_suppress_weight)
+        )
     if args.lambda_channel_masked is not None:
         score_hyper_params["lambda_channel_masked"] = max(0.0, float(args.lambda_channel_masked))
         score_hyper_params["use_channel_masked_modeling"] = score_hyper_params["lambda_channel_masked"] > 0.0
@@ -3260,6 +3331,22 @@ def main():
         score_hyper_params["rca_source_gate_weight"] = max(0.0, float(args.rca_source_gate_weight))
     if args.rca_root_score_weight is not None:
         score_hyper_params["rca_root_score_weight"] = max(0.0, float(args.rca_root_score_weight))
+    if args.rca_root_score_pooling is not None:
+        score_hyper_params["rca_root_score_pooling"] = args.rca_root_score_pooling
+    if args.rca_root_score_head_ratio is not None:
+        score_hyper_params["rca_root_score_head_ratio"] = min(
+            max(float(args.rca_root_score_head_ratio), 1e-6),
+            1.0,
+        )
+    if args.rca_root_score_head_points is not None:
+        score_hyper_params["rca_root_score_head_points"] = max(
+            0, int(args.rca_root_score_head_points)
+        )
+    if args.rca_root_score_top_quantile is not None:
+        score_hyper_params["rca_root_score_top_quantile"] = min(
+            max(float(args.rca_root_score_top_quantile), 0.0),
+            0.999,
+        )
     if args.rca_source_consensus_weight is not None:
         score_hyper_params["rca_source_consensus_weight"] = max(
             0.0, float(args.rca_source_consensus_weight)

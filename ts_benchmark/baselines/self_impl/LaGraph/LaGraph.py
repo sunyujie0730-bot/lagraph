@@ -147,6 +147,9 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "root_score_bce_weight": 1.0,
     "root_score_rank_weight": 1.0,
     "root_score_effect_suppress_weight": 0.5,
+    "root_response_source_branch_weight": 0.0,
+    "root_response_response_branch_weight": 0.0,
+    "root_response_response_suppress_weight": 0.5,
     "lambda_source_bottleneck": 0.0,
     "source_bottleneck_bce_weight": 1.0,
     "source_bottleneck_rank_weight": 0.5,
@@ -275,6 +278,10 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_synthetic_weight": 0.0,
     "rca_source_gate_weight": 0.0,
     "rca_root_score_weight": 0.0,
+    "rca_root_score_pooling": "mean",
+    "rca_root_score_head_ratio": 0.30,
+    "rca_root_score_head_points": 30,
+    "rca_root_score_top_quantile": 0.80,
     "rca_source_interaction_weight": 0.0,
     "rca_source_innovation_weight": 0.0,
     "rca_source_innovation_mode": "series",
@@ -1310,6 +1317,21 @@ class LaGraph:
                 "root_score_effect_suppress_weight": getattr(
                     self.config, "root_score_effect_suppress_weight", None
                 ),
+                "root_response_source_branch_weight": getattr(
+                    self.config, "root_response_source_branch_weight", None
+                ),
+                "root_response_response_branch_weight": getattr(
+                    self.config, "root_response_response_branch_weight", None
+                ),
+                "root_response_response_suppress_weight": getattr(
+                    self.config, "root_response_response_suppress_weight", None
+                ),
+                "rca_root_score_pooling": getattr(self.config, "rca_root_score_pooling", None),
+                "rca_root_score_head_ratio": getattr(self.config, "rca_root_score_head_ratio", None),
+                "rca_root_score_head_points": getattr(self.config, "rca_root_score_head_points", None),
+                "rca_root_score_top_quantile": getattr(
+                    self.config, "rca_root_score_top_quantile", None
+                ),
                 "lambda_source_bottleneck": getattr(self.config, "lambda_source_bottleneck", None),
                 "source_bottleneck_bce_weight": getattr(
                     self.config, "source_bottleneck_bce_weight", None
@@ -2308,6 +2330,8 @@ class LaGraph:
         gate_prob = synth_aux.get("source_gate_prob")
         synth_rca_logits = synth_aux.get("synthetic_rca_logits")
         root_score_logits = synth_aux.get("root_score_logits")
+        root_response_source_evidence = synth_aux.get("root_response_source_evidence")
+        root_response_response_evidence = synth_aux.get("root_response_response_evidence")
         gate_channel_scores = None
         if gate_prob is not None:
             gate_channel_scores = (gate_prob * event_mask.unsqueeze(-1)).sum(dim=1) / mask_sum
@@ -2440,6 +2464,75 @@ class LaGraph:
             self._record_loss_debug(
                 "source_effect_root_score_inner_weighted",
                 root_score_weight * root_total,
+            )
+        source_branch_weight = float(
+            getattr(self.config, "root_response_source_branch_weight", 0.0) or 0.0
+        )
+        response_branch_weight = float(
+            getattr(self.config, "root_response_response_branch_weight", 0.0) or 0.0
+        )
+        response_suppress_weight = float(
+            getattr(self.config, "root_response_response_suppress_weight", 0.5) or 0.0
+        )
+        if root_response_source_evidence is not None and source_branch_weight > 0:
+            source_branch_logits = (
+                root_response_source_evidence
+                * source_onset_mask.unsqueeze(-1).to(dtype=root_response_source_evidence.dtype)
+            ).sum(dim=1) / onset_sum
+            pos = source_mask.sum().clamp_min(1.0)
+            neg = (source_mask.numel() - source_mask.sum()).clamp_min(1.0)
+            pos_weight = (neg / pos).clamp(1.0, 20.0)
+            source_branch_bce = F.binary_cross_entropy_with_logits(
+                source_branch_logits,
+                source_mask,
+                pos_weight=pos_weight,
+            )
+            source_branch_rank = self._synthetic_rca_ranking_loss(
+                torch.sigmoid(source_branch_logits),
+                source_mask,
+            )
+            source_branch_loss = source_branch_bce + source_branch_rank
+            total = total + source_branch_weight * source_branch_loss
+            self._record_loss_debug("root_response_source_branch_bce_raw", source_branch_bce)
+            self._record_loss_debug("root_response_source_branch_rank_raw", source_branch_rank)
+            self._record_loss_debug(
+                "root_response_source_branch_inner_weighted",
+                source_branch_weight * source_branch_loss,
+            )
+        if (
+            root_response_response_evidence is not None
+            and response_branch_weight > 0
+            and effect_mask.sum() > 0
+            and effect_time_mask.sum() > 0
+        ):
+            response_effect_scores = (
+                root_response_response_evidence
+                * effect_time_mask.unsqueeze(-1).to(dtype=root_response_response_evidence.dtype)
+            ).sum(dim=1) / effect_time_sum
+            response_branch_rank = self._synthetic_rca_ranking_loss(
+                response_effect_scores,
+                effect_mask,
+            )
+            response_source_scores = (
+                root_response_response_evidence
+                * source_onset_mask.unsqueeze(-1).to(dtype=root_response_response_evidence.dtype)
+            ).sum(dim=1) / onset_sum
+            response_source_suppress = (
+                response_source_scores * source_mask.to(dtype=response_source_scores.dtype)
+            ).sum() / source_mask.sum().clamp_min(1.0)
+            response_branch_loss = (
+                response_branch_rank
+                + response_suppress_weight * response_source_suppress
+            )
+            total = total + response_branch_weight * response_branch_loss
+            self._record_loss_debug("root_response_response_branch_rank_raw", response_branch_rank)
+            self._record_loss_debug(
+                "root_response_response_source_suppress_raw",
+                response_source_suppress,
+            )
+            self._record_loss_debug(
+                "root_response_response_branch_inner_weighted",
+                response_branch_weight * response_branch_loss,
             )
         if rank_weight > 0:
             rank_loss = self._synthetic_rca_ranking_loss(channel_scores, source_mask)
@@ -3629,7 +3722,22 @@ class LaGraph:
                 "root_score_effect_suppress_weight": getattr(
                     self.config, "root_score_effect_suppress_weight", None
                 ),
+                "root_response_source_branch_weight": getattr(
+                    self.config, "root_response_source_branch_weight", None
+                ),
+                "root_response_response_branch_weight": getattr(
+                    self.config, "root_response_response_branch_weight", None
+                ),
+                "root_response_response_suppress_weight": getattr(
+                    self.config, "root_response_response_suppress_weight", None
+                ),
                 "rca_root_score_weight": getattr(self.config, "rca_root_score_weight", None),
+                "rca_root_score_pooling": getattr(self.config, "rca_root_score_pooling", None),
+                "rca_root_score_head_ratio": getattr(self.config, "rca_root_score_head_ratio", None),
+                "rca_root_score_head_points": getattr(self.config, "rca_root_score_head_points", None),
+                "rca_root_score_top_quantile": getattr(
+                    self.config, "rca_root_score_top_quantile", None
+                ),
                 "rca_source_innovation_weight": getattr(self.config, "rca_source_innovation_weight", None),
                 "rca_source_innovation_mode": getattr(self.config, "rca_source_innovation_mode", None),
                 "rca_source_innovation_neighbor_weight": getattr(
@@ -4999,6 +5107,43 @@ class LaGraph:
         final_order = np.asarray(reranked_top + order_list[top_k:], dtype=np.int64)
         return final_order, adjusted_scores, rerank_info
 
+    def _aggregate_root_score_event_component(
+        self,
+        root_score_channel_scores,
+        score_start,
+        score_end,
+        root_score_pooling="mean",
+        head_ratio=0.30,
+        head_points=30,
+        top_quantile=0.80,
+    ):
+        scores = np.asarray(root_score_channel_scores[score_start:score_end], dtype=np.float64)
+        if scores.size == 0:
+            fallback = np.asarray(root_score_channel_scores, dtype=np.float64)
+            width = fallback.shape[1] if fallback.ndim == 2 else 0
+            return np.zeros(width, dtype=np.float64)
+        mode = str(root_score_pooling or "mean").lower()
+        if mode in {"early", "early_mean", "head", "head_mean"}:
+            length = scores.shape[0]
+            ratio = min(max(float(head_ratio or 1.0), 1e-6), 1.0)
+            take = int(np.ceil(length * ratio))
+            fixed_points = int(head_points or 0)
+            if fixed_points > 0:
+                take = min(take, fixed_points)
+            else:
+                take = min(length, take)
+            take = max(1, take)
+            return scores[:take].mean(axis=0)
+        if mode in {"top_quantile", "topq", "quantile_mean"}:
+            q = min(max(float(top_quantile or 0.80), 0.0), 0.999)
+            thresholds = np.quantile(scores, q, axis=0, keepdims=True)
+            mask = scores >= thresholds
+            counts = mask.sum(axis=0).clip(min=1)
+            return (scores * mask).sum(axis=0) / counts
+        if mode in {"max", "peak"}:
+            return scores.max(axis=0)
+        return scores.mean(axis=0)
+
     def _build_rca_events(
         self,
         segments,
@@ -5019,6 +5164,10 @@ class LaGraph:
         causal_channel_scores=None,
         source_gate_channel_scores=None,
         root_score_channel_scores=None,
+        root_score_pooling="mean",
+        root_score_head_ratio=0.30,
+        root_score_head_points=30,
+        root_score_top_quantile=0.80,
         source_innovation_channel_scores=None,
         synthetic_channel_scores=None,
         counterfactual_channel_scores=None,
@@ -5126,7 +5275,15 @@ class LaGraph:
                 else np.zeros_like(event_raw_scores)
             )
             event_root_scores = (
-                root_score_channel_scores[score_start:score_end].mean(axis=0)
+                self._aggregate_root_score_event_component(
+                    root_score_channel_scores,
+                    score_start,
+                    score_end,
+                    root_score_pooling=root_score_pooling,
+                    head_ratio=root_score_head_ratio,
+                    head_points=root_score_head_points,
+                    top_quantile=root_score_top_quantile,
+                )
                 if root_score_channel_scores is not None
                 else np.zeros_like(event_raw_scores)
             )
@@ -5852,6 +6009,10 @@ class LaGraph:
         synthetic_weight = _cfg_float("rca_synthetic_weight", 0.0)
         source_gate_weight = _cfg_float("rca_source_gate_weight", 0.0)
         root_score_weight = _cfg_float("rca_root_score_weight", 0.0)
+        root_score_pooling = str(getattr(self.config, "rca_root_score_pooling", "mean") or "mean")
+        root_score_head_ratio = _cfg_float("rca_root_score_head_ratio", 0.30)
+        root_score_head_points = _cfg_int("rca_root_score_head_points", 30)
+        root_score_top_quantile = _cfg_float("rca_root_score_top_quantile", 0.80)
         source_interaction_weight = _cfg_float("rca_source_interaction_weight", 0.0)
         source_innovation_weight = _cfg_float("rca_source_innovation_weight", 0.0)
         source_innovation_mode = str(
@@ -6026,6 +6187,10 @@ class LaGraph:
             causal_channel_scores=causal_channel_scores,
             source_gate_channel_scores=source_gate_channel_scores,
             root_score_channel_scores=root_score_channel_scores,
+            root_score_pooling=root_score_pooling,
+            root_score_head_ratio=root_score_head_ratio,
+            root_score_head_points=root_score_head_points,
+            root_score_top_quantile=root_score_top_quantile,
             source_innovation_channel_scores=source_innovation_channel_scores,
             synthetic_channel_scores=synthetic_channel_scores,
             counterfactual_channel_scores=counterfactual_channel_scores,
@@ -6109,6 +6274,10 @@ class LaGraph:
                     causal_channel_scores=causal_channel_scores,
                     source_gate_channel_scores=source_gate_channel_scores,
                     root_score_channel_scores=root_score_channel_scores,
+                    root_score_pooling=root_score_pooling,
+                    root_score_head_ratio=root_score_head_ratio,
+                    root_score_head_points=root_score_head_points,
+                    root_score_top_quantile=root_score_top_quantile,
                     source_innovation_channel_scores=source_innovation_channel_scores,
                     synthetic_channel_scores=synthetic_channel_scores,
                     counterfactual_channel_scores=counterfactual_channel_scores,
@@ -6185,6 +6354,10 @@ class LaGraph:
                     causal_channel_scores=causal_channel_scores,
                     source_gate_channel_scores=source_gate_channel_scores,
                     root_score_channel_scores=root_score_channel_scores,
+                    root_score_pooling=root_score_pooling,
+                    root_score_head_ratio=root_score_head_ratio,
+                    root_score_head_points=root_score_head_points,
+                    root_score_top_quantile=root_score_top_quantile,
                     source_innovation_channel_scores=source_innovation_channel_scores,
                     synthetic_channel_scores=synthetic_channel_scores,
                     counterfactual_channel_scores=counterfactual_channel_scores,
@@ -6259,6 +6432,10 @@ class LaGraph:
                 causal_channel_scores=causal_channel_scores,
                 source_gate_channel_scores=source_gate_channel_scores,
                 root_score_channel_scores=root_score_channel_scores,
+                root_score_pooling=root_score_pooling,
+                root_score_head_ratio=root_score_head_ratio,
+                root_score_head_points=root_score_head_points,
+                root_score_top_quantile=root_score_top_quantile,
                 source_innovation_channel_scores=source_innovation_channel_scores,
                 synthetic_channel_scores=synthetic_channel_scores,
                 counterfactual_channel_scores=counterfactual_channel_scores,
@@ -6340,6 +6517,10 @@ class LaGraph:
                 causal_channel_scores=causal_channel_scores,
                 source_gate_channel_scores=source_gate_channel_scores,
                 root_score_channel_scores=root_score_channel_scores,
+                root_score_pooling=root_score_pooling,
+                root_score_head_ratio=root_score_head_ratio,
+                root_score_head_points=root_score_head_points,
+                root_score_top_quantile=root_score_top_quantile,
                 source_innovation_channel_scores=source_innovation_channel_scores,
                 synthetic_channel_scores=synthetic_channel_scores,
                 counterfactual_channel_scores=counterfactual_channel_scores,
@@ -6436,6 +6617,10 @@ class LaGraph:
             "rca_synthetic_weight": synthetic_weight,
             "rca_source_gate_weight": source_gate_weight,
             "rca_root_score_weight": root_score_weight,
+            "rca_root_score_pooling": root_score_pooling,
+            "rca_root_score_head_ratio": root_score_head_ratio,
+            "rca_root_score_head_points": root_score_head_points,
+            "rca_root_score_top_quantile": root_score_top_quantile,
             "rca_source_interaction_weight": source_interaction_weight,
             "rca_source_innovation_weight": source_innovation_weight,
             "rca_source_innovation_mode": source_innovation_mode,
@@ -6535,6 +6720,18 @@ class LaGraph:
             "root_score_rank_weight": _cfg_float("root_score_rank_weight", 1.0),
             "root_score_effect_suppress_weight": _cfg_float(
                 "root_score_effect_suppress_weight",
+                0.5,
+            ),
+            "root_response_source_branch_weight": _cfg_float(
+                "root_response_source_branch_weight",
+                0.0,
+            ),
+            "root_response_response_branch_weight": _cfg_float(
+                "root_response_response_branch_weight",
+                0.0,
+            ),
+            "root_response_response_suppress_weight": _cfg_float(
+                "root_response_response_suppress_weight",
                 0.5,
             ),
             "lambda_source_bottleneck": _cfg_float("lambda_source_bottleneck", 0.0),
