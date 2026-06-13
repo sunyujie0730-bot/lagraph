@@ -1,0 +1,863 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LaGraph 项目汇报与论文问题梳理</title>
+  <style>
+    :root {
+      --bg: #f4f5f7;
+      --paper: #ffffff;
+      --text: #111827;
+      --muted: #5f6b7a;
+      --line: #d9dee7;
+      --blue: #2563eb;
+      --green: #16803c;
+      --orange: #b45309;
+      --red: #b91c1c;
+      --slate: #334155;
+      --soft-blue: #eaf1ff;
+      --soft-green: #eaf7ef;
+      --soft-orange: #fff4e5;
+      --soft-red: #fff0f0;
+      --soft-gray: #eef1f5;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", Arial, sans-serif;
+      font-size: 18px;
+      line-height: 1.78;
+    }
+    .page {
+      max-width: 1040px;
+      margin: 0 auto;
+      padding: 30px 24px 70px;
+    }
+    header {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 34px 40px;
+      margin-bottom: 20px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 38px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 20px;
+    }
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 24px;
+    }
+    .meta div, .card, section {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+    }
+    .meta div {
+      padding: 14px 16px;
+      font-size: 16px;
+      color: var(--muted);
+    }
+    .meta b {
+      display: block;
+      color: var(--text);
+      font-size: 18px;
+      margin-bottom: 2px;
+    }
+    nav {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 22px 28px;
+      margin-bottom: 20px;
+    }
+    nav h2 { margin-top: 0; }
+    nav ol {
+      margin: 8px 0 0 20px;
+      padding: 0;
+      columns: 2;
+    }
+    nav a {
+      color: var(--blue);
+      text-decoration: none;
+    }
+    section {
+      padding: 30px 36px;
+      margin: 20px 0;
+    }
+    h2 {
+      font-size: 30px;
+      margin: 0 0 18px;
+      line-height: 1.35;
+    }
+    h3 {
+      font-size: 23px;
+      margin: 28px 0 12px;
+      line-height: 1.4;
+    }
+    p { margin: 12px 0; }
+    ul, ol { padding-left: 24px; }
+    li { margin: 7px 0; }
+    .lead {
+      font-size: 21px;
+      color: #263245;
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .card {
+      padding: 18px 20px;
+    }
+    .card h3 {
+      margin-top: 0;
+      font-size: 21px;
+    }
+    .tag {
+      display: inline-block;
+      padding: 1px 8px;
+      border-radius: 4px;
+      background: #f1f4f8;
+      color: var(--slate);
+      font-size: 14px;
+      line-height: 1.6;
+      margin-right: 4px;
+      white-space: nowrap;
+    }
+    .tag.blue { background: var(--soft-blue); color: #1d4ed8; }
+    .tag.green { background: var(--soft-green); color: var(--green); }
+    .tag.orange { background: var(--soft-orange); color: var(--orange); }
+    .tag.red { background: var(--soft-red); color: var(--red); }
+    .note, .risk, .ok, .warn {
+      border-left: 5px solid var(--blue);
+      background: #f7f9fc;
+      padding: 14px 18px;
+      border-radius: 4px;
+      margin: 18px 0;
+    }
+    .ok { border-color: var(--green); background: #f7fbf8; }
+    .warn { border-color: var(--orange); background: #fffaf2; }
+    .risk { border-color: var(--red); background: #fff7f7; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0 22px;
+      font-size: 16px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      vertical-align: top;
+      text-align: left;
+    }
+    th {
+      background: #f5f7fa;
+      color: #263245;
+      font-weight: 700;
+    }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    code, pre {
+      font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+    }
+    code {
+      background: #f1f4f8;
+      border: 1px solid #dce3ee;
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-size: 0.94em;
+    }
+    pre {
+      background: #f6f8fb;
+      color: #111827;
+      border: 1px solid var(--line);
+      padding: 16px 18px;
+      border-radius: 6px;
+      overflow-x: auto;
+      line-height: 1.55;
+      font-size: 16px;
+    }
+    .flow {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+      align-items: stretch;
+      margin: 18px 0;
+    }
+    .flow .step {
+      position: relative;
+      background: #f8fafc;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 14px 16px;
+      min-height: auto;
+      font-size: 17px;
+    }
+    .flow .step b {
+      display: inline;
+      font-size: 18px;
+      margin-right: 8px;
+    }
+    .flow .step:not(:last-child)::after { display: none; }
+    .score {
+      font-size: 32px;
+      line-height: 1.15;
+      margin: 8px 0;
+      font-weight: 700;
+      color: #1f2937;
+    }
+    .small {
+      color: var(--muted);
+      font-size: 15px;
+    }
+    .source-list li {
+      word-break: break-all;
+    }
+    @media (max-width: 860px) {
+      .meta, .grid-2, .grid-3, .flow {
+        grid-template-columns: 1fr;
+      }
+      nav ol { columns: 1; }
+      .flow .step:not(:last-child)::after { display: none; }
+    }
+  </style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <h1>LaGraph 项目汇报与论文问题梳理</h1>
+    <p class="subtitle">面向导师深度讨论的项目理解、创新点、实现状态、不足与下一步计划</p>
+    <div class="meta">
+      <div><b>项目路径</b>D:\la_v12</div>
+      <div><b>整理日期</b>2026-06-12</div>
+      <div><b>当前推荐定位</b>工业异常诊断 / predicted-event RCA</div>
+      <div><b>核心模型线</b>source-bottleneck-specificity-rca</div>
+    </div>
+  </header>
+
+  <nav>
+    <h2>目录</h2>
+    <ol>
+      <li><a href="#one-sentence">一句话概括</a></li>
+      <li><a href="#plain-intro">通俗介绍</a></li>
+      <li><a href="#problem">研究问题</a></li>
+      <li><a href="#architecture">方法与系统架构</a></li>
+      <li><a href="#innovation">创新点</a></li>
+      <li><a href="#implemented">已实现内容</a></li>
+      <li><a href="#results">当前实验结果</a></li>
+      <li><a href="#limitations">不足与审稿风险</a></li>
+      <li><a href="#next">下一步计划</a></li>
+      <li><a href="#talk">汇报建议与讨论问题</a></li>
+      <li><a href="#sources">依据文件</a></li>
+    </ol>
+  </nav>
+
+  <section id="one-sentence">
+    <h2>1. 一句话概括</h2>
+    <p class="lead">
+      LaGraph 目前最适合被讲成一个 <b>面向工业控制系统的多变量异常诊断框架</b>：
+      它先用重构式时序模型检测异常事件，再在模型预测出的异常事件内部，对变量进行根因相关性排序。
+      当前论文价值不在于异常检测 F1 全面超过 SOTA，而在于 <b>预测事件内变量级根因排序</b>、<b>图结构约束的多证据排序方法</b> 和 <b>可审计的解释证据</b>。
+    </p>
+    <div class="grid-3">
+      <div class="card">
+        <span class="tag green">最能讲的结果</span>
+        <div class="score">WADI MRR 0.596</div>
+        <p class="small">predicted-event 变量级 RCA，Hit@1 0.500，Hit@3/5 0.714。</p>
+      </div>
+      <div class="card">
+        <span class="tag green">最能讲的结果</span>
+        <div class="score">SWaT MRR 0.509</div>
+        <p class="small">predicted-event 变量级 RCA，Hit@1 0.394，Hit@3 0.576，Hit@5 0.667。</p>
+      </div>
+      <div class="card">
+        <span class="tag orange">需要克制</span>
+        <div class="score">不是检测 SOTA</div>
+        <p class="small">WADI/SWaT raw F1 仍弱，检测应作为诊断入口，而不是论文唯一卖点。</p>
+      </div>
+    </div>
+    <div class="warn">
+      <b>汇报时建议先定边界：</b>当前证据支持“工业异常传播条件下的变量级根因排序”和“机制感知的图结构诊断证据”，
+      不支持 “严格因果发现”、 “通用异常检测 SOTA” 或 “所有指标全面领先”。
+    </div>
+  </section>
+
+  <section id="plain-intro">
+    <h2>2. 通俗介绍这个项目</h2>
+    <p>
+      工业控制系统里有很多传感器和执行器，例如水处理系统里的液位、流量、阀门、泵状态等。
+      这些变量不是独立变化的：一个阀门异常可能影响水流，再影响液位，最后让很多变量一起异常。
+      因此，一个实际问题是：模型不只要告诉我们“哪里异常了”，还要告诉我们“最应该先查哪个变量”。
+    </p>
+    <p>
+      LaGraph 试图解决的就是这个问题。它把多变量时间序列切成窗口，学习正常运行时的重构模式；
+      如果某个时间段重构误差变大，就认为这个时间段可能异常。更重要的是，它进一步把异常事件内部每个变量的证据拆开：
+      哪些变量残差大，哪些变量与邻居变量的正常关系被破坏，哪些变量在事件早期先异常，哪些变量可能只是下游传播响应。
+      最后模型给出一个变量排序，运维人员可以优先排查前几名变量。
+    </p>
+    <div class="flow">
+      <div class="step"><b>输入</b>多变量工业时间序列窗口，例如 WADI/SWaT/HAI 的传感器与执行器信号。</div>
+      <div class="step"><b>建模</b>用重构模型学习正常模式，同时学习通道图和时序图。</div>
+      <div class="step"><b>检测</b>输出每个时间点的异常分数，并切成预测异常事件。</div>
+      <div class="step"><b>诊断</b>在预测事件内部聚合变量级证据，形成 RCA 排名。</div>
+      <div class="step"><b>解释</b>输出变量级和子系统级结果，并用消融/faithfulness 检查解释是否可信。</div>
+    </div>
+    <p>
+      一个通俗类比是：异常检测只是报警器，告诉你“系统有问题”；LaGraph-SB 更像初步诊断助手，
+      告诉你“先查这几个变量，它们更像事件源头，而不是被波及的响应变量”。
+    </p>
+  </section>
+
+  <section id="problem">
+    <h2>3. 研究问题：从异常检测转向预测事件内 RCA</h2>
+    <h3>3.1 原始问题</h3>
+    <p>
+      多变量时间序列异常检测传统上关心“何时异常”。但工业场景里的关键问题常常是“异常从哪里开始”。
+      直接按重构误差或 z-score 排序会有一个明显缺陷：下游响应变量可能变化幅度更大，
+      因而被误认为根因。LaGraph 当前主线把问题改写为：
+    </p>
+    <pre>给定模型预测出的异常事件 e，
+输出变量排序 pi(e)，使真实源变量尽可能排在 Top-K 前列。</pre>
+
+    <h3>3.2 为什么 predicted-event RCA 更重要</h3>
+    <p>
+      true-event RCA 是给定真实异常区间后做排序，相当于理想条件下考察解释模块上限；
+      predicted-event RCA 则先由模型自己检测事件，再在预测事件中做排序，更接近实际部署。
+      后者会同时受到检测漏报、边界偏移、事件分割和变量排序质量的影响，因此更难，但论文价值更强。
+    </p>
+    <table>
+      <thead>
+        <tr><th>协议</th><th>含义</th><th>优势</th><th>风险</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>true-event RCA</td>
+          <td>在真实异常窗口内做根因排序。</td>
+          <td>隔离解释模块能力，适合上限分析。</td>
+          <td>过于理想，不代表部署链路。</td>
+        </tr>
+        <tr>
+          <td>predicted-event RCA</td>
+          <td>模型先产生预测事件，再在事件内排序变量。</td>
+          <td>更接近真实使用；能回答“检测后能不能诊断”。</td>
+          <td>受阈值、事件切分和匹配协议影响，需要透明报告。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="architecture">
+    <h2>4. 方法与系统架构</h2>
+    <h3>4.1 当前主线的名称</h3>
+    <p>
+      代码里存在很多 profile，但 2026-06 上旬的汇总文档把
+      <code>source-bottleneck-specificity-rca</code> 作为当前固定主模型。
+      它是在早期 <code>full</code>、<code>mechanism-graph</code> 和 <code>mechanism-prior-graph</code>
+      思路上继续演化出来的诊断型 profile。
+    </p>
+    <div class="note">
+      <b>时间线需要和导师讲清楚：</b>
+      5 月底的重点是 mechanism-aware graph 和 graph-edge faithfulness；
+      6 月上旬的重点已经推进到 WADI/SWaT predicted-event variable-level RCA，
+      当前更可汇报的是 source-bottleneck-specificity 这条线。
+    </div>
+
+    <h3>4.2 主干模型</h3>
+    <table>
+      <thead>
+        <tr><th>模块</th><th>作用</th><th>当前定位</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>MoE decomposition</td>
+          <td>把输入窗口拆成趋势与残差，残差更敏感于异常。</td>
+          <td>保留为重构主干的一部分。</td>
+        </tr>
+        <tr>
+          <td>Channel adaptive graph</td>
+          <td>学习变量之间的依赖图，用于通道消息传递、机制违背和 RCA 证据。</td>
+          <td>核心模块，但不能直接声称因果图。</td>
+        </tr>
+        <tr>
+          <td>Temporal graph / EncoderStack</td>
+          <td>建模窗口内部时间动态，多尺度时序卷积和注意力提取时序表示。</td>
+          <td>检测主干的一部分，不宜单独夸大。</td>
+        </tr>
+        <tr>
+          <td>VQ bottleneck</td>
+          <td>作为训练侧正常模式正则，帮助稳定表示。</td>
+          <td>不应作为主要异常评分贡献。</td>
+        </tr>
+        <tr>
+          <td>Direct reconstruction score</td>
+          <td>用 top-k 通道重构误差形成时间点异常分数。</td>
+          <td>主要检测信号，稳定可解释。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>4.3 RCA 评分思想</h3>
+    <p>
+      当前 RCA 不是只看一个变量误差，而是把事件内证据融合起来。概念上可以理解为：
+    </p>
+    <pre>RCA_score_i(e)
+  = residual_i(e)
+  + mechanism_i(e)
+  + onset_i(e)
+  + source_gate_i(e)
+  - propagation_i(e)
+  - specificity_i(e)</pre>
+    <table>
+      <thead>
+        <tr><th>证据分量</th><th>直观含义</th><th>能支持什么</th><th>不能支持什么</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>residual</td>
+          <td>事件内该变量重构误差多大。</td>
+          <td>变量异常响应强。</td>
+          <td>不能单独证明它是源头。</td>
+        </tr>
+        <tr>
+          <td>mechanism</td>
+          <td>变量能否被图邻居按正常机制解释。</td>
+          <td>正常依赖关系可能被破坏。</td>
+          <td>不能等价于物理因果边。</td>
+        </tr>
+        <tr>
+          <td>onset</td>
+          <td>事件早期是否先出现异常证据。</td>
+          <td>有助于区分源头与后续传播。</td>
+          <td>不能排除存在延迟或控制回路效应。</td>
+        </tr>
+        <tr>
+          <td>source gate / bottleneck</td>
+          <td>把大量异常响应压缩成少数更可能源变量。</td>
+          <td>符合工业排查的 Top-K 需求。</td>
+          <td>不是严格因果识别。</td>
+        </tr>
+        <tr>
+          <td>propagation suppression</td>
+          <td>降低更像下游响应变量的排序。</td>
+          <td>缓解残差排序偏向响应变量的问题。</td>
+          <td>不能完整重建传播路径。</td>
+        </tr>
+        <tr>
+          <td>event specificity</td>
+          <td>惩罚跨事件反复排名靠前的通用响应变量。</td>
+          <td>提升 WADI 源变量排序。</td>
+          <td>目前偏导出阶段校准，需要在线版本和消融验证。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="innovation">
+    <h2>5. 当前可以站住的创新点</h2>
+    <div class="grid-3">
+      <div class="card">
+        <span class="tag blue">创新点 1</span>
+        <h3>异常传播条件下的变量级根因排序</h3>
+        <p>
+          工业异常发生后，影响会沿设备连接、控制回路和工艺流程传播。
+          下游响应变量的异常幅度可能大于真正故障源变量，导致按残差、重构误差或注意力分数排序时，
+          模型容易把响应变量排在故障源变量前面。本文研究的科学问题是：
+          在事件边界由模型预测得到、异常传播已经发生的条件下，如何利用多种诊断证据提高故障源变量在排序结果中的位置。
+        </p>
+        <p class="small">技术抓手：图结构约束的多证据可学习变量排序，联合异常强度、异常起始时间、局部机制变化、传播关系和事件内变量特异性；证据来自 WADI/SWaT 变量级 RCA 主表和相关消融。</p>
+      </div>
+      <div class="card">
+        <span class="tag blue">创新点 2</span>
+        <h3>多证据排序，而非单一异常分数</h3>
+        <p>
+          方法不直接把残差最大的变量当作根因，而是把异常幅度、起始时序、机制变化、传播关系和事件内特异性拆成不同证据。
+          可学习参数用于校准这些证据在不同事件中的可靠性，而不是用黑盒分数替代诊断逻辑。
+        </p>
+        <p class="small">证据：residual-only、z-score、静态相关图等基线，以及 no source gate、no source-propagation、no specificity 等消融。</p>
+      </div>
+      <div class="card">
+        <span class="tag blue">创新点 3</span>
+        <h3>机制感知图证据</h3>
+        <p>
+          通道图不只是 message passing，而被赋予“用邻居解释目标变量”的机制任务。
+          早期 mechanism-prior-graph 进一步用弱正常相关先验提升 learned-edge faithfulness。
+        </p>
+        <p class="small">证据：mechanism-only 高于 random、图边 faithfulness smoke check。</p>
+      </div>
+    </div>
+
+    <h3>建议论文贡献写法</h3>
+    <ol>
+      <li>
+        本文研究工业异常传播条件下的预测事件内变量级根因排序问题。
+        其核心挑战是观测到的异常强度同时包含故障源信号和传播响应信号，单一异常分数难以稳定指示根因变量。
+      </li>
+      <li>
+        本文提出一种图结构约束的多证据可学习变量排序方法。
+        方法联合异常强度、异常起始时间、局部机制变化、传播关系和事件内变量特异性，并用可学习参数校准不同诊断证据的可靠性。
+      </li>
+      <li>
+        本文在 WADI 和 SWaT 的模型预测事件窗口内评估变量级 RCA。
+        实验用 Hit@K、MRR 和消融结果验证该排序方法是否能把故障相关变量排到更靠前的位置，同时透明报告检测指标与失败消融。
+      </li>
+    </ol>
+  </section>
+
+  <section id="implemented">
+    <h2>6. 目前已经实现的东西</h2>
+    <h3>6.1 代码实现</h3>
+    <table>
+      <thead>
+        <tr><th>实现位置</th><th>已实现能力</th><th>说明</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>ts_benchmark/baselines/self_impl/LaGraph/LaGraph.py</code></td>
+          <td>训练、验证、POT 阈值、检测、RCA 导出、多 seed 接口。</td>
+          <td>主入口较复杂，包含大量实验开关和 RCA 分量。</td>
+        </tr>
+        <tr>
+          <td><code>gcn_model.py</code></td>
+          <td>SparseGCN 主干、MoE、通道/时序图、VQ、机制分数、因果/状态等候选模块。</td>
+          <td>很多候选模块已实现，但不是都适合进主论文。</td>
+        </tr>
+        <tr>
+          <td><code>graph_learner.py</code></td>
+          <td>ChannelAdaptiveGraph、SimplifiedTemporalGraph、DynamicTemporalGraph。</td>
+          <td>支持 top-k 稀疏通道图、静态正常先验、时序邻近性调制。</td>
+        </tr>
+        <tr>
+          <td><code>run_single.py</code></td>
+          <td>统一命令行 profile 管理、数据集运行、RCA 导出参数。</td>
+          <td>包含 full、mechanism-prior、source-bottleneck 系列等大量 profile。</td>
+        </tr>
+        <tr>
+          <td><code>scripts/evaluate_rca.py</code> 等</td>
+          <td>变量级、子系统级、层级 RCA 评估。</td>
+          <td>支持 predicted-event、true-event、随机和静态基线。</td>
+        </tr>
+        <tr>
+          <td><code>dataset/anomaly_detect/rca_labels.csv</code></td>
+          <td>统一 RCA 标签注册表。</td>
+          <td>管理数据集、事件区间、子系统根因、变量根因、标签来源。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>6.2 数据和实验资产</h3>
+    <ul>
+      <li>已转换/接入 WADI、SWaT A1/A2 Physical、HAI 等工业控制数据。</li>
+      <li>已构建 SWaT/WADI/HAI 的 RCA 标签或标签模板，并通过统一 registry 管理。</li>
+      <li>已跑 WADI/SWaT 多个 epoch、多个架构 profile、多个 RCA 消融。</li>
+      <li>已导出大量 RCA JSON，并生成 journal validation 汇总表、baseline 表、case study 初稿。</li>
+      <li>已实现严格事件匹配补充指标：true_coverage、pred_coverage、event_iou、matched_iou_10 等。</li>
+    </ul>
+
+    <h3>6.3 已完成的关键工程修复</h3>
+    <ul>
+      <li>从多 GPU/DDP 路径收敛到 RTX 5070 单卡稳定训练路径。</li>
+      <li>修复大规模 RCA/score 统计中的内存问题：机制分数采样上限、streaming point-wise aggregation。</li>
+      <li>实现 RCA export lite，避免完整事件导出过大时难以评估。</li>
+      <li>实现 paper-protocol / best-val checkpoint，避免用测试 RCA 指标选 checkpoint。</li>
+    </ul>
+  </section>
+
+  <section id="results">
+    <h2>7. 当前实验结果怎么讲</h2>
+    <h3>7.1 检测结果：只能作为事件触发质量</h3>
+    <table>
+      <thead>
+        <tr><th>数据集</th><th>主线设置</th><th>Best Aff-F1</th><th>Raw F1</th><th>解读</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>WADI</td>
+          <td>source-bottleneck-specificity, 8 epoch</td>
+          <td class="num">0.7569</td>
+          <td class="num">0.0975</td>
+          <td>事件级触发尚可，点级 raw F1 弱。</td>
+        </tr>
+        <tr>
+          <td>WADI</td>
+          <td>source-bottleneck-specificity, 15 epoch</td>
+          <td class="num">0.7697</td>
+          <td class="num">0.1063</td>
+          <td>检测略好，变量 RCA 也较强。</td>
+        </tr>
+        <tr>
+          <td>SWaT</td>
+          <td>source-bottleneck-specificity, 8 epoch</td>
+          <td class="num">0.7865</td>
+          <td class="num">0.1821</td>
+          <td>Affiliation 可用，raw F1 仍不适合宣称 SOTA。</td>
+        </tr>
+        <tr>
+          <td>SWaT</td>
+          <td>source-bottleneck-specificity, 15 epoch</td>
+          <td class="num">0.7554</td>
+          <td class="num">0.2411</td>
+          <td>raw F1 上升但 RCA 下降，说明训练更久不一定更利于源变量排序。</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="risk">
+      <b>风险点：</b>正式论文不能隐藏 raw F1。应把 raw F1、adjusted F1、Affiliation F1、AUROC/AUPRC 一起报告；
+      论文主张应是 “检测提供诊断入口”，不是 “检测性能全面领先”。
+    </div>
+
+    <h3>7.2 变量级 RCA：当前主结果</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>数据集</th><th>方法</th><th>Matched</th><th>MRR</th><th>Hit@1</th><th>Hit@3</th><th>Hit@5</th><th>说明</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>WADI</td><td>z-score baseline</td><td>待补</td>
+          <td class="num">0.1934</td><td class="num">0.0714</td><td class="num">0.1429</td><td class="num">0.4286</td>
+          <td>简单统计偏离很弱。</td>
+        </tr>
+        <tr>
+          <td>WADI</td><td>source-bottleneck-balanced</td><td class="num">1.0000</td>
+          <td class="num">0.5268</td><td class="num">0.3571</td><td class="num">0.6429</td><td class="num">0.7143</td>
+          <td>源瓶颈有效。</td>
+        </tr>
+        <tr>
+          <td>WADI</td><td>source-bottleneck-specificity</td><td class="num">1.0000</td>
+          <td class="num">0.5960</td><td class="num">0.5000</td><td class="num">0.7143</td><td class="num">0.7143</td>
+          <td>文档中最强变量级结果；journal validation 15 epoch 为 MRR 0.5873。</td>
+        </tr>
+        <tr>
+          <td>SWaT</td><td>z-score baseline</td><td class="num">0.9394</td>
+          <td class="num">0.3201</td><td class="num">0.1515</td><td class="num">0.4242</td><td class="num">0.4848</td>
+          <td>统计偏离有一定效果，但 top-1 明显弱。</td>
+        </tr>
+        <tr>
+          <td>SWaT</td><td>correlation prior</td><td class="num">0.9394</td>
+          <td class="num">0.2550</td><td class="num">0.1212</td><td class="num">0.2727</td><td class="num">0.2727</td>
+          <td>静态相关图不能直接解决源变量排序。</td>
+        </tr>
+        <tr>
+          <td>SWaT</td><td>source-bottleneck-specificity</td><td class="num">0.9394</td>
+          <td class="num">0.5087</td><td class="num">0.3939</td><td class="num">0.5758</td><td class="num">0.6667</td>
+          <td>当前 SWaT 主结果；journal validation proof_main_swat_e8 为 MRR 0.5069。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>7.3 消融：哪些模块有价值，哪些有风险</h3>
+    <table>
+      <thead>
+        <tr><th>消融/候选</th><th>WADI 观察</th><th>SWaT 观察</th><th>结论</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>no source-propagation</td>
+          <td>Var-MRR 从主线约 0.560/0.596 降到 0.2417。</td>
+          <td>Var-MRR 降到 0.4429。</td>
+          <td><span class="tag green">强支持</span> source/propagation 分解对变量级 RCA 重要。</td>
+        </tr>
+        <tr>
+          <td>no source gate</td>
+          <td>Var-MRR 降到 0.4447。</td>
+          <td>Var-MRR 降到 0.4815。</td>
+          <td><span class="tag green">支持</span> 源门控不是只做展示，对排序有贡献。</td>
+        </tr>
+        <tr>
+          <td>no source bottleneck</td>
+          <td>Var-MRR 降到 0.4426。</td>
+          <td>接近主线，0.4956。</td>
+          <td><span class="tag orange">部分支持</span> WADI 明显，SWaT 不明显。</td>
+        </tr>
+        <tr>
+          <td>no mechanism</td>
+          <td>WADI 降到约 0.4575/0.4680。</td>
+          <td>SWaT 反而高于主线，0.5547 或 proof 0.5421。</td>
+          <td><span class="tag red">主要风险</span> 机制分量对 WADI 有用，但 SWaT 上可能伤害排序。</td>
+        </tr>
+        <tr>
+          <td>source-preserving fusion</td>
+          <td>WADI e15 接近主线，0.5871。</td>
+          <td>SWaT e8 到 0.5130，略高于主线 e8。</td>
+          <td><span class="tag orange">候选</span> 有潜力，但不是压倒性提升。</td>
+        </tr>
+        <tr>
+          <td>mechanism-prior-graph</td>
+          <td>早期主要用于图边 faithfulness。</td>
+          <td>检测/RCA 基本持平。</td>
+          <td><span class="tag blue">解释候选</span> 价值在 learned-edge faithfulness，而非检测提升。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>7.4 子系统级 RCA：好看但不是主贡献</h3>
+    <p>
+      子系统级结果整体较好，例如 SWaT 主线 Subsys-MRR 可到 0.8102 左右，WADI 约 0.79。
+      但 WADI 的 z-score 子系统 MRR 已达到 0.7679，说明粗粒度定位并不难。
+      因此子系统级结果适合作为“层级诊断”辅助证据，不应替代变量级 RCA 主表。
+    </p>
+  </section>
+
+  <section id="limitations">
+    <h2>8. 不足与审稿风险</h2>
+    <table>
+      <thead>
+        <tr><th>风险</th><th>当前状态</th><th>导师讨论要点/应对策略</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>检测不是 SOTA</td>
+          <td>WADI/SWaT raw F1 明显弱于常见检测论文；Affiliation F1 较可用。</td>
+          <td>论文定位为诊断/RCA，不与 GDN、TranAD 等正面比检测 SOTA；透明报告 raw 与 adjusted。</td>
+        </tr>
+        <tr>
+          <td>机制分量不稳定</td>
+          <td>WADI 上 no mechanism 明显变差，但 SWaT 上 no mechanism 反而更好。</td>
+          <td>机制证据不能写成普适提升；需要自适应机制强度或数据集条件分析。</td>
+        </tr>
+        <tr>
+          <td>不能声称因果发现</td>
+          <td>当前通道图主要是依赖图/机制图，缺少严格干预或识别假设。</td>
+          <td>用 “mechanism-aware”、 “causal-inspired”、 “graph-guided”，避免 “causal discovery”。</td>
+        </tr>
+        <tr>
+          <td>事件特异性可能像后处理校准</td>
+          <td>specificity 对 WADI 有提升，但属于导出阶段约束。</td>
+          <td>补 no-specificity、在线历史事件版本、seed 稳定性，说明没有用标签调单事件。</td>
+        </tr>
+        <tr>
+          <td>外部强 RCA baseline 未统一复现</td>
+          <td>AERCA/CIRCA/REASON/CORAL/LEMMA-RCA 等主要是背景对齐。</td>
+          <td>正式投稿前至少复现 1-2 个强 RCA baseline 到本文 predicted-event 协议。</td>
+        </tr>
+        <tr>
+          <td>seed 稳定性不足</td>
+          <td>当前大量结果是单 seed 或少量筛选实验。</td>
+          <td>需要 3-5 seed 均值、标准差、bootstrap CI 或 paired test。</td>
+        </tr>
+        <tr>
+          <td>标签粒度不一致</td>
+          <td>WADI/SWaT 可做变量级，HAI 主要是子系统级。</td>
+          <td>主表只放 WADI/SWaT 变量级；HAI 作为粗粒度/faithfulness 补充。</td>
+        </tr>
+        <tr>
+          <td>系统开关过多，像模块堆叠</td>
+          <td>代码 profile 很多，文档也有大量候选。</td>
+          <td>论文必须冻结一个主 profile，其余放消融或失败实验，不把所有模块都写成贡献。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="next">
+    <h2>9. 下一步计划</h2>
+    <h3>9.1 最优先补强</h3>
+    <ol>
+      <li>
+        <b>冻结主实验协议：</b>明确默认 profile、epoch、checkpoint policy、prediction key、RCA label registry、事件匹配规则。
+      </li>
+      <li>
+        <b>补齐主表：</b>WADI/SWaT 变量级 predicted-event RCA，外加 raw/adjusted/Affiliation 检测完整表。
+      </li>
+      <li>
+        <b>补核心消融：</b>residual-only、z-score、correlation graph、random graph、no source gate、no bottleneck、no propagation、no specificity、no mechanism。
+      </li>
+      <li>
+        <b>补稳定性：</b>至少 3 seed，报告 MRR/Hit@K 的均值、标准差、置信区间。
+      </li>
+      <li>
+        <b>补案例图：</b>WADI 成功案例、SWaT 成功/近失误案例、失败案例，展示真实根因、top-k 排名、残差排序和 LaGraph 排序差异。
+      </li>
+    </ol>
+
+    <h3>9.2 中期补强</h3>
+    <ul>
+      <li>把 AERCA/RCD/CIRCA/REASON/CORAL 中至少 1-2 个代表性 RCA baseline 迁移到当前 predicted-event 协议。</li>
+      <li>对 mechanism 分量做数据集条件分析：什么时候机制分量有用，什么时候会把 SWaT 排名带偏。</li>
+      <li>将 event-specificity 从批量后处理改成在线历史事件版本，降低审稿风险。</li>
+      <li>补充 graph-edge faithfulness 正式实验，不停留在 smoke check。</li>
+    </ul>
+
+    <h3>9.3 长期方向</h3>
+    <ul>
+      <li>从同时间依赖图发展到 lagged mechanism / Granger-style 约束，使“机制”更接近可检验因果结构。</li>
+      <li>引入 edge-level counterfactual 或 interventional masking，证明图边不是装饰性解释。</li>
+      <li>寻找更多带变量级 RCA 标签的工业控制数据集，避免 WADI/SWaT 过窄。</li>
+    </ul>
+  </section>
+
+  <section id="talk">
+    <h2>10. 汇报建议与可讨论问题</h2>
+    <h3>10.1 建议汇报主线</h3>
+    <ol>
+      <li><b>先讲场景：</b>工业异常会沿设备连接、控制回路和工艺流程传播，最大异常分数不一定对应故障源。</li>
+      <li><b>再讲科学问题：</b>在模型预测出的异常事件内，如何避免下游响应变量被排在真正故障源变量前面。</li>
+      <li><b>讲技术方案：</b>重构主干负责发现事件，图结构约束的多证据可学习排序负责在事件内给出变量级根因排名。</li>
+      <li><b>讲证据：</b>WADI/SWaT 变量级 RCA 在 MRR 和 Hit@K 上超过 residual-only、z-score、random、static graph 等本地基线。</li>
+      <li><b>主动讲风险：</b>不是检测 SOTA，不是因果发现，机制分量对 SWaT 不稳定。</li>
+      <li><b>最后请导师判断：</b>论文应该主打预测事件内变量级根因排序，还是继续补机制图/因果图贡献。</li>
+    </ol>
+
+    <h3>10.2 可以直接问导师的问题</h3>
+    <ul>
+      <li>当前论文是否应该放弃“通用异常检测 SOTA”叙事，转向 “industrial predicted-event RCA”？</li>
+      <li>source-bottleneck-specificity 是否足够作为主方法，还是需要把 mechanism-prior-graph 的图边可信度也纳入主贡献？</li>
+      <li>SWaT 上 no mechanism 反而更好的现象，应该作为负向结果诚实报告，还是继续设计 adaptive mechanism gate？</li>
+      <li>event-specificity 属于导出阶段校准，导师是否接受它作为方法贡献，还是需要改成训练期/在线版本？</li>
+      <li>投稿目标更适合 EAAI/ESWA/KBS 这类应用 AI 期刊，还是继续补强后冲 IEEE TII/TASE？</li>
+      <li>外部 baseline 优先复现 AERCA、REASON/CORAL，还是更简单的 occlusion/gradient/Granger baseline？</li>
+    </ul>
+
+    <h3>10.3 一页总结稿</h3>
+    <div class="ok">
+      <p>
+        <b>推荐口径：</b>
+        我们现在不把 LaGraph 讲成一个新的通用异常检测 SOTA，而把它讲成工业异常诊断框架。
+        当前最强证据是预测事件内变量级根因排序：模型自己先预测异常事件，再在事件内对变量进行根因相关性排序。
+        这个问题的核心难点是异常传播会放大下游响应变量，导致单一异常分数难以稳定指示故障源。
+        WADI 和 SWaT 上，图结构约束的多证据可学习排序在 MRR 和 Hit@1 上明显超过随机、z-score 和静态相关图基线。
+        同时我们也发现机制图并非稳定提升所有数据集，因此论文应该克制地声称面向工业异常传播的变量级根因排序，
+        而不是严格因果发现。
+      </p>
+    </div>
+  </section>
+
+  <section id="sources">
+    <h2>11. 依据文件</h2>
+    <p>本报告基于本地项目文件阅读和汇总，未重新运行实验。主要依据如下：</p>
+    <ul class="source-list">
+      <li><code>D:\la_v12\docs\MANUSCRIPT_DRAFT_ZH_2026_06_07.md</code>：中文论文草稿，包含 LaGraph-SB 问题定义、方法、WADI/SWaT 主结果和待补清单。</li>
+      <li><code>D:\la_v12\docs\ARCHITECTURE.md</code>：架构演化、mechanism graph、graph faithfulness、模块定位和已知限制。</li>
+      <li><code>D:\la_v12\docs\RCA_EVALUATION_PROTOCOL.md</code>：RCA 数据集角色、统一标签注册表、predicted-event 匹配规则和实验协议。</li>
+      <li><code>D:\la_v12\docs\PAPER_REVIEW_RISK_AND_SCOPE.md</code>：审稿风险、主张边界、推荐贡献集合。</li>
+      <li><code>D:\la_v12\docs\VENUE_AND_RESULT_POSITIONING_2026_06_07.md</code>：结果水平、投稿定位、必须补充实验。</li>
+      <li><code>D:\la_v12\docs\VARIABLE_LEVEL_RCA_LITERATURE_POSITIONING_2026_06_07.md</code>：变量级 RCA 文献定位和外部比较边界。</li>
+      <li><code>D:\la_v12\result\analysis\journal_validation\journal_validation_summary.md</code>：WADI/SWaT 主线、消融和候选实验汇总。</li>
+      <li><code>D:\la_v12\result\analysis\journal_validation\journal_validation_main_table.md</code>：主实验表。</li>
+      <li><code>D:\la_v12\result\analysis\journal_validation\journal_validation_interpretation.md</code>：固定主模型和消融解读。</li>
+      <li><code>D:\la_v12\result\analysis\mechanism_isolation\mechanism_isolation_summary.md</code>：机制分量隔离实验。</li>
+      <li><code>D:\la_v12\result\analysis\mechanism_gap\swat_source_specificity_summary.md</code>：SWaT source-specificity 快速筛选。</li>
+      <li><code>D:\la_v12\ts_benchmark\run_single.py</code>、<code>LaGraph.py</code>、<code>gcn_model.py</code>、<code>graph_learner.py</code>：核心实现和 profile 配置。</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

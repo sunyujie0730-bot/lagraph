@@ -24,6 +24,8 @@ result/
 *.7z
 
 # Logs and checkpoints
+logs/
+tmp_analysis/
 *.log
 *.out
 *.err
