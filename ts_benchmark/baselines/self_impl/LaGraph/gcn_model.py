@@ -397,10 +397,15 @@ class RootResponseRCAHead(nn.Module):
         hidden,
         dropout=0.1,
         response_penalty_init=1.0,
+        source_confidence_discount=0.75,
     ):
         super().__init__()
         hidden = max(8, min(int(hidden), 16))
         response_hidden = max(4, min(hidden // 2, 8))
+        self.source_confidence_discount = min(
+            max(float(source_confidence_discount), 0.0),
+            0.95,
+        )
         self.source_net = nn.Sequential(
             nn.Linear(source_dim, hidden),
             nn.GELU(),
@@ -423,9 +428,18 @@ class RootResponseRCAHead(nn.Module):
     def forward(self, source_features, response_features):
         source_evidence = self.source_net(source_features).squeeze(-1)
         response_evidence = F.softplus(self.response_net(response_features).squeeze(-1))
+        source_confidence = torch.sigmoid(source_evidence)
+        response_discount = 1.0 - self.source_confidence_discount * source_confidence
+        effective_response_evidence = response_discount * response_evidence
         response_penalty = F.softplus(self.response_penalty_raw)
-        logits = source_evidence - response_penalty * response_evidence
-        return logits, source_evidence, response_evidence
+        logits = source_evidence - response_penalty * effective_response_evidence
+        return (
+            logits,
+            source_evidence,
+            response_evidence,
+            source_confidence,
+            effective_response_evidence,
+        )
 
 
 class SparseGCN(nn.Module):
@@ -520,6 +534,7 @@ class SparseGCN(nn.Module):
                  root_score_head_mode="mlp",
                  root_score_detach_features=True,
                  root_response_penalty_init=1.0,
+                 root_response_confidence_discount=0.75,
                  use_channel_temporal_corefinement=False,
                  corefinement_init=0.10,
                  corefinement_detach_first_pass=True,
@@ -599,6 +614,10 @@ class SparseGCN(nn.Module):
         self.root_score_head_mode = str(root_score_head_mode or "mlp").lower()
         self.root_score_detach_features = bool(root_score_detach_features)
         self.root_response_penalty_init = float(root_response_penalty_init)
+        self.root_response_confidence_discount = min(
+            max(float(root_response_confidence_discount), 0.0),
+            0.95,
+        )
         self.use_channel_temporal_corefinement = bool(use_channel_temporal_corefinement)
         self.corefinement_init = float(corefinement_init)
         self.corefinement_detach_first_pass = bool(corefinement_detach_first_pass)
@@ -829,6 +848,7 @@ class SparseGCN(nn.Module):
                 hidden=root_hidden,
                 dropout=dropout,
                 response_penalty_init=self.root_response_penalty_init,
+                source_confidence_discount=self.root_response_confidence_discount,
             )
         else:
             self.root_score_head = nn.Sequential(
@@ -1177,6 +1197,8 @@ class SparseGCN(nn.Module):
         root_score_logits = None
         root_response_source_evidence = None
         root_response_response_evidence = None
+        root_response_source_confidence = None
+        root_response_effective_response_evidence = None
 
         if self.use_lagged_causal_graph and self.lagged_causal_graph is not None:
             causal_input = resid.detach() if self.causal_detach_backbone else resid
@@ -1504,6 +1526,8 @@ class SparseGCN(nn.Module):
                     root_score_logits,
                     root_response_source_evidence,
                     root_response_response_evidence,
+                    root_response_source_confidence,
+                    root_response_effective_response_evidence,
                 ) = self.root_score_head(source_features, response_features)
             else:
                 root_features = torch.stack(
@@ -1573,6 +1597,12 @@ class SparseGCN(nn.Module):
             aux_losses['root_response_source_evidence'] = root_response_source_evidence
         if root_response_response_evidence is not None:
             aux_losses['root_response_response_evidence'] = root_response_response_evidence
+        if root_response_source_confidence is not None:
+            aux_losses['root_response_source_confidence'] = root_response_source_confidence
+        if root_response_effective_response_evidence is not None:
+            aux_losses['root_response_effective_response_evidence'] = (
+                root_response_effective_response_evidence
+            )
         if synthetic_logits is not None:
             aux_losses['synthetic_logits'] = synthetic_logits
         if synthetic_rca_logits is not None:

@@ -143,6 +143,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "root_score_head_mode": "mlp",
     "root_score_detach_features": True,
     "root_response_penalty_init": 1.0,
+    "root_response_confidence_discount": 0.75,
     "lambda_source_effect_root_score": 0.0,
     "root_score_bce_weight": 1.0,
     "root_score_rank_weight": 1.0,
@@ -278,6 +279,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_synthetic_weight": 0.0,
     "rca_source_gate_weight": 0.0,
     "rca_root_score_weight": 0.0,
+    "rca_root_score_signal": "prob",
     "rca_root_score_pooling": "mean",
     "rca_root_score_head_ratio": 0.30,
     "rca_root_score_head_points": 30,
@@ -1309,6 +1311,9 @@ class LaGraph:
                 "root_response_penalty_init": getattr(
                     self.config, "root_response_penalty_init", None
                 ),
+                "root_response_confidence_discount": getattr(
+                    self.config, "root_response_confidence_discount", None
+                ),
                 "lambda_source_effect_root_score": getattr(
                     self.config, "lambda_source_effect_root_score", None
                 ),
@@ -1419,6 +1424,7 @@ class LaGraph:
                 "rca_source_base_weight": getattr(self.config, "rca_source_base_weight", None),
                 "rca_source_score_weight": getattr(self.config, "rca_source_score_weight", None),
                 "rca_root_score_weight": getattr(self.config, "rca_root_score_weight", None),
+                "rca_root_score_signal": getattr(self.config, "rca_root_score_signal", None),
                 "rca_source_consensus_weight": getattr(self.config, "rca_source_consensus_weight", None),
                 "rca_onset_consensus_weight": getattr(self.config, "rca_onset_consensus_weight", None),
                 "rca_source_consensus_mode": getattr(self.config, "rca_source_consensus_mode", None),
@@ -3069,6 +3075,11 @@ class LaGraph:
             root_score_head_mode=getattr(self.config, "root_score_head_mode", "mlp"),
             root_score_detach_features=getattr(self.config, "root_score_detach_features", True),
             root_response_penalty_init=getattr(self.config, "root_response_penalty_init", 1.0),
+            root_response_confidence_discount=getattr(
+                self.config,
+                "root_response_confidence_discount",
+                0.75,
+            ),
             use_channel_temporal_corefinement=getattr(
                 self.config, "use_channel_temporal_corefinement", False
             ),
@@ -3441,6 +3452,11 @@ class LaGraph:
             root_score_head_mode=getattr(self.config, "root_score_head_mode", "mlp"),
             root_score_detach_features=getattr(self.config, "root_score_detach_features", True),
             root_response_penalty_init=getattr(self.config, "root_response_penalty_init", 1.0),
+            root_response_confidence_discount=getattr(
+                self.config,
+                "root_response_confidence_discount",
+                0.75,
+            ),
             use_channel_temporal_corefinement=getattr(
                 self.config, "use_channel_temporal_corefinement", False
             ),
@@ -3714,6 +3730,9 @@ class LaGraph:
                 "root_response_penalty_init": getattr(
                     self.config, "root_response_penalty_init", None
                 ),
+                "root_response_confidence_discount": getattr(
+                    self.config, "root_response_confidence_discount", None
+                ),
                 "lambda_source_effect_root_score": getattr(
                     self.config, "lambda_source_effect_root_score", None
                 ),
@@ -3732,6 +3751,7 @@ class LaGraph:
                     self.config, "root_response_response_suppress_weight", None
                 ),
                 "rca_root_score_weight": getattr(self.config, "rca_root_score_weight", None),
+                "rca_root_score_signal": getattr(self.config, "rca_root_score_signal", None),
                 "rca_root_score_pooling": getattr(self.config, "rca_root_score_pooling", None),
                 "rca_root_score_head_ratio": getattr(self.config, "rca_root_score_head_ratio", None),
                 "rca_root_score_head_points": getattr(self.config, "rca_root_score_head_points", None),
@@ -4042,7 +4062,19 @@ class LaGraph:
             )
         root_score_err = None
         if aux_losses:
-            root_score_err = aux_losses.get("root_score_prob")
+            root_score_signal = str(
+                getattr(self.config, "rca_root_score_signal", "prob") or "prob"
+            ).lower()
+            if root_score_signal in {"source_confidence", "confidence", "source_prob"}:
+                root_score_err = aux_losses.get("root_response_source_confidence")
+            elif root_score_signal in {"source_evidence", "source"}:
+                source_evidence = aux_losses.get("root_response_source_evidence")
+                if source_evidence is not None:
+                    root_score_err = torch.sigmoid(source_evidence)
+            elif root_score_signal in {"logit", "logits", "raw_logit"}:
+                root_score_err = aux_losses.get("root_score_logits")
+            if root_score_err is None:
+                root_score_err = aux_losses.get("root_score_prob")
         if root_score_err is None:
             root_score_err = torch.zeros_like(channel_err)
         return (
@@ -6009,6 +6041,7 @@ class LaGraph:
         synthetic_weight = _cfg_float("rca_synthetic_weight", 0.0)
         source_gate_weight = _cfg_float("rca_source_gate_weight", 0.0)
         root_score_weight = _cfg_float("rca_root_score_weight", 0.0)
+        root_score_signal = str(getattr(self.config, "rca_root_score_signal", "prob") or "prob")
         root_score_pooling = str(getattr(self.config, "rca_root_score_pooling", "mean") or "mean")
         root_score_head_ratio = _cfg_float("rca_root_score_head_ratio", 0.30)
         root_score_head_points = _cfg_int("rca_root_score_head_points", 30)
@@ -6617,6 +6650,7 @@ class LaGraph:
             "rca_synthetic_weight": synthetic_weight,
             "rca_source_gate_weight": source_gate_weight,
             "rca_root_score_weight": root_score_weight,
+            "rca_root_score_signal": root_score_signal,
             "rca_root_score_pooling": root_score_pooling,
             "rca_root_score_head_ratio": root_score_head_ratio,
             "rca_root_score_head_points": root_score_head_points,
@@ -6725,6 +6759,10 @@ class LaGraph:
             "root_response_source_branch_weight": _cfg_float(
                 "root_response_source_branch_weight",
                 0.0,
+            ),
+            "root_response_confidence_discount": _cfg_float(
+                "root_response_confidence_discount",
+                0.75,
             ),
             "root_response_response_branch_weight": _cfg_float(
                 "root_response_response_branch_weight",

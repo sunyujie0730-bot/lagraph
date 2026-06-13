@@ -587,6 +587,12 @@ def main():
         help="Initial penalty applied to graph-supported response evidence in the root-response RCA head.",
     )
     parser.add_argument(
+        "--root-response-confidence-discount",
+        type=float,
+        default=None,
+        help="Maximum source-confidence discount applied to response evidence in the root-response RCA head.",
+    )
+    parser.add_argument(
         "--root-response-source-branch-weight",
         type=float,
         default=None,
@@ -829,6 +835,12 @@ def main():
         type=float,
         default=None,
         help="Weight for learned RootScore evidence inside RCA rankings.",
+    )
+    parser.add_argument(
+        "--rca-root-score-signal",
+        choices=["prob", "source_confidence", "source_evidence", "logit"],
+        default=None,
+        help="Neural signal exported as learned RootScore evidence in RCA rankings.",
     )
     parser.add_argument(
         "--rca-root-score-pooling",
@@ -2875,6 +2887,7 @@ def main():
         root_score_head_mode="root_response",
         root_score_detach_features=False,
         root_response_penalty_init=1.0,
+        root_response_confidence_discount=0.75,
         lambda_source_effect_root_score=2.0,
         root_score_bce_weight=1.0,
         root_score_rank_weight=1.0,
@@ -2883,6 +2896,7 @@ def main():
         root_response_response_branch_weight=0.35,
         root_response_response_suppress_weight=0.50,
         rca_root_score_weight=0.60,
+        rca_root_score_signal="prob",
         rca_root_score_pooling="mean",
         rca_root_score_head_ratio=0.30,
         rca_root_score_head_points=30,
@@ -3284,6 +3298,11 @@ def main():
         score_hyper_params["root_response_penalty_init"] = max(
             1e-4, float(args.root_response_penalty_init)
         )
+    if args.root_response_confidence_discount is not None:
+        score_hyper_params["root_response_confidence_discount"] = min(
+            max(0.0, float(args.root_response_confidence_discount)),
+            0.95,
+        )
     if args.root_response_source_branch_weight is not None:
         score_hyper_params["root_response_source_branch_weight"] = max(
             0.0, float(args.root_response_source_branch_weight)
@@ -3331,6 +3350,8 @@ def main():
         score_hyper_params["rca_source_gate_weight"] = max(0.0, float(args.rca_source_gate_weight))
     if args.rca_root_score_weight is not None:
         score_hyper_params["rca_root_score_weight"] = max(0.0, float(args.rca_root_score_weight))
+    if args.rca_root_score_signal is not None:
+        score_hyper_params["rca_root_score_signal"] = args.rca_root_score_signal
     if args.rca_root_score_pooling is not None:
         score_hyper_params["rca_root_score_pooling"] = args.rca_root_score_pooling
     if args.rca_root_score_head_ratio is not None:
