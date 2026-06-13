@@ -140,6 +140,9 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "source_effect_rca_head_bce_weight": 1.0,
     "source_effect_rca_head_rank_weight": 1.0,
     "use_root_score_head": False,
+    "root_score_head_mode": "mlp",
+    "root_score_detach_features": True,
+    "root_response_penalty_init": 1.0,
     "lambda_source_effect_root_score": 0.0,
     "root_score_bce_weight": 1.0,
     "root_score_rank_weight": 1.0,
@@ -1292,6 +1295,13 @@ class LaGraph:
                     self.config, "source_effect_rca_head_rank_weight", None
                 ),
                 "use_root_score_head": getattr(self.config, "use_root_score_head", None),
+                "root_score_head_mode": getattr(self.config, "root_score_head_mode", None),
+                "root_score_detach_features": getattr(
+                    self.config, "root_score_detach_features", None
+                ),
+                "root_response_penalty_init": getattr(
+                    self.config, "root_response_penalty_init", None
+                ),
                 "lambda_source_effect_root_score": getattr(
                     self.config, "lambda_source_effect_root_score", None
                 ),
@@ -2963,6 +2973,9 @@ class LaGraph:
             use_source_gate=getattr(self.config, "use_source_gate", False),
             source_gate_init=getattr(self.config, "source_gate_init", 0.20),
             use_root_score_head=getattr(self.config, "use_root_score_head", False),
+            root_score_head_mode=getattr(self.config, "root_score_head_mode", "mlp"),
+            root_score_detach_features=getattr(self.config, "root_score_detach_features", True),
+            root_response_penalty_init=getattr(self.config, "root_response_penalty_init", 1.0),
             use_channel_temporal_corefinement=getattr(
                 self.config, "use_channel_temporal_corefinement", False
             ),
@@ -3332,6 +3345,9 @@ class LaGraph:
             use_source_gate=getattr(self.config, "use_source_gate", False),
             source_gate_init=getattr(self.config, "source_gate_init", 0.20),
             use_root_score_head=getattr(self.config, "use_root_score_head", False),
+            root_score_head_mode=getattr(self.config, "root_score_head_mode", "mlp"),
+            root_score_detach_features=getattr(self.config, "root_score_detach_features", True),
+            root_response_penalty_init=getattr(self.config, "root_response_penalty_init", 1.0),
             use_channel_temporal_corefinement=getattr(
                 self.config, "use_channel_temporal_corefinement", False
             ),
@@ -3598,6 +3614,13 @@ class LaGraph:
                 "lambda_source_effect": getattr(self.config, "lambda_source_effect", None),
                 "source_effect_interval": getattr(self.config, "source_effect_interval", None),
                 "use_root_score_head": getattr(self.config, "use_root_score_head", None),
+                "root_score_head_mode": getattr(self.config, "root_score_head_mode", None),
+                "root_score_detach_features": getattr(
+                    self.config, "root_score_detach_features", None
+                ),
+                "root_response_penalty_init": getattr(
+                    self.config, "root_response_penalty_init", None
+                ),
                 "lambda_source_effect_root_score": getattr(
                     self.config, "lambda_source_effect_root_score", None
                 ),

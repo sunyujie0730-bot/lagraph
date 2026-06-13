@@ -381,6 +381,53 @@ class StateAwareGraphFusion(nn.Module):
         return entropy / max(np.log(self.num_states), 1e-8)
 
 
+class RootResponseRCAHead(nn.Module):
+    """Root-response decomposition head for variable-level RCA.
+
+    The head keeps a structural sign constraint: source evidence increases a
+    variable's RCA logit, while graph-supported response evidence decreases it.
+    This turns the diagnostic prior into an inductive bias instead of a
+    post-hoc weighted score.
+    """
+
+    def __init__(
+        self,
+        source_dim,
+        response_dim,
+        hidden,
+        dropout=0.1,
+        response_penalty_init=1.0,
+    ):
+        super().__init__()
+        hidden = max(8, min(int(hidden), 16))
+        response_hidden = max(4, min(hidden // 2, 8))
+        self.source_net = nn.Sequential(
+            nn.Linear(source_dim, hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden, 1),
+        )
+        self.response_net = nn.Sequential(
+            nn.Linear(response_dim, response_hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(response_hidden, 1),
+        )
+        init = max(float(response_penalty_init), 1e-4)
+        self.response_penalty_raw = nn.Parameter(
+            torch.tensor(float(np.log(np.expm1(init)))),
+        )
+        nn.init.constant_(self.source_net[-1].bias, -2.0)
+        nn.init.constant_(self.response_net[-1].bias, 0.0)
+
+    def forward(self, source_features, response_features):
+        source_evidence = self.source_net(source_features).squeeze(-1)
+        response_evidence = F.softplus(self.response_net(response_features).squeeze(-1))
+        response_penalty = F.softplus(self.response_penalty_raw)
+        logits = source_evidence - response_penalty * response_evidence
+        return logits, source_evidence, response_evidence
+
+
 class SparseGCN(nn.Module):
     """
     SparseLaGraph v11.2 — 极简双图协同异常检测模型
@@ -470,6 +517,9 @@ class SparseGCN(nn.Module):
                  use_source_gate=False,
                  source_gate_init=0.20,
                  use_root_score_head=False,
+                 root_score_head_mode="mlp",
+                 root_score_detach_features=True,
+                 root_response_penalty_init=1.0,
                  use_channel_temporal_corefinement=False,
                  corefinement_init=0.10,
                  corefinement_detach_first_pass=True,
@@ -546,6 +596,9 @@ class SparseGCN(nn.Module):
         self.use_source_gate = bool(use_source_gate)
         self.source_gate_init = float(source_gate_init)
         self.use_root_score_head = bool(use_root_score_head)
+        self.root_score_head_mode = str(root_score_head_mode or "mlp").lower()
+        self.root_score_detach_features = bool(root_score_detach_features)
+        self.root_response_penalty_init = float(root_response_penalty_init)
         self.use_channel_temporal_corefinement = bool(use_channel_temporal_corefinement)
         self.corefinement_init = float(corefinement_init)
         self.corefinement_detach_first_pass = bool(corefinement_detach_first_pass)
@@ -765,13 +818,26 @@ class SparseGCN(nn.Module):
         self.source_gate_bias = nn.Parameter(torch.full((1, 1, c_out), source_gate_bias))
 
         root_hidden = max(16, min(64, c_out))
-        self.root_score_head = nn.Sequential(
-            nn.Linear(7, root_hidden),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(root_hidden, 1),
-        )
-        nn.init.constant_(self.root_score_head[-1].bias, -2.0)
+        if self.root_score_head_mode in {
+            "root_response",
+            "root-response",
+            "response_decomposition",
+        }:
+            self.root_score_head = RootResponseRCAHead(
+                source_dim=8,
+                response_dim=3,
+                hidden=root_hidden,
+                dropout=dropout,
+                response_penalty_init=self.root_response_penalty_init,
+            )
+        else:
+            self.root_score_head = nn.Sequential(
+                nn.Linear(7, root_hidden),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(root_hidden, 1),
+            )
+            nn.init.constant_(self.root_score_head[-1].bias, -2.0)
 
         self.vq_bottleneck = VQBottleneck(
             dim=c_out,
@@ -1109,6 +1175,8 @@ class SparseGCN(nn.Module):
         source_gate = None
         source_gate_score = None
         root_score_logits = None
+        root_response_source_evidence = None
+        root_response_response_evidence = None
 
         if self.use_lagged_causal_graph and self.lagged_causal_graph is not None:
             causal_input = resid.detach() if self.causal_detach_backbone else resid
@@ -1386,21 +1454,73 @@ class SparseGCN(nn.Module):
             graph_delta = torch.abs(resid_adapted - resid)
             stage_delta = torch.abs(stage1_feat - resid)
             recon_error = torch.abs(x_rec - x)
-            root_features = torch.stack(
-                [
-                    torch.log1p(recon_error),
-                    torch.log1p(torch.abs(resid)),
-                    torch.log1p(torch.abs(mechanism_error_feat)),
-                    torch.log1p(torch.abs(causal_error_feat)),
-                    gate_feat,
-                    torch.log1p(graph_delta),
-                    torch.log1p(stage_delta),
-                ],
-                dim=-1,
-            )
-            if self.training:
-                root_features = root_features.detach()
-            root_score_logits = self.root_score_head(root_features).squeeze(-1)
+            if self.root_score_head_mode in {
+                "root_response",
+                "root-response",
+                "response_decomposition",
+            }:
+                if recon_error.shape[1] > 1:
+                    prev_recon_error = torch.cat(
+                        [torch.zeros_like(recon_error[:, :1, :]), recon_error[:, :-1, :]],
+                        dim=1,
+                    )
+                else:
+                    prev_recon_error = torch.zeros_like(recon_error)
+                onset_delta = torch.relu(recon_error - prev_recon_error)
+                source_flow = gate_feat * recon_error
+                if self.use_channel_graph:
+                    propagation_support = self._graph_neighbor_context(
+                        source_flow,
+                        A_adaptive,
+                    ).clamp_min(0.0)
+                else:
+                    propagation_support = torch.zeros_like(recon_error)
+                propagation_gap = torch.abs(recon_error - propagation_support)
+                source_features = torch.stack(
+                    [
+                        torch.log1p(recon_error),
+                        torch.log1p(torch.abs(resid)),
+                        torch.log1p(torch.abs(mechanism_error_feat)),
+                        torch.log1p(torch.abs(causal_error_feat)),
+                        gate_feat,
+                        torch.log1p(stage_delta),
+                        torch.log1p(onset_delta),
+                        torch.log1p(source_flow),
+                    ],
+                    dim=-1,
+                )
+                response_features = torch.stack(
+                    [
+                        torch.log1p(propagation_support),
+                        torch.log1p(graph_delta),
+                        torch.log1p(propagation_gap),
+                    ],
+                    dim=-1,
+                )
+                if self.training and self.root_score_detach_features:
+                    source_features = source_features.detach()
+                    response_features = response_features.detach()
+                (
+                    root_score_logits,
+                    root_response_source_evidence,
+                    root_response_response_evidence,
+                ) = self.root_score_head(source_features, response_features)
+            else:
+                root_features = torch.stack(
+                    [
+                        torch.log1p(recon_error),
+                        torch.log1p(torch.abs(resid)),
+                        torch.log1p(torch.abs(mechanism_error_feat)),
+                        torch.log1p(torch.abs(causal_error_feat)),
+                        gate_feat,
+                        torch.log1p(graph_delta),
+                        torch.log1p(stage_delta),
+                    ],
+                    dim=-1,
+                )
+                if self.training and self.root_score_detach_features:
+                    root_features = root_features.detach()
+                root_score_logits = self.root_score_head(root_features).squeeze(-1)
 
         aux_losses = {}
         aux_losses['sparse_loss'] = self.get_sparse_loss()
@@ -1449,6 +1569,10 @@ class SparseGCN(nn.Module):
         if root_score_logits is not None:
             aux_losses['root_score_logits'] = root_score_logits
             aux_losses['root_score_prob'] = torch.sigmoid(root_score_logits)
+        if root_response_source_evidence is not None:
+            aux_losses['root_response_source_evidence'] = root_response_source_evidence
+        if root_response_response_evidence is not None:
+            aux_losses['root_response_response_evidence'] = root_response_response_evidence
         if synthetic_logits is not None:
             aux_losses['synthetic_logits'] = synthetic_logits
         if synthetic_rca_logits is not None:
