@@ -1,903 +1,157 @@
-# LaGraph Architecture
+# LaGraph Current Architecture
 
-Date: 2026-05-26
-Branch: `codex/5070-env-migration`
-Runtime target: RTX 5070 single GPU
+Date: 2026-06-17  
+Scope: current paper-facing architecture and active RCA research boundary.
 
-## Positioning
+## One-Sentence Positioning
 
-LaGraph is currently a compact reconstruction-based multivariate time-series
-anomaly detector. The stable main profile is `full`, which keeps the dual-graph
-representation, VQ regularization, EncoderStack temporal-scale encoding, and
-direct reconstruction anomaly scoring.
+LaGraph is currently a reconstruction-based multivariate time-series anomaly
+diagnosis framework. Its main paper value is not generic detector SOTA, but
+predicted-event root-cause ranking: after an anomaly event is detected, the
+system ranks likely source variables using residual, onset, mechanism-context,
+source-gate, and event-specific evidence.
 
-The current system should not be described as a large module-stacking method.
-Several earlier modules have been removed or moved to ablation-only status
-because recent experiments did not support them as reliable contributors.
+## Current Main Line
 
-The strongest current paper direction is:
-
-- a compact reconstruction backbone with channel-structure support;
-- hierarchical RCA and local counterfactual attribution;
-- transparent negative ablations showing why unused modules were removed;
-- efficiency and auditability as explicit paper objectives;
-- optional future extension toward explicit causal structure learning.
-
-Large metric gains are still possible, but they are unlikely to come from adding
-more generic blocks. The best remaining opportunities are causal/structural graph
-learning and score calibration. Until those are implemented and validated, the
-paper should emphasize interpretability, efficiency, and stability rather than
-claiming a universal metric lead.
-
-## Paper-Level Trade-Off Policy
-
-The current system should not be optimized as a detector-only leaderboard model.
-If the method cannot become SOTA on every dataset and metric, the paper should
-make an explicit trade: accept a small detection-performance gap only when it
-buys a measurable paper contribution. That contribution can be metric-based
-or explanation-based, but it must be evaluable.
-
-Acceptable trade-offs:
-
-| Trade-off | Acceptable only if | Reviewer risk |
-| --- | --- | --- |
-| Slightly lower raw F1 | Affiliation F1, RCA ranking, or delay improves under a fixed protocol | hiding weak point-wise detection |
-| Slightly lower adjusted F1 | Predicted-event RCA coverage and delay remain competitive | threshold or segment tuning |
-| Extra graph module | The learned structure is visualizable and gives faithful diagnostic evidence, even if detection metrics only tie | module stacking |
-| Removing a module | Runtime/parameter count drops and detection/RCA does not collapse | underpowered architecture |
-| Dataset-specific sensitivity | Reported as sensitivity, not promoted as a universal default | cherry-picking |
-| Interpretability-only module | It produces a clear formula, figure, case study, and ablation showing what explanation would be lost without it | system-feature drift |
-
-Non-acceptable trade-offs:
-
-- large raw F1 or adjusted F1 degradation with only a tiny affiliation gain;
-- post-processing that inflates event coverage but weakens RCA or precision;
-- a graph or causal module that cannot be explained in one figure;
-- an explanation module whose output is not faithful to model behavior or input perturbations;
-- any setting chosen only because it is best on the test labels.
-
-Practical paper stance:
+The stable reporting baseline is:
 
 ```text
-LaGraph is not positioned as a universal SOTA detector. It is positioned as a
-compact industrial anomaly diagnosis framework that balances detection,
-hierarchical RCA, interpretability, and single-GPU efficiency.
+source-bottleneck-specificity-rca
 ```
 
-This does not mean every main contribution must improve detection metrics. A
-module can be paper-worthy if it materially improves interpretability while
-leaving detection nearly unchanged. The review standard is whether the module
-supports a defensible scientific claim, not whether it adds another system
-feature.
-
-## Main Profile
-
-The default profile for reporting is `full`.
-
-| Component | Status | Role |
-| --- | --- | --- |
-| MoE decomposition | kept | separates trend and residual signals |
-| Channel adaptive graph | kept | models cross-variable dependency |
-| Fixed temporal graph | kept | provides stable temporal refinement |
-| Dual-path VQ bottleneck | kept | regularizes normal-pattern representation during training |
-| EncoderStack | kept | dynamic temporal-scale feature extraction |
-| Direct reconstruction scoring | kept | main anomaly ranking signal |
-| BoundaryDetector | removed | unsupported after simplification |
-| Multi-scale/VQ scorer | ablation only | old scoring path, not consistently better |
-| Prediction/contrastive/frequency/prototype switches | removed | dead switches in current single-run path |
-
-The strongest adaptive-temporal candidate is `dynamic-temporal-gated`. It
-replaces the fixed temporal graph with a content-adaptive temporal graph and a
-residual gate. It improves raw F1 and SWaT affiliation F1, but it is not a
-uniform replacement for `full` because MSL affiliation F1 and SWaT adjusted F1
-can drop.
-
-The newest research candidate is `state-aware`. It keeps the stable serial
-`full` path, estimates a latent operating state from each input window, and uses
-state-specific gates to decide how strongly a parallel channel/temporal graph
-fusion should correct the serial representation. This profile is intended to
-support the industrial multi-condition generalization narrative. It has passed
-smoke tests but does not yet have full 15-epoch benchmark results.
-
-The reviewer-driven graph candidates now separate three hypotheses.
-`prior-guided-graph` hard-mixes a normal-state correlation prior into the
-learned channel graph. It improves graph-neighbor faithfulness, but early HAI
-tests show that the hard prior can damage detection on distribution-shifted
-events. It is therefore a stress-test candidate rather than the main method.
-`structure-consistent` keeps the `full` forward backbone unchanged and uses the
-normal-state graph only as a weak alignment loss. It was tested as a conservative
-explanation candidate, but the learned-neighbor faithfulness margin did not
-change under stronger alignment weights. The current paper-level candidate is
-`mechanism-graph`: the channel graph must predict each variable from its
-non-self graph neighbors, and anomaly scoring includes the resulting mechanism
-violation. This creates a stronger story than graph regularization alone:
-industrial anomalies are treated as violations of normal inter-variable
-mechanisms, not merely as large point-wise reconstruction errors. The
-2026-05-26 HAI RCA ablation shows that this mechanism branch is useful as an
-interpretable explanation component, but it does not yet outperform base
-residual attribution as a standalone ranking signal. Therefore the paper claim
-should be mechanism-aware diagnosis, not mechanism-only SOTA RCA.
-
-Additional 2026-05-24 architecture candidates were tested but not promoted:
-`parallel-dual`, `parallel-dual-time`, `residual-dual`,
-`residual-dual-time`, `graph-shift`, `graph-shift-lite`, and
-`graph-shift-strong`. Lag-constrained causal branches were added as
-`causal-lag`, `causal-lag-score`, `causal-lag-score-strong`,
-`causal-cf-gain`, and `causal-cf-hurt`. Inference-time score aggregation
-variants and the `synthetic-aux` self-supervised perturbation profile were also
-added. These remain reproducibility profiles rather than main paper
-architecture until the gains are confirmed across more datasets and seeds.
-
-## System Flow
-
-```mermaid
-flowchart TD
-    accTitle: Mechanism-Graph LaGraph Architecture
-    accDescr: Current reviewer-facing LaGraph candidate where the channel graph must model normal inter-variable mechanisms and anomaly scoring combines reconstruction error with mechanism violation.
-
-    normal["Normal training prefix<br/>X_train"]
-    input["Input window<br/>(B, L, C)"]
-    decomp["MoE decomposition<br/>residual + trend"]
-    channel["ChannelAdaptiveGraph<br/>adaptive graph Gt"]
-    mech["Neighbor mechanism<br/>predict X_i from graph neighbors"]
-    mechscore["Mechanism violation score<br/>top-k |X - X_hat_graph|"]
-    temporal["SimplifiedTemporalGraph<br/>stable L x L temporal graph"]
-    vq["Dual-path VQ<br/>training-side regularization"]
-    proj["Projection + residual shortcut"]
-    encoder["EncoderStack<br/>dynamic temporal scales"]
-    recon["Reconstruction<br/>(B, L, C)"]
-    reconscore["Reconstruction score<br/>top-k channel L1 error"]
-    score["Unified anomaly score<br/>reconstruction + mechanism violation"]
-    threshold["Percentile/POT thresholding"]
-    output["Predicted anomaly labels"]
-    rca["Mechanism-aware RCA<br/>local residual + mechanism violation + graph support"]
-    faith["Reviewer evidence<br/>masking faithfulness + RCA Hit@K"]
-
-    input --> decomp
-    decomp --> channel
-    normal -.->|"normal score calibration"| mechscore
-    channel --> mech
-    decomp --> mech
-    mech --> mechscore
-    channel --> temporal
-    temporal --> vq
-    vq --> proj
-    proj --> encoder
-    encoder --> recon
-    recon --> reconscore
-    reconscore --> score
-    mechscore --> score
-    score --> threshold
-    threshold --> output
-    channel --> rca
-    recon --> rca
-    mechscore --> rca
-    rca --> faith
-
-    classDef core fill:#e8f1ff,stroke:#2563eb,stroke-width:1px,color:#111827
-    classDef score_cls fill:#eef8ee,stroke:#16a34a,stroke-width:1px,color:#111827
-    classDef mech_cls fill:#fff7ed,stroke:#ea580c,stroke-width:1px,color:#111827
-    classDef eval_cls fill:#f5f3ff,stroke:#7c3aed,stroke-width:1px,color:#111827
-    class input,decomp,channel,temporal,vq,proj,encoder,recon core
-    class reconscore,score,threshold,output score_cls
-    class normal,mech,mechscore mech_cls
-    class rca,faith eval_cls
-```
-
-The key design decision is that the graph is no longer only a feature
-transformation. In `mechanism-graph`, the adaptive channel graph defines a
-self-excluded neighbor mechanism: each variable should be predictable from its
-graph neighbors during normal operation. The mechanism residual is trained on
-normal windows and calibrated on normal scores, then fused with reconstruction
-error at inference. The same channel-level mechanism residual is exported for
-RCA, so each ranked variable contains `base_score`, `graph_score`, and
-`mechanism_score`. This makes the graph scientifically testable: if the graph
-is meaningful, masking graph-supported mechanism channels should affect the
-anomaly score more than random masking.
-
-## RCA Ablation Evidence
-
-The 2026-05-26 group-level HAI study evaluates five files
-(`HAI_21_03_test1` to `HAI_21_03_test5`) using exported mechanism-graph RCA
-reports. The evaluation separates true-event RCA from predicted-event RCA and
-compares four attribution variants:
-
-| Variant | Definition | Reviewer interpretation |
-| --- | --- | --- |
-| `exported` | ranking stored by the model export | deployed RCA output |
-| `base_only` | channel reconstruction residual only | strongest residual-attribution baseline |
-| `mechanism_only` | graph-neighbor mechanism violation only | tests whether the graph mechanism has independent signal |
-| `base_plus_mechanism` | residual plus mechanism violation | mechanism-aware RCA |
-| `random` | shuffled candidate ranking | sanity baseline |
-
-Cross-file means:
-
-| Event source | Variant | Matched | MRR | Hit@1 | Hit@3 | NDCG@3 |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| True event | `exported` | - | 0.9817 | 0.9633 | 1.0000 | 0.9296 |
-| True event | `base_only` | - | 0.9817 | 0.9633 | 1.0000 | 0.9225 |
-| True event | `mechanism_only` | - | 0.9197 | 0.8667 | 0.9700 | 0.8488 |
-| True event | `random` | - | 0.5915 | 0.3371 | 0.8398 | 0.5757 |
-| Predicted event, key `1.0` | `exported` | 0.9400 | 0.8942 | 0.8533 | 0.9300 | 0.8435 |
-| Predicted event, key `1.0` | `base_only` | 0.9400 | 0.8942 | 0.8533 | 0.9300 | 0.8435 |
-| Predicted event, key `1.0` | `mechanism_only` | 0.9400 | 0.8414 | 0.7683 | 0.9300 | 0.7911 |
-| Predicted event, key `1.0` | `random` | 0.9400 | 0.5615 | 0.3232 | 0.7960 | 0.5459 |
-
-Interpretation:
-
-- predicted-event RCA is substantially above random when the `1.0` prediction
-  key is used, so the diagnosis pipeline is not purely oracle-event dependent;
-- `mechanism_only` is also above random, which supports the existence of
-  mechanism-level signal;
-- `base_only` still dominates the group-level ranking, so the current mechanism
-  branch should be framed as an interpretable explanation layer rather than as
-  the main source of RCA accuracy;
-- HAI group labels are coarse, which makes Hit@3 easy. MRR, Hit@1, NDCG@3, and
-  predicted-event matched rate are the more meaningful metrics.
-
-## Mechanism Faithfulness Smoke Check
-
-A lightweight 2026-05-26 counterfactual masking check was run with
-`mechanism-graph`, 3 epochs, a 30k-row training prefix, three anomaly events,
-eight event windows, and five random trials. This is not a final paper table; it
-is a feasibility check for whether mechanism explanations change model
-behavior.
-
-| Ranking source | Top-vs-random score margin | Neighbor-vs-random score margin | Top-vs-random recon margin | Top-vs-random mechanism margin | Interpretation |
-| --- | ---: | ---: | ---: | ---: | --- |
-| HAI test1, mechanism ranking | 12.4830 | 0.0381 | 3.5358 | 0.5889 | mechanism-ranked channels are behaviorally faithful |
-| HAI test1, reconstruction ranking | 14.7191 | -0.0208 | 4.1201 | 0.5812 | residual-ranked channels are also faithful |
-| HAI test1-test3 mean, mechanism ranking | 35.7070 | -0.2019 | 10.7920 | 0.8769 | top mechanism evidence is stable; learned graph neighbors are not |
-| HAI test2, mechanism ranking + correlation neighbors | 56.5092 | 2.9019 | 17.3657 | 1.0194 | normal-correlation neighbors are more faithful than learned neighbors on this case |
-| HAI test2, `mechanism-prior-graph` + learned neighbors | 56.4720 | 2.9277 | 17.3187 | 1.0160 | weak normal-prior bias makes learned neighbors behaviorally faithful in this smoke check |
-| HAI test1-test3 mean, `mechanism-prior-graph` + learned neighbors | 35.8154 | 1.1039 | 10.8018 | 0.8750 | prior-biased learned neighbors are consistently positive in the smoke check |
-| HAI test1-test5 mean, mechanism ranking | 28.1262 | -0.1214 | 7.9439 | 0.6564 | original learned neighbors are weak on average |
-| HAI test1-test5 mean, `mechanism-prior-graph` + learned neighbors | 28.1716 | 2.1488 | 7.9445 | 0.6554 | weak normal-prior bias improves learned-edge faithfulness without changing top evidence |
-
-Interpretation:
-
-- masking the top-ranked channels changes the anomaly score far more than
-  masking random channels, so the top explanations are not merely decorative;
-- mechanism-ranked channels also change the mechanism residual itself, which is
-  the first direct evidence that the mechanism branch has behavioral meaning;
-- learned graph neighbors remain unstable and should not be overclaimed as
-  faithful causal parents yet;
-- normal-correlation neighbors can be more faithful than learned graph
-  neighbors, so the next architecture problem is edge faithfulness: learned
-  graph edges should be constrained or trained to preserve the functional
-  neighbor evidence already visible in the normal dependency prior;
-- `mechanism-prior-graph` is the first candidate that improves learned-neighbor
-  faithfulness without replacing the learned graph by a post-hoc correlation
-  graph. It uses normal correlation only as weak logit bias plus weak alignment
-  loss, while retaining the adaptive mechanism graph;
-- on HAI test1/test2 5-epoch detection and RCA, `mechanism-prior-graph` is
-  essentially tied with `mechanism-graph`. The average detection metrics at
-  ratios 0.5/1.0/2.0 change by less than 0.001 in raw F1, adjusted F1, and
-  affiliation F1, and predicted-event RCA at key `1.0` remains unchanged at the
-  group level. Its value is therefore edge faithfulness, not detection gain;
-- the five-file HAI smoke check strengthens this interpretation: top-channel
-  faithfulness is nearly unchanged, while learned-neighbor score margin improves
-  from -0.1214 to 2.1488. This supports using `mechanism-prior-graph` as the
-  reviewer-facing candidate when explaining graph edges.
-
-## Module Details
-
-### MoE Decomposition
-
-File: `ts_benchmark/baselines/self_impl/LaGraph/decomp.py`
-
-Input shape is `(B, L, C)`. The module decomposes each window into:
-
-- residual: anomaly-sensitive local fluctuation;
-- trend: smoother low-frequency component.
-
-The model reconstructs `residual + trend` at the output. This keeps the detector
-within a self-supervised reconstruction setting and avoids relying on anomaly
-labels during training.
-
-### ChannelAdaptiveGraph
-
-File: `ts_benchmark/baselines/self_impl/LaGraph/graph_learner.py`
-
-The channel graph models variable-to-variable dependency. It combines:
-
-- learned channel prior embeddings;
-- data-driven dependency from pooled residual features;
-- gated fusion between prior and data terms;
-- top-k sparsification;
-- single-layer message passing to avoid over-smoothing.
-
-The output is `resid_adapted` and an interpretable `C x C` adjacency matrix.
-This is currently the strongest architectural component for paper narrative
-because it has a direct multivariate interpretation.
-
-### Temporal Graph
-
-The stable `full` profile uses `SimplifiedTemporalGraph`.
-
-The candidate `dynamic-temporal-gated` profile uses `DynamicTemporalGraph`,
-which generates an adaptive temporal adjacency by QK attention over the current
-window, applies row-wise top-k sparsity, then mixes dynamic temporal aggregation
-with local convolution through a residual gate.
-
-Current evidence:
-
-- fixed temporal graph is more stable as the main method;
-- gated dynamic temporal graph improves raw F1 and SWaT affiliation F1;
-- dynamic temporal graph is sensitive to residual strength and top-k sparsity;
-- tested residual-init `0.05/0.20` and dynamic top-k `8/50` were worse than the
-  default gated setting.
-
-### Dual-Path VQ
-
-File: `ts_benchmark/baselines/self_impl/LaGraph/vq_bottleneck.py`
-
-VQ is retained as a training-side regularizer. It should not be described as the
-main anomaly score.
-
-Current default:
+The latest experimental candidate is:
 
 ```text
-vq_cooldown_epochs = 10
-lambda_vq = 0.1
-vq_score_weight = 0.3
+source-bottleneck-consistency-rca
 ```
 
-During cooldown, VQ-related parameters are trained first. After cooldown, the
-main reconstruction path is trained with reconstruction loss, channel sparsity
-regularization, and VQ loss.
+The candidate should not be called final until WADI/SWaT results are confirmed
+under the same predicted-event RCA protocol.
 
-Direct VQ score fusion was tested and rejected:
-
-| Variant | Raw F1 | Adjusted F1 | Affiliation F1 | Decision |
-| --- | ---: | ---: | ---: | --- |
-| `dynamic-temporal-gated` | 0.1139 | 0.8577 | 0.6940 | baseline candidate |
-| VQ score weight 0.10 | 0.1160 | 0.8583 | 0.6941 | reject |
-| VQ score weight 0.02 | 0.1152 | 0.8577 | 0.6958 | reject |
-
-The result supports using VQ for representation regularization, not direct
-score addition.
-
-### EncoderStack
-
-File: `ts_benchmark/baselines/self_impl/LaGraph/temporal_encoder.py`
-
-The encoder uses two layers with:
-
-- multi-scale temporal convolution;
-- dynamic scale selection;
-- multi-head attention;
-- feed-forward projection.
-
-The current default model capacity is intentionally small:
-
-```text
-d_model = 128
-e_layers = 2
-n_heads = 4
-dropout = 0.25
-```
-
-This gives roughly 0.4M trainable parameters, depending on the dataset channel
-count and profile.
-
-### Direct Reconstruction Scoring
-
-File: `ts_benchmark/baselines/self_impl/LaGraph/gcn_model.py`
-
-The main path uses direct reconstruction error:
-
-```text
-err = L1(rec, input)
-score_t = mean(top-k channel errors at time t)
-```
-
-The old multi-scale scorer exists only for `with-scorer` ablation. It is not the
-default because direct reconstruction scoring was more stable in recent tests.
-
-`detect_score` aggregates overlapping window scores back to point-level scores
-by averaging all windows covering each timestamp. `detect_label` then evaluates
-standard anomaly-ratio thresholds and a POT default threshold.
-
-## Training Objective
-
-The main training objective is:
-
-```text
-loss = reconstruction_loss(reconstruction, input)
-     + lambda_locality_l1 * sparse_channel_loss
-     + lambda_vq * vq_loss
-```
-
-The default reconstruction loss remains MSE. The code now also supports
-`mae`, `smooth_l1`, `log_cosh`, `charbonnier`, and `mse_mae` for controlled
-loss-function sensitivity experiments. A first-difference temporal loss is also
-implemented as an optional candidate:
-
-```text
-loss = loss + lambda_temporal_diff_loss * MSE(diff(reconstruction), diff(input))
-```
-
-Important details:
-
-- no supervised anomaly labels are used during training;
-- robust/trimmed reconstruction loss was tested and rejected;
-- `log_cosh` and `smooth_l1` improved MSL affiliation F1 but degraded SWaT, so
-  they are not promoted to the default loss;
-- first-difference reconstruction loss was tested and rejected on MSL;
-- temporal graph smoothness/locality regularization was tested and rejected;
-- channel-normalized scoring was tested and rejected.
-
-## Runtime Profiles
-
-| Profile | Channel graph | Temporal graph | VQ | Scorer | Use |
-| --- | ---: | ---: | ---: | ---: | --- |
-| `full` | on | fixed | on | direct reconstruction | main method |
-| `dynamic-temporal` | on | dynamic | on | direct reconstruction | ungated dynamic temporal ablation |
-| `dynamic-temporal-gated` | on | dynamic + residual gate | on | direct reconstruction | strongest adaptive-temporal candidate |
-| `prior-guided-graph` | normal-correlation-guided | fixed | on | direct reconstruction | graph-faithfulness candidate |
-| `structure-consistent` | adaptive + weak normal-prior loss | fixed | on | direct reconstruction | conservative graph-alignment candidate |
-| `mechanism-graph` | adaptive graph as neighbor mechanism | fixed | on | reconstruction + mechanism violation | current paper-level candidate |
-| `mechanism-prior-graph` | adaptive mechanism graph with weak normal-prior bias | fixed | on | reconstruction + mechanism violation | edge-faithfulness candidate |
-| `state-aware` | on | fixed + state-aware correction | on | direct reconstruction | newest industrial multi-condition candidate |
-| `state-aware-dynamic` | on | dynamic + state-aware correction | on | direct reconstruction | dynamic state-aware candidate |
-| `state-aware-causal` | on | fixed + state-aware correction | on | reconstruction + counterfactual lagged score | RCA-oriented candidate |
-| `parallel-dual` | on | fixed, parallel branch | on | direct reconstruction | rejected dual-graph fusion candidate |
-| `parallel-dual-time` | on | fixed, time-gated parallel branch | on | direct reconstruction | rejected dual-graph fusion candidate |
-| `residual-dual` | on | fixed, residual parallel correction | on | direct reconstruction | rejected conservative fusion candidate |
-| `residual-dual-time` | on | fixed, time-gated residual correction | on | direct reconstruction | rejected conservative fusion candidate |
-| `graph-shift` | on | fixed | on | reconstruction + graph-shift score | rejected structure-shift scoring candidate |
-| `causal-lag` | on | fixed | on | direct reconstruction | lagged mechanism branch, score off |
-| `causal-lag-score` | on | fixed | on | reconstruction + lagged mechanism score | first causal-score candidate |
-| `synthetic-aux` | on | fixed | on | reconstruction + synthetic-head score | industrial perturbation auxiliary candidate |
-| `synthetic-aux-q75` | on | fixed | on | q75 aggregation + synthetic-head score | rejected combination candidate |
-| `full-event-affinity-lite` | on | fixed | on | smoothed reconstruction + segment shaping | rejected event-coverage candidate |
-| `full-event-affinity` | on | fixed | on | stronger segment shaping | reproducibility candidate |
-| `full-event-affinity-strong` | on | fixed | on | aggressive segment shaping | reproducibility candidate |
-| `full-event-persistence` | on | fixed | on | event-persistence score amplification | rejected sustained-event scoring candidate |
-| `loss-smoothl1` | on | fixed | on | direct reconstruction | SmoothL1 loss sensitivity candidate |
-| `loss-logcosh` | on | fixed | on | direct reconstruction | log-cosh loss sensitivity candidate |
-| `loss-mse-mae` | on | fixed | on | direct reconstruction | mixed MSE/MAE loss candidate |
-| `loss-mse-logcosh` | on | fixed | on | direct reconstruction | conservative MSE/log-cosh loss candidate |
-| `loss-mse-smoothl1` | on | fixed | on | direct reconstruction | conservative MSE/SmoothL1 loss candidate |
-| `loss-diff` | on | fixed | on | direct reconstruction | first-difference loss candidate |
-| `loss-smoothl1-diff` | on | fixed | on | direct reconstruction | SmoothL1 plus first-difference loss candidate |
-| `with-scorer` | on | fixed | on | old multi-scale scorer | old scoring ablation |
-| `no-vq` | on | fixed | off | old multi-scale scorer | VQ ablation |
-| `channel-only` | on | off | on | direct reconstruction | channel graph ablation |
-| `temporal-only` | off | fixed | on | direct reconstruction | temporal graph ablation |
-| `reconstruction` | off | off | off | direct reconstruction | lower-bound baseline |
-
-Rejected experimental profiles are kept for reproducibility:
-
-- `dynamic-temporal-regularized`;
-- `dynamic-temporal-robust`;
-- `dynamic-temporal-robust-lite`;
-- `dynamic-temporal-channelnorm`;
-- `dynamic-temporal-channelnorm-scale`;
-- `dynamic-temporal-gated-vqscore`;
-- affiliation-oriented smoothing/segment-shaping variants.
-
-## Current Experimental Summary
-
-Three-seed checks on MSL and SWaT show that `full` is the safer main method.
-
-| Profile | Dataset | Raw F1 mean | Adjusted F1 mean | Affiliation F1 mean | Interpretation |
-| --- | --- | ---: | ---: | ---: | --- |
-| `full` | MSL | 0.1078 | 0.8561 | 0.6980 | stable baseline |
-| `full` | SWaT | 0.3138 | 0.9296 | 0.8441 | stable baseline |
-| `dynamic-temporal-gated` | MSL | 0.1158 | 0.8559 | 0.6934 | better raw F1, worse affiliation |
-| `dynamic-temporal-gated` | SWaT | 0.3417 | 0.9187 | 0.8528 | better raw/affiliation, worse adjusted |
-
-Current conclusion:
-
-- If the paper prioritizes robustness and balanced reporting, use `full` as the
-  main architecture.
-- If the paper needs an adaptive temporal graph story, report
-  `dynamic-temporal-gated` as an important extension or ablation, not as a
-  universally better replacement.
-- Do not claim every module improves every metric. The evidence supports a more
-  rigorous claim: the compact architecture is stable, efficient, and
-  interpretable; adaptive temporal graphing improves some ranking/event metrics
-  but has dataset-dependent tradeoffs.
-
-## Latest Architecture Search
-
-MSL seed-2021, 15 epochs, current aligned code path:
-
-| Profile | Main change | Raw F1 | Adjusted F1 | Affiliation F1 | Decision |
-| --- | --- | ---: | ---: | ---: | --- |
-| `full` | stable compact architecture | 0.1109 | 0.8576 | 0.7006 | keep main |
-| `parallel-dual-time` | channel and temporal branches fused by time-wise gate | 0.1189 | 0.8579 | 0.6938 | reject; raw improves but affiliation drops |
-| `residual-dual-time` | `full` plus small time-wise parallel residual | 0.1081 | 0.8577 | 0.6998 | reject; near-affiliation tie but no gain |
-| `graph-shift` | add normal-graph deviation to anomaly score | 0.1097 | 0.8572 | 0.7001 | reject; interpretable but not better |
-| `graph-shift-lite` | lower graph-shift weight | 0.1105 | 0.8576 | 0.6959 | reject |
-| `causal-lag-score` | lagged parent mechanism, detached backbone, score weight 0.05 | 0.1102 | 0.8574 | 0.6983 | reject as main; keep as causal prototype |
-| `causal-cf-hurt` | counterfactual parent-hurt score, weight 0.10, top-k 5 | 0.1109 | 0.7987 | 0.7024 | candidate; small affiliation gain only |
-| `synthetic-aux` | synthetic industrial perturbation auxiliary loss, score weight 0.10 | 0.1113 | 0.8576 | 0.7023 | candidate; small affiliation gain only |
-
-Interpretation: the issue with the dual graph is not just serial ordering. The
-unsupervised reconstruction objective gives no direct supervision for a fusion
-gate to learn "when to trust channel versus temporal structure." Parallel and
-residual fusion therefore change score ranking, but do not improve event-level
-affiliation on MSL. Graph-shift scoring is more interpretable, but the learned
-same-time channel graph is too stable on MSL to add useful anomaly evidence.
-The first lagged causal branch confirms that temporal-precedence constraints are
-implementable, but a simple lagged reconstruction residual is not yet
-discriminative enough to improve affiliation F1. The counterfactual
-parent-hurt score gives the first positive MSL affiliation signal, but the
-margin is small and adjusted F1 drops, so it should be treated as a candidate
-rather than the main reported architecture.
-
-## Graph Faithfulness Check
-
-A reviewer-facing masking protocol was added in
-`scripts/evaluate_graph_faithfulness.py`. It tests whether explanation-aligned
-channels actually affect model behavior:
-
-```text
-mask top RCA channels / graph neighbors / random channels / non-neighbors
-then measure anomaly-score and reconstruction-error change.
-```
-
-HAI_21_03_test1, 5 epochs, five metadata events:
-
-| Neighbor source | Top-vs-random score margin | Neighbor-vs-random score margin | Interpretation |
-| --- | ---: | ---: | --- |
-| learned graph in `full` | 11.3826 | -0.0077 | top RCA is faithful; learned graph neighbors are not reliably better than random |
-| normal correlation graph | 11.3826 | 0.2094 | normal-state dependency prior has faithful explanatory signal |
-| same subsystem group | 11.3826 | -0.0477 | subsystem membership alone is not enough |
-| `prior-guided-graph` learned graph | 11.3813 | 0.3793 | prior-guided learning improves graph-neighbor faithfulness |
-
-Initial detection check on HAI_21_03_test1, 5 epochs:
-
-| Profile | Threshold | Raw F1 | Adjusted F1 | Affiliation F1 |
-| --- | --- | ---: | ---: | ---: |
-| `full` | POT | 0.2333 | 0.3733 | 0.9582 |
-| `prior-guided-graph` | POT | 0.2292 | 0.3714 | 0.9975 |
-| `full` | 1.0% | 0.1589 | 0.1881 | 0.8296 |
-| `prior-guided-graph` | 1.0% | 0.1841 | 0.2166 | 0.8846 |
-
-Interpretation: the original channel graph should not be claimed as a faithful
-explanation graph. The normal-dependency prior contains useful explanatory
-signal, but hard-mixing it into the forward graph is risky: on
-HAI_21_03_test2, `prior-guided-graph` improved learned-neighbor masking margins
-but sharply reduced detection F1. The promoted direction is therefore not a
-hard prior graph, but `structure-consistent`: the adaptive graph remains the
-forward graph, while the normal graph acts only as a weak training constraint.
-This keeps the detection and RCA story unified without turning RCA into a
-separate post-hoc subsystem.
-
-## Score Aggregation and Synthetic Auxiliary Check
-
-MSL seed-2021, 15 epochs, current aligned code path:
-
-| Profile / setting | Raw F1 | Adjusted F1 | Affiliation F1 | Decision |
-| --- | ---: | ---: | ---: | --- |
-| `full`, mean aggregation | 0.1109 | 0.8576 | 0.7006 | main baseline |
-| `full --score-aggregation q75` | 0.1097 | 0.8575 | 0.7018 | small positive, not enough |
-| `full --score-aggregation q80` | 0.1105 | 0.8576 | 0.6983 | reject |
-| `full --score-aggregation q90` | 0.1108 | 0.8578 | 0.7004 | reject |
-| `full --score-aggregation max` | 0.1225 | 0.7940 | 0.6955 | raw improves, event quality drops |
-| `full --score-aggregation center --score-center-width 5` | 0.1136 | 0.8574 | 0.7003 | reject |
-| `full --score-aggregation last` | 0.1064 | 0.8572 | 0.6933 | reject |
-| `synthetic-aux` | 0.1113 | 0.8576 | 0.7023 | current best candidate, still small |
-| `synthetic-aux-q75` | 0.1098 | 0.8577 | 0.7004 | reject |
-| `synthetic-aux --synthetic-score-weight 0.20` | 0.1113 | 0.8576 | 0.7023 | no gain over 0.10 |
-
-Interpretation: changing the overlapping-window aggregation alone does not
-solve the event-level bottleneck. Conservative q75 aggregation gives a small
-affiliation gain, while max aggregation improves raw F1 but damages adjusted and
-affiliation metrics. The synthetic industrial perturbation auxiliary objective
-is the best current signal, but its margin is still too small to promote before
-multi-seed and SWaT validation.
-
-## Reconstruction Loss Search
-
-The loss-function search tested whether a reconstruction objective more robust
-than MSE can improve event-level localization without adding new architecture
-modules. MSL and SWaT were run with seed 2021, 15 epochs,
-`num_workers=2`, and `prefetch_factor=2`. Reported values are the best values
-over the standard anomaly-ratio grid.
-
-| Profile | Dataset | Raw F1 | Adjusted F1 | Affiliation F1 | Decision |
-| --- | --- | ---: | ---: | ---: | --- |
-| `full` | MSL | 0.1109 | 0.8576 | 0.7006 | MSE baseline |
-| `loss-smoothl1` | MSL | 0.1090 | 0.8572 | 0.7052 | positive MSL-only candidate |
-| `loss-logcosh` | MSL | 0.1097 | 0.8573 | 0.7059 | best MSL affiliation candidate |
-| `loss-mse-mae` | MSL | 0.1114 | 0.8575 | 0.7017 | too small |
-| `loss-mse-logcosh` | MSL | 0.1111 | 0.8574 | 0.7004 | reject |
-| `loss-mse-smoothl1` | MSL | 0.1111 | 0.8575 | 0.7003 | reject |
-| `loss-diff` | MSL | 0.1104 | 0.8579 | 0.6994 | reject |
-| `loss-smoothl1-diff` | MSL | 0.1111 | 0.8574 | 0.6929 | reject |
-| `full` | SWaT | 0.3169 | 0.9361 | 0.8458 | MSE baseline |
-| `loss-logcosh` | SWaT | 0.2800 | 0.9269 | 0.8168 | reject as default |
-| `loss-smoothl1` | SWaT | 0.2810 | 0.9257 | 0.8172 | reject as default |
-
-Interpretation: robust losses reduce the influence of large reconstruction
-errors during training. This helps MSL affiliation F1, suggesting that MSL
-benefits from a less outlier-dominated normal reconstruction objective. The same
-change hurts SWaT raw, adjusted, and affiliation F1, which means the effect is
-dataset-sensitive rather than a general improvement. The default paper profile
-should therefore keep MSE. `loss-logcosh` and `loss-smoothl1` can be reported as
-loss sensitivity ablations or revisited for industrial datasets whose normal
-training data contain more outlier-like contamination.
-
-A conservative mixed objective was also tested after the first loss sweep:
-`0.9*MSE + 0.1*log_cosh` and `0.9*MSE + 0.1*SmoothL1`. Both were essentially
-tied with MSE on MSL but did not improve affiliation F1. This suggests that the
-MSL gain from pure robust losses requires a strong change in gradient shape,
-while weak robust regularization is not enough to alter event ranking.
-
-## Channel Score Aggregation Check
-
-The direct reconstruction score uses the mean of the top-k channel errors at
-each timestamp. MSL seed-2021, 15 epochs:
-
-| Setting | Raw F1 | Adjusted F1 | Affiliation F1 | Decision |
-| --- | ---: | ---: | ---: | --- |
-| default top-k | 0.1109 | 0.8576 | 0.7006 | keep |
-| `--score-topk-k 3` | 0.1085 | 0.8575 | 0.7005 | no gain |
-| `--score-topk-k 8` | 0.1108 | 0.8578 | 0.6972 | reject |
-
-Interpretation: the current MSL bottleneck is not resolved by simply narrowing
-or widening the number of contributing channels in the anomaly score. The
-default top-k setting remains the safest choice.
-
-## Event-Affiliation Search
-
-A separate search tested whether point-wise precision can be sacrificed for
-better affiliation F1. These variants add event-continuity priors at inference:
-score smoothing, gap filling, minimum segment length, dilation, and a
-score-level event-persistence amplifier that boosts sustained high-score
-regions before thresholding.
-
-MSL seed-2021, 15 epochs:
-
-| Profile / setting | Raw F1 | Adjusted F1 | Affiliation F1 | Decision |
-| --- | ---: | ---: | ---: | --- |
-| `full` | 0.1109 | 0.8576 | 0.7006 | main baseline |
-| `loss-logcosh` | 0.1097 | 0.8573 | 0.7059 | best MSL affiliation candidate |
-| `full-event-affinity-lite` | 0.1106 | 0.6991 | 0.6804 | reject |
-| smoothing + gap fill + min length | 0.1123 | 0.6639 | 0.6876 | reject |
-| `full-event-persistence` | 0.1104 | 0.8586 | 0.6956 | reject |
-| `loss-logcosh` + event persistence | 0.1091 | 0.8598 | 0.6970 | reject |
-
-Interpretation: affiliation F1 can be improved on MSL, but not by naively
-expanding or smoothing predicted segments. Segment shaping increases event
-coverage at the cost of too many poorly placed positives, so affiliation
-precision drops faster than recall improves. The only positive affiliation
-signal in this sweep comes from the reconstruction objective itself
-(`log_cosh`), which changes how normal reconstruction is learned rather than
-how labels are post-processed. For paper writing, this supports a stricter
-claim: affiliation-oriented gains should come from representation or training
-objective design, not from threshold-time segment inflation.
-
-## Causal Inference Status
-
-The current code has graph learning and locality/proximity language, but it does
-not yet implement causal inference in the strict sense. A learned channel
-adjacency should not be called a causal graph unless additional identification
-or intervention-style constraints are added.
-
-For a stronger CCF-A-level contribution, causal inference can be made concrete
-in the following way.
+## Data Flow
 
 ```mermaid
 flowchart LR
-    accTitle: Causal Extension Roadmap
-    accDescr: Practical path from current dependency graph learning to a defensible causal graph module.
+    input["Input window<br/>(L x C variables)"]
+    decomp["Series decomposition<br/>trend + residual"]
+    backbone["Reconstruction backbone<br/>temporal encoder + graph context"]
+    score["Point anomaly score"]
+    event["Predicted anomaly event"]
+    evidence["Event-level RCA evidence"]
+    rank["Variable / subsystem ranking"]
 
-    dep["Current channel graph<br/>dependency adjacency"]
-    lag["Lagged candidate causes<br/>X(t-k) -> X(t)"]
-    mask["Sparse causal mask<br/>learned with acyclicity or lag constraint"]
-    invariant["Invariant normal dynamics<br/>stable across windows/datasets"]
-    anomaly["Causal residual score<br/>violation of learned mechanisms"]
-    evidence["Ablation evidence<br/>causal mask vs dependency graph"]
-
-    dep --> lag
-    lag --> mask
-    mask --> invariant
-    invariant --> anomaly
-    anomaly --> evidence
-
-    classDef current fill:#e8f1ff,stroke:#2563eb,stroke-width:1px,color:#111827
-    classDef future fill:#fff7ed,stroke:#ea580c,stroke-width:1px,color:#111827
-    class dep current
-    class lag,mask,invariant,anomaly,evidence future
+    input --> decomp --> backbone --> score --> event
+    event --> evidence --> rank
+    backbone --> evidence
 ```
 
-Recommended implementation direction:
+The model first learns normal reconstruction behavior. During inference, it
+turns reconstruction errors into anomaly scores and predicted events. RCA is
+then computed inside each predicted event, not inside oracle ground-truth
+windows.
 
-| Idea | Concrete implementation | Why it is defensible |
-| --- | --- | --- |
-| Lagged causal graph | learn edges from `X_j(t-k)` to `X_i(t)` instead of same-time correlation only | respects temporal precedence |
-| Granger-style sparsity | compare prediction/reconstruction with and without candidate lagged parents | gives an operational causal criterion |
-| Mechanism invariance | require learned parent-child mechanisms to stay stable across windows or datasets | aligns with causal invariance |
-| Interventional dropout | randomly mask parent channels and penalize unstable reconstructions | tests whether an edge carries functional information |
-| Causal residual score | score violations of learned mechanisms separately from raw reconstruction error | produces interpretable anomaly causes |
+## Main Components
 
-This direction has a real chance to improve results, but it must be validated
-with ablations. The claim should be:
+| Component | Current role | Paper claim boundary |
+|---|---|---|
+| Reconstruction backbone | Learns normal multivariate temporal behavior | Supports anomaly scoring; not claimed as universal SOTA detector |
+| Channel mechanism graph | Provides neighbor/context evidence among variables | Mechanism/dependency graph, not strict causal graph |
+| Temporal evidence | Captures event timing and onset behavior | Helps separate early source evidence from later propagated response |
+| Source bottleneck | Encourages a small set of variables to explain event source evidence | Main RCA narrative: source variables should not be confused with high-response variables |
+| Event specificity | Suppresses variables that are generically high-scoring across many events | Reduces common response-variable domination |
+| Hierarchical RCA | Reports both subsystem-level and variable-level rankings | Useful for industrial diagnosis and reviewer-facing interpretability |
+
+## RCA Score View
+
+For a predicted event, each variable receives a combined score from several
+evidence terms:
 
 ```text
-causal-structured dependency learning improves anomaly localization and
-interpretability
+RCA score =
+    local residual evidence
+  + onset/source evidence
+  + mechanism-context deviation
+  + source-gate evidence
+  - propagated-response penalty
+  - generic event-response penalty
 ```
 
-not:
+The exact weights are controlled by the selected profile. The important paper
+point is the decomposition of evidence, not claiming that every term is always
+positive on every dataset.
+
+## Mechanism Graph Meaning
+
+The graph should be described as a learned mechanism/dependency context:
 
 ```text
-the current dependency graph is already a causal graph
+If a variable cannot be well explained by its normal mechanism neighbors during
+an event, it may be part of the abnormal source or propagation path.
 ```
 
-## Practical Next Step
+It should not be described as a fully supervised causal graph. Current evidence
+supports graph-guided source ranking, not causal discovery.
 
-Do not spend more experiments on generic dual-graph fusion, disconnected RCA
-branches, or weak graph-alignment losses. The current exception is the
-lightweight `source-bottleneck-corefine-rca` test, which is not a parallel
-branch ensemble. It explicitly feeds a channel-refined temporal representation
-back through the temporal graph:
+## Active Profiles
+
+| Profile | Status | Purpose |
+|---|---|---|
+| `source-bottleneck-specificity-rca` | stable baseline | Main current reported model |
+| `source-bottleneck-consistency-rca` | under validation | Adds source-effect consistency supervision and source-interaction evidence |
+| `source-bottleneck-root-response-*` | experimental | Tests root/response separation heads |
+| `source-bottleneck-evidence-fusion-*` | experimental | Tests stronger evidence fusion and top-k reranking variants |
+| `source-bottleneck-no-mechanism-rca` | ablation/control | Tests whether mechanism graph helps or hurts |
+| `source-preserving-*` | rejected/weak candidate | Weakening mechanism injection did not reliably improve SWaT |
+
+## Main Datasets
+
+| Dataset | Current role |
+|---|---|
+| WADI A1 ds10 | Main variable-level RCA benchmark |
+| SWaT A1/A2 Physical | Main variable-level RCA benchmark |
+| HAI | Coarse/subsystem-level supplementary evidence |
+| MSDS | Candidate future generalization dataset; requires preprocessing and label construction |
+
+MSL and SMD are not current main RCA datasets.
+
+## Evaluation Protocol
+
+The primary RCA protocol is:
 
 ```text
-R0 = residual
-C1 = ChannelGraph(R0)
-T1 = TemporalGraph(C1)
-C2 = ChannelRefine(T1, A_channel)
-T2 = TemporalGraph(C2)
+predicted-event variable-level RCA
+prediction_key = 15
+metrics = MRR, Hit@1, Hit@3, Hit@5, PR@K, MAP@K
 ```
 
-This tests whether channel dependency and temporal evolution can be jointly
-refined rather than merely concatenated or gated. The immediate architecture
-question has therefore been narrowed: the channel graph can provide a
-measurable mechanism-violation explanation, but the remaining question is
-whether deeper channel-temporal interaction improves variable-level RCA without
-damaging event detection.
+Detection metrics remain necessary, but they are not the main paper claim. The
+paper should report enough detection quality to show that predicted events are
+usable, then focus on whether the root-cause ranking is better than simple
+baselines under the same predicted-event protocol.
+
+## What Not To Claim
+
+Do not claim:
+
+- universal anomaly detection SOTA;
+- fully causal graph discovery;
+- that every graph module improves every dataset;
+- that post-hoc reranking alone is the core contribution;
+- that HAI subsystem-level results prove variable-level RCA.
+
+## Current Documentation Policy
+
+This file is the current architecture source of truth. Historical architecture
+notes have been moved to:
 
 ```text
-Gt = adaptive channel graph learned from each input window
-X_hat_mech_i = f(X_neighbors(i; Gt))
-loss = reconstruction_loss + sparse_loss + lambda * mechanism_loss
-score = reconstruction_error + alpha * normalized_mechanism_violation
-RCA = local residual evidence + mechanism violation + graph support
+D:\la_v12\docs\archive\2026-06-17\
 ```
 
-This avoids claiming full causality before identifiability evidence exists, but
-it gives the graph an operational meaning that a reviewer can test. The next
-research step should therefore be one of:
-
-- improve the mechanism branch so it changes rankings where base residuals fail;
-- evaluate on finer RCA datasets where variable-level causes are available;
-- keep detection unchanged and strengthen faithfulness evidence with masking or
-  counterfactual intervention tests.
-
-The main claim remains mechanism-aware anomaly detection and diagnosis, not
-another attention-like graph module.
-
-## Commands
-
-Main method:
-
-```powershell
-D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets MSL.csv swat.csv --arch-profile full --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_main_15ep
-```
-
-Structure-consistent candidate:
-
-```powershell
-$env:PYTHONIOENCODING='utf-8'
-D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 5 --datasets HAI_21_03_test1.csv HAI_21_03_test2.csv --arch-profile structure-consistent --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_structure_consistent_hai_5ep
-```
-
-Mechanism-graph candidate:
-
-```powershell
-$env:PYTHONIOENCODING='utf-8'
-D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 5 --datasets HAI_21_03_test1.csv HAI_21_03_test2.csv --arch-profile mechanism-graph --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_mechanism_graph_hai_5ep
-```
-
-Mechanism-prior edge-faithfulness candidate:
-
-```powershell
-$env:PYTHONIOENCODING='utf-8'
-D:\Anaconda3\envs\lagraph5070\python.exe scripts/evaluate_graph_faithfulness.py --dataset HAI_21_03_test2.csv --arch-profile mechanism-prior-graph --epochs 3 --train-limit 30000 --event-limit 3 --window-samples 8 --random-trials 5 --ranking-source mechanism --neighbor-source learned --num-workers 2 --prefetch-factor 2 --save-csv D:\la_v12\result\analysis\faithfulness_mechanism_prior_HAI_test2_mechrank_learned_3ep.csv
-```
-
-Mechanism-aware RCA export:
-
-```powershell
-$env:PYTHONIOENCODING='utf-8'
-D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 5 --datasets HAI_21_03_test1.csv HAI_21_03_test2.csv --arch-profile mechanism-graph --export-rca --rca-mechanism-weight 1.0 --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_mechanism_graph_rca_5ep
-```
-
-Mechanism-aware RCA evaluation:
-
-```powershell
-D:\Anaconda3\envs\lagraph5070\python.exe scripts/evaluate_rca.py --rca D:\la_v12\result\rca\HAI_21_03_test1\<timestamp>_rca.json --scope group --save-csv D:\la_v12\result\rca\mechanism_rca_eval.csv
-```
-
-RCA component ablation over five HAI files:
-
-```powershell
-D:\Anaconda3\envs\lagraph5070\python.exe scripts/run_rca_ablation.py --rca D:\la_v12\result\rca\HAI_21_03_test1\<timestamp>_rca.json D:\la_v12\result\rca\HAI_21_03_test2\<timestamp>_rca.json D:\la_v12\result\rca\HAI_21_03_test3\<timestamp>_rca.json D:\la_v12\result\rca\HAI_21_03_test4\<timestamp>_rca.json D:\la_v12\result\rca\HAI_21_03_test5\<timestamp>_rca.json --scope group --event-source both --prediction-key pot 0.5 1.0 --random-trials 1000 --out-dir D:\la_v12\result\rca\ablation_mechanism_hai5
-```
-
-Implementation note: RCA export aligns all-detect labels to the dataset
-`train_lens` metadata before matching HAI root-cause intervals. The exported
-JSON records `rca_offset`, and each ranked channel includes `mechanism_score`.
-
-Graph faithfulness check:
-
-```powershell
-$env:PYTHONIOENCODING='utf-8'
-D:\Anaconda3\envs\lagraph5070\python.exe scripts/evaluate_graph_faithfulness.py --dataset HAI_21_03_test1.csv --arch-profile structure-consistent --epochs 5 --event-limit 5 --window-samples 16 --random-trials 10 --num-workers 2 --prefetch-factor 2 --save-csv D:\la_v12\result\analysis\graph_faithfulness_HAI_test1_structure_consistent.csv
-D:\Anaconda3\envs\lagraph5070\python.exe scripts/evaluate_graph_faithfulness.py --dataset HAI_21_03_test2.csv --arch-profile structure-consistent --epochs 5 --event-limit 5 --window-samples 16 --random-trials 10 --num-workers 2 --prefetch-factor 2 --save-csv D:\la_v12\result\analysis\graph_faithfulness_HAI_test2_structure_consistent.csv
-```
-
-Structure-consistency strength sweep:
-
-```powershell
-$env:PYTHONIOENCODING='utf-8'
-D:\Anaconda3\envs\lagraph5070\python.exe scripts/evaluate_graph_faithfulness.py --dataset HAI_21_03_test1.csv --arch-profile structure-consistent --channel-prior-align 0.01 --epochs 5 --event-limit 5 --window-samples 16 --random-trials 10 --num-workers 2 --prefetch-factor 2 --save-csv D:\la_v12\result\analysis\graph_faithfulness_HAI_test1_structure_consistent_lam01.csv
-D:\Anaconda3\envs\lagraph5070\python.exe scripts/evaluate_graph_faithfulness.py --dataset HAI_21_03_test1.csv --arch-profile structure-consistent --channel-prior-align 0.05 --epochs 5 --event-limit 5 --window-samples 16 --random-trials 10 --num-workers 2 --prefetch-factor 2 --save-csv D:\la_v12\result\analysis\graph_faithfulness_HAI_test1_structure_consistent_lam05.csv
-```
-
-Adaptive temporal candidate:
-
-```powershell
-D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --datasets MSL.csv swat.csv --arch-profile dynamic-temporal-gated --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_candidate_dynamic_temporal_gated_15ep
-```
-
-Key ablations:
-
-```powershell
-D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile channel-only --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_ablation_channel_only
-D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile temporal-only --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_ablation_temporal_only
-D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile no-vq --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_ablation_no_vq
-D:\Anaconda3\envs\lagraph5070\python.exe ts_benchmark/run_single.py --epochs 15 --arch-profile with-scorer --num-workers 2 --prefetch-factor 2 --save-dir label/LaGraph_ablation_with_scorer
-```
-
-## Reporting Guidance
-
-For the paper, report:
-
-- `full` as the main compact method;
-- `dynamic-temporal-gated` as adaptive temporal graph extension;
-- `channel-only`, `temporal-only`, `no-vq`, `with-scorer`, and
-  `reconstruction` as ablations;
-- three-seed mean and standard deviation;
-- raw F1, adjusted F1, and affiliation F1 together;
-- parameter count and single-GPU runtime settings;
-- negative ablations as evidence that the final system is not module stacking.
-
-Do not over-optimize only one metric in the main table. It is acceptable to
-emphasize affiliation F1 if the paper's task framing is event-level anomaly
-coverage, but raw F1 and adjusted F1 should still be reported transparently.
-
-## File Map
+Detailed experiment logs remain under:
 
 ```text
-ts_benchmark/baselines/self_impl/LaGraph/
-  LaGraph.py            training, validation, thresholding, scoring pipeline
-  gcn_model.py          SparseGCN, VQ integration, reconstruction scoring
-  graph_learner.py      ChannelAdaptiveGraph, SimplifiedTemporalGraph, DynamicTemporalGraph
-  temporal_encoder.py   EncoderStack and temporal feature extraction
-  decomp.py             MoE decomposition
-  vq_bottleneck.py      VQ bottleneck
-  attention.py          attention blocks
-  RevIN.py              reversible normalization utility
-  channel_mask.py       channel mask utility
+D:\la_v12\result\analysis\
 ```
 
-## Known Limitations
-
-| Limitation | Impact | Recommendation |
-| --- | --- | --- |
-| Current graph is dependency-based, not causal | causal claims are not yet justified | add lagged causal graph and invariance tests |
-| `dynamic-temporal-gated` is dataset-dependent | improves SWaT but weakens MSL affiliation | keep as extension, not default |
-| Direct VQ score fusion is weak | VQ does not reliably improve ranking as a score | use VQ as training regularizer |
-| Post-processing hurt MSL affiliation | generic smoothing/segment shaping is unsafe | focus on representation and calibrated scoring |
-| Synthetic auxiliary gain is small | improves MSL affiliation by about 0.0017 only | keep as candidate; validate across seeds/datasets |
-| Available default benchmark set currently excludes SMD | all-dataset claims are limited | report exclusions and optionally run SMD separately |
-
-Last updated: 2026-05-25.
+Those logs are lab records, not current system descriptions.
