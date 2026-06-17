@@ -228,6 +228,33 @@ def main():
             "source-bottleneck-root-score-rca",
             "source-bottleneck-root-score-w03-rca",
             "source-bottleneck-root-response-rca",
+            "source-bottleneck-root-response-hardpos-rca",
+            "source-bottleneck-root-response-softpos-rca",
+            "source-bottleneck-root-response-top20-calibrated-rca",
+            "source-bottleneck-root-response-innovation-top20-rca",
+            "source-bottleneck-pairwise-root-response-rca",
+            "source-bottleneck-pairwise-aux-root-response-rca",
+            "source-bottleneck-event-responsibility-top20-rca",
+            "source-bottleneck-event-responsibility-head-top20-rca",
+            "source-bottleneck-event-evidence-top20-rerank-rca",
+            "source-bottleneck-event-balanced-evidence-top20-rerank-rca",
+            "source-bottleneck-event-swat-priority-evidence-top20-rerank-rca",
+            "source-bottleneck-event-top1-coverage-evidence-top20-rerank-rca",
+            "source-bottleneck-evidence-fusion-head-top1-coverage-rca",
+            "source-bottleneck-evidence-fusion-head-detached-rca",
+            "source-bottleneck-evidence-fusion-secondary-fill-rca",
+            "source-bottleneck-evidence-fusion-stable-fill-rca",
+            "source-bottleneck-evidence-fusion-stable-fill-aligned-rca",
+            "source-bottleneck-evidence-fusion-stable-pairwise-rca",
+            "source-bottleneck-evidence-fusion-strong-pairwise-rca",
+            "source-bottleneck-evidence-fusion-end2end-pairwise-rca",
+            "source-bottleneck-consistency-rca",
+            "source-bottleneck-source-interaction-head-rca",
+            "source-bottleneck-source-interaction-head-direct-rca",
+            "source-bottleneck-evidence-fusion-competitive-rca",
+            "source-bottleneck-adaptive-evidence-rerank-rca",
+            "source-bottleneck-adaptive-evidence-wadi-rerank-rca",
+            "source-bottleneck-adaptive-evidence-margin-rerank-rca",
             "source-bottleneck-rca-aware-checkpoint",
             "source-bottleneck-normalized-rca-checkpoint",
             "source-bottleneck-adaptive-mechanism-rca",
@@ -539,6 +566,34 @@ def main():
         help="Number of hardest non-root variables used by synthetic RCA ranking loss",
     )
     parser.add_argument(
+        "--synthetic-rca-positive-aggregation",
+        choices=[
+            "mean",
+            "min",
+            "weakest",
+            "bottomk",
+            "bottom",
+            "weak_mean",
+            "blend",
+            "mean_bottomk",
+            "mean_weak",
+        ],
+        default=None,
+        help="How positive root variables are aggregated inside synthetic RCA ranking loss.",
+    )
+    parser.add_argument(
+        "--synthetic-rca-positive-topk",
+        type=int,
+        default=None,
+        help="Number of weakest positive root variables used when positive aggregation is bottomk.",
+    )
+    parser.add_argument(
+        "--synthetic-rca-positive-min-weight",
+        type=float,
+        default=None,
+        help="Blend weight for weakest positive roots when positive aggregation is blend.",
+    )
+    parser.add_argument(
         "--synthetic-rca-bce-weight",
         type=float,
         default=None,
@@ -593,6 +648,28 @@ def main():
         help="Maximum source-confidence discount applied to response evidence in the root-response RCA head.",
     )
     parser.add_argument(
+        "--root-response-use-innovation-split",
+        action="store_true",
+        help="Move unexplained propagation residual into the source side of the root-response RCA head.",
+    )
+    parser.add_argument(
+        "--pairwise-root-response",
+        action="store_true",
+        help="Use a low-rank pairwise source-to-response relation head for root-response RCA.",
+    )
+    parser.add_argument(
+        "--lambda-pairwise-root-response",
+        type=float,
+        default=None,
+        help="Auxiliary weight for supervising pairwise source-to-response relations on synthetic events.",
+    )
+    parser.add_argument(
+        "--pairwise-root-response-logit-weight",
+        type=float,
+        default=None,
+        help="Weight of pairwise source-response support inside the root-response logit; 0 keeps it as training-only supervision.",
+    )
+    parser.add_argument(
         "--root-response-source-branch-weight",
         type=float,
         default=None,
@@ -609,6 +686,24 @@ def main():
         type=float,
         default=None,
         help="Penalty weight that keeps response evidence low on synthetic source variables.",
+    )
+    parser.add_argument(
+        "--lambda-event-responsibility",
+        type=float,
+        default=None,
+        help="Auxiliary loss weight for the event-level channel responsibility head.",
+    )
+    parser.add_argument(
+        "--event-responsibility-rank-weight",
+        type=float,
+        default=None,
+        help="Ranking-loss weight inside the event-level channel responsibility head.",
+    )
+    parser.add_argument(
+        "--event-responsibility-effect-suppress-weight",
+        type=float,
+        default=None,
+        help="Penalty that keeps responsibility low on synthetic propagated-effect channels.",
     )
     parser.add_argument(
         "--lambda-channel-masked",
@@ -835,6 +930,12 @@ def main():
         type=float,
         default=None,
         help="Weight for learned RootScore evidence inside RCA rankings.",
+    )
+    parser.add_argument(
+        "--rca-event-responsibility-weight",
+        type=float,
+        default=None,
+        help="Weight for learned event-responsibility evidence inside RCA rankings.",
     )
     parser.add_argument(
         "--rca-root-score-signal",
@@ -2907,6 +3008,333 @@ def main():
         rca_source_interaction_weight=0.75,
         rca_topk_rerank=False,
     )
+    arch_profiles["source-bottleneck-root-response-hardpos-rca"] = dict(
+        arch_profiles["source-bottleneck-root-response-rca"],
+        synthetic_rca_positive_aggregation="bottomk",
+        synthetic_rca_positive_topk=1,
+    )
+    arch_profiles["source-bottleneck-root-response-softpos-rca"] = dict(
+        arch_profiles["source-bottleneck-root-response-rca"],
+        synthetic_rca_positive_aggregation="blend",
+        synthetic_rca_positive_topk=1,
+        synthetic_rca_positive_min_weight=0.35,
+    )
+    arch_profiles["source-bottleneck-root-response-top20-calibrated-rca"] = dict(
+        arch_profiles["source-bottleneck-root-response-rca"],
+        rca_topk_rerank=True,
+        rca_topk_rerank_k=20,
+        rca_topk_rerank_original_weight=1.0,
+        rca_topk_rerank_base_weight=0.45,
+        rca_topk_rerank_group_weight=0.0,
+        rca_topk_rerank_onset_weight=0.20,
+        rca_topk_rerank_source_gate_weight=0.0,
+        rca_topk_rerank_mechanism_residual_weight=0.0,
+        rca_topk_rerank_graph_penalty_weight=0.05,
+    )
+    arch_profiles["source-bottleneck-root-response-innovation-top20-rca"] = dict(
+        arch_profiles["source-bottleneck-root-response-top20-calibrated-rca"],
+        root_response_use_innovation_split=True,
+    )
+    arch_profiles["source-bottleneck-pairwise-root-response-rca"] = dict(
+        arch_profiles["source-bottleneck-root-response-top20-calibrated-rca"],
+        use_pairwise_root_response_head=True,
+        pairwise_root_response_rank=8,
+        pairwise_root_response_graph_weight=0.70,
+        pairwise_root_response_reward_init=0.25,
+        pairwise_root_response_penalty_init=0.35,
+        pairwise_root_response_logit_weight=1.0,
+        lambda_pairwise_root_response=0.15,
+        root_response_use_innovation_split=True,
+        rca_root_score_weight=0.70,
+        rca_source_interaction_weight=0.85,
+    )
+    arch_profiles["source-bottleneck-pairwise-aux-root-response-rca"] = dict(
+        arch_profiles["source-bottleneck-root-response-top20-calibrated-rca"],
+        use_pairwise_root_response_head=True,
+        pairwise_root_response_rank=8,
+        pairwise_root_response_graph_weight=0.70,
+        pairwise_root_response_reward_init=0.05,
+        pairwise_root_response_penalty_init=0.10,
+        pairwise_root_response_logit_weight=0.0,
+        lambda_pairwise_root_response=0.10,
+        root_response_use_innovation_split=True,
+        rca_root_score_weight=0.60,
+        rca_source_interaction_weight=0.75,
+    )
+    arch_profiles["source-bottleneck-event-responsibility-top20-rca"] = dict(
+        arch_profiles["source-bottleneck-root-response-top20-calibrated-rca"],
+        use_event_responsibility_head=True,
+        event_responsibility_hidden=16,
+        event_responsibility_detach_features=True,
+        lambda_event_responsibility=0.035,
+        event_responsibility_ce_weight=1.0,
+        event_responsibility_rank_weight=0.75,
+        event_responsibility_effect_suppress_weight=0.25,
+        event_responsibility_entropy_weight=0.0,
+        rca_event_responsibility_weight=0.30,
+    )
+    arch_profiles["source-bottleneck-event-responsibility-head-top20-rca"] = dict(
+        arch_profiles["source-bottleneck-event-responsibility-top20-rca"],
+        rca_event_responsibility_pooling="head_mean",
+        rca_event_responsibility_head_ratio=0.30,
+        rca_event_responsibility_head_points=30,
+        rca_event_responsibility_top_quantile=0.80,
+    )
+    arch_profiles["source-bottleneck-event-evidence-top20-rerank-rca"] = dict(
+        arch_profiles["source-bottleneck-event-responsibility-head-top20-rca"],
+        rca_topk_rerank=True,
+        rca_topk_rerank_k=20,
+        rca_topk_rerank_original_weight=0.0,
+        rca_topk_rerank_base_weight=0.45,
+        rca_topk_rerank_group_weight=0.0,
+        rca_topk_rerank_onset_weight=0.25,
+        rca_topk_rerank_source_gate_weight=1.0,
+        rca_topk_rerank_mechanism_residual_weight=0.25,
+        rca_topk_rerank_source_interaction_weight=0.25,
+        rca_topk_rerank_graph_penalty_weight=0.0,
+        rca_topk_rerank_component_scope="event",
+        rca_event_specificity_source_guard_weight=0.50,
+        rca_event_specificity_source_guard_floor=0.0,
+    )
+    arch_profiles["source-bottleneck-event-balanced-evidence-top20-rerank-rca"] = dict(
+        arch_profiles["source-bottleneck-event-responsibility-head-top20-rca"],
+        rca_topk_rerank=True,
+        rca_topk_rerank_k=20,
+        rca_topk_rerank_original_weight=0.10,
+        rca_topk_rerank_base_weight=0.45,
+        rca_topk_rerank_group_weight=0.0,
+        rca_topk_rerank_onset_weight=0.25,
+        rca_topk_rerank_source_gate_weight=0.10,
+        rca_topk_rerank_mechanism_residual_weight=0.0,
+        rca_topk_rerank_source_interaction_weight=0.25,
+        rca_topk_rerank_graph_penalty_weight=0.0,
+        rca_topk_rerank_component_scope="event",
+        rca_event_specificity_source_guard_weight=0.50,
+        rca_event_specificity_source_guard_floor=0.0,
+    )
+    arch_profiles["source-bottleneck-event-swat-priority-evidence-top20-rerank-rca"] = dict(
+        arch_profiles["source-bottleneck-event-responsibility-head-top20-rca"],
+        rca_topk_rerank=True,
+        rca_topk_rerank_k=20,
+        rca_topk_rerank_original_weight=0.0,
+        rca_topk_rerank_base_weight=0.70,
+        rca_topk_rerank_group_weight=0.0,
+        rca_topk_rerank_onset_weight=0.0,
+        rca_topk_rerank_source_gate_weight=0.35,
+        rca_topk_rerank_mechanism_residual_weight=0.0,
+        rca_topk_rerank_source_interaction_weight=0.50,
+        rca_topk_rerank_graph_penalty_weight=0.0,
+        rca_topk_rerank_component_scope="event",
+        rca_event_specificity_source_guard_weight=0.50,
+        rca_event_specificity_source_guard_floor=0.0,
+    )
+    arch_profiles["source-bottleneck-event-top1-coverage-evidence-top20-rerank-rca"] = dict(
+        arch_profiles["source-bottleneck-event-responsibility-head-top20-rca"],
+        rca_topk_rerank=True,
+        rca_topk_rerank_k=20,
+        rca_topk_rerank_original_weight=0.0,
+        rca_topk_rerank_base_weight=0.45,
+        rca_topk_rerank_group_weight=0.0,
+        rca_topk_rerank_onset_weight=0.25,
+        rca_topk_rerank_source_gate_weight=1.0,
+        rca_topk_rerank_mechanism_residual_weight=0.25,
+        rca_topk_rerank_source_interaction_weight=0.25,
+        rca_topk_rerank_graph_penalty_weight=0.0,
+        rca_topk_rerank_component_scope="event",
+        rca_topk_rerank_keep_primary_top_k=0,
+        rca_topk_rerank_fill_secondary_top_k=0,
+        rca_topk_rerank_secondary_original_weight=0.0,
+        rca_topk_rerank_secondary_base_weight=0.0,
+        rca_topk_rerank_secondary_group_weight=0.0,
+        rca_topk_rerank_secondary_onset_weight=0.0,
+        rca_topk_rerank_secondary_source_gate_weight=0.0,
+        rca_topk_rerank_secondary_mechanism_residual_weight=0.0,
+        rca_topk_rerank_secondary_source_interaction_weight=0.0,
+        rca_topk_rerank_secondary_graph_penalty_weight=0.0,
+        rca_event_specificity_source_guard_weight=0.50,
+        rca_event_specificity_source_guard_floor=0.0,
+        rca_event_specificity_keep_top_k=1,
+        rca_event_specificity_fill_secondary_top_k=3,
+        rca_event_specificity_secondary_base_weight=0.70,
+        rca_event_specificity_secondary_onset_weight=0.0,
+        rca_event_specificity_secondary_source_gate_weight=0.0,
+        rca_event_specificity_secondary_mechanism_residual_weight=0.0,
+        rca_event_specificity_secondary_source_interaction_weight=0.50,
+    )
+    arch_profiles["source-bottleneck-evidence-fusion-head-top1-coverage-rca"] = dict(
+        arch_profiles["source-bottleneck-event-top1-coverage-evidence-top20-rerank-rca"],
+        use_evidence_fusion_head=True,
+        evidence_fusion_hidden=16,
+        evidence_fusion_detach_inputs=False,
+        lambda_evidence_fusion=0.20,
+        evidence_fusion_bce_weight=1.0,
+        evidence_fusion_rank_weight=1.0,
+        evidence_fusion_effect_suppress_weight=0.25,
+        evidence_fusion_entropy_weight=0.0,
+        rca_evidence_fusion_weight=0.25,
+        rca_evidence_fusion_pooling="head_mean",
+        rca_evidence_fusion_head_ratio=0.30,
+        rca_evidence_fusion_head_points=30,
+        rca_evidence_fusion_top_quantile=0.80,
+    )
+    arch_profiles["source-bottleneck-evidence-fusion-head-detached-rca"] = dict(
+        arch_profiles["source-bottleneck-event-top1-coverage-evidence-top20-rerank-rca"],
+        use_evidence_fusion_head=True,
+        evidence_fusion_hidden=16,
+        evidence_fusion_detach_inputs=True,
+        lambda_evidence_fusion=0.05,
+        evidence_fusion_bce_weight=1.0,
+        evidence_fusion_rank_weight=1.0,
+        evidence_fusion_effect_suppress_weight=0.50,
+        evidence_fusion_entropy_weight=0.0,
+        rca_evidence_fusion_weight=0.08,
+        rca_evidence_fusion_pooling="head_mean",
+        rca_evidence_fusion_head_ratio=0.30,
+        rca_evidence_fusion_head_points=30,
+        rca_evidence_fusion_top_quantile=0.80,
+    )
+    arch_profiles["source-bottleneck-evidence-fusion-secondary-fill-rca"] = dict(
+        arch_profiles["source-bottleneck-event-top1-coverage-evidence-top20-rerank-rca"],
+        use_evidence_fusion_head=True,
+        evidence_fusion_hidden=16,
+        evidence_fusion_detach_inputs=True,
+        lambda_evidence_fusion=0.05,
+        evidence_fusion_bce_weight=1.0,
+        evidence_fusion_rank_weight=1.0,
+        evidence_fusion_effect_suppress_weight=0.50,
+        evidence_fusion_entropy_weight=0.0,
+        rca_evidence_fusion_weight=0.0,
+        rca_event_specificity_secondary_evidence_fusion_weight=0.25,
+    )
+    arch_profiles["source-bottleneck-evidence-fusion-stable-fill-rca"] = dict(
+        arch_profiles["source-bottleneck-evidence-fusion-head-detached-rca"],
+        rca_event_specificity_keep_top_k=1,
+        rca_event_specificity_fill_secondary_top_k=5,
+        rca_event_specificity_secondary_base_weight=0.45,
+        rca_event_specificity_secondary_onset_weight=0.25,
+        rca_event_specificity_secondary_source_gate_weight=1.0,
+        rca_event_specificity_secondary_mechanism_residual_weight=0.25,
+        rca_event_specificity_secondary_source_interaction_weight=0.25,
+        rca_event_specificity_secondary_evidence_fusion_weight=0.0,
+    )
+    arch_profiles["source-bottleneck-evidence-fusion-stable-fill-aligned-rca"] = dict(
+        arch_profiles["source-bottleneck-evidence-fusion-stable-fill-rca"],
+        rca_align_event_onset=True,
+        rca_align_event_onset_baseline_window=300,
+        rca_align_event_onset_z=2.0,
+        rca_align_event_onset_quantile=0.90,
+        rca_event_head_ratio=0.30,
+        rca_event_head_points=30,
+    )
+    arch_profiles["source-bottleneck-evidence-fusion-stable-pairwise-rca"] = dict(
+        arch_profiles["source-bottleneck-evidence-fusion-stable-fill-rca"],
+        evidence_fusion_pairwise_effect_weight=0.75,
+        evidence_fusion_pairwise_effect_margin=0.12,
+    )
+    arch_profiles["source-bottleneck-evidence-fusion-strong-pairwise-rca"] = dict(
+        arch_profiles["source-bottleneck-evidence-fusion-stable-pairwise-rca"],
+        evidence_fusion_detach_inputs=True,
+        lambda_evidence_fusion=1.0,
+        evidence_fusion_pairwise_effect_weight=1.0,
+        evidence_fusion_pairwise_effect_margin=0.15,
+        rca_evidence_fusion_weight=0.20,
+        rca_event_specificity_secondary_evidence_fusion_weight=0.20,
+    )
+    arch_profiles["source-bottleneck-evidence-fusion-end2end-pairwise-rca"] = dict(
+        arch_profiles["source-bottleneck-evidence-fusion-stable-pairwise-rca"],
+        evidence_fusion_detach_inputs=False,
+        lambda_evidence_fusion=0.035,
+    )
+    arch_profiles["source-bottleneck-consistency-rca"] = dict(
+        arch_profiles["source-bottleneck-evidence-fusion-stable-fill-rca"],
+        source_effect_consistency_weight=0.50,
+        source_effect_consistency_rank_weight=0.75,
+        source_effect_consistency_effect_rank_weight=0.75,
+        source_effect_consistency_effect_suppress_weight=0.25,
+        source_effect_consistency_gate_align_weight=0.20,
+        source_effect_consistency_margin=0.15,
+    )
+    arch_profiles["source-bottleneck-source-interaction-head-rca"] = dict(
+        arch_profiles["source-bottleneck-evidence-fusion-stable-fill-rca"],
+        use_source_interaction_head=True,
+        source_interaction_detach_inputs=True,
+        lambda_source_interaction_head=0.08,
+        source_interaction_head_bce_weight=0.75,
+        source_interaction_head_rank_weight=1.0,
+        source_interaction_head_effect_suppress_weight=0.25,
+        source_interaction_head_pairwise_effect_weight=0.50,
+        source_interaction_head_pairwise_effect_margin=0.15,
+        rca_source_interaction_head_weight=0.0,
+        rca_source_interaction_head_pooling="head_mean",
+        rca_source_interaction_head_ratio=0.30,
+        rca_source_interaction_head_points=30,
+        rca_source_interaction_head_top_quantile=0.80,
+    )
+    arch_profiles["source-bottleneck-source-interaction-head-direct-rca"] = dict(
+        arch_profiles["source-bottleneck-source-interaction-head-rca"],
+        rca_source_interaction_head_weight=0.08,
+    )
+    arch_profiles["source-bottleneck-evidence-fusion-competitive-rca"] = dict(
+        arch_profiles["source-bottleneck-event-top1-coverage-evidence-top20-rerank-rca"],
+        use_evidence_fusion_head=True,
+        evidence_fusion_hidden=16,
+        evidence_fusion_detach_inputs=False,
+        evidence_fusion_loss_mode="softmax",
+        evidence_fusion_export_mode="softmax",
+        lambda_evidence_fusion=0.10,
+        evidence_fusion_bce_weight=1.0,
+        evidence_fusion_rank_weight=1.0,
+        evidence_fusion_effect_suppress_weight=0.50,
+        evidence_fusion_entropy_weight=0.0,
+        rca_evidence_fusion_weight=0.12,
+        rca_evidence_fusion_pooling="head_mean",
+        rca_evidence_fusion_head_ratio=0.30,
+        rca_evidence_fusion_head_points=30,
+        rca_evidence_fusion_top_quantile=0.80,
+        rca_event_specificity_keep_top_k=1,
+        rca_event_specificity_fill_secondary_top_k=5,
+        rca_event_specificity_secondary_base_weight=0.35,
+        rca_event_specificity_secondary_onset_weight=0.20,
+        rca_event_specificity_secondary_source_gate_weight=0.70,
+        rca_event_specificity_secondary_mechanism_residual_weight=0.0,
+        rca_event_specificity_secondary_source_interaction_weight=0.25,
+        rca_event_specificity_secondary_evidence_fusion_weight=0.35,
+    )
+    arch_profiles["source-bottleneck-adaptive-evidence-rerank-rca"] = dict(
+        arch_profiles["source-bottleneck-event-swat-priority-evidence-top20-rerank-rca"],
+        rca_event_specificity_keep_top_k=0,
+        rca_event_specificity_fill_secondary_top_k=0,
+        rca_event_specificity_secondary_base_weight=0.0,
+        rca_event_specificity_secondary_onset_weight=0.0,
+        rca_event_specificity_secondary_source_gate_weight=0.0,
+        rca_event_specificity_secondary_mechanism_residual_weight=0.0,
+        rca_event_specificity_secondary_source_interaction_weight=0.0,
+        rca_event_specificity_secondary_evidence_fusion_weight=0.0,
+        rca_adaptive_evidence_rerank=True,
+        rca_adaptive_evidence_top_k=20,
+        rca_adaptive_evidence_keep_top_k=1,
+        rca_adaptive_evidence_fill_top_k=5,
+        rca_adaptive_evidence_gate="source_top_old_rank",
+        rca_adaptive_evidence_source_old_rank_threshold=1,
+        rca_adaptive_evidence_source_base_weight=0.45,
+        rca_adaptive_evidence_source_onset_weight=0.25,
+        rca_adaptive_evidence_source_gate_weight=1.0,
+        rca_adaptive_evidence_source_mechanism_residual_weight=0.25,
+        rca_adaptive_evidence_source_interaction_weight=0.25,
+        rca_adaptive_evidence_fallback_original_weight=1.0,
+        rca_adaptive_evidence_fallback_base_weight=0.45,
+        rca_adaptive_evidence_fallback_onset_weight=0.20,
+    )
+    arch_profiles["source-bottleneck-adaptive-evidence-wadi-rerank-rca"] = dict(
+        arch_profiles["source-bottleneck-adaptive-evidence-rerank-rca"],
+        rca_adaptive_evidence_gate="exported_top_source_rank",
+        rca_adaptive_evidence_source_old_rank_threshold=2,
+    )
+    arch_profiles["source-bottleneck-adaptive-evidence-margin-rerank-rca"] = dict(
+        arch_profiles["source-bottleneck-adaptive-evidence-rerank-rca"],
+        rca_adaptive_evidence_gate="source_margin",
+        rca_adaptive_evidence_source_margin_threshold=0.35,
+    )
     arch_profiles["source-bottleneck-rca-aware-checkpoint"] = dict(
         arch_profiles["source-bottleneck-specificity-rca"],
         use_rca_aware_checkpoint=True,
@@ -3274,6 +3702,17 @@ def main():
         score_hyper_params["synthetic_rca_margin"] = max(float(args.synthetic_rca_margin), 0.0)
     if args.synthetic_rca_topk is not None:
         score_hyper_params["synthetic_rca_topk"] = max(1, int(args.synthetic_rca_topk))
+    if args.synthetic_rca_positive_aggregation is not None:
+        score_hyper_params["synthetic_rca_positive_aggregation"] = args.synthetic_rca_positive_aggregation
+    if args.synthetic_rca_positive_topk is not None:
+        score_hyper_params["synthetic_rca_positive_topk"] = max(
+            1, int(args.synthetic_rca_positive_topk)
+        )
+    if args.synthetic_rca_positive_min_weight is not None:
+        score_hyper_params["synthetic_rca_positive_min_weight"] = min(
+            max(0.0, float(args.synthetic_rca_positive_min_weight)),
+            1.0,
+        )
     if args.synthetic_rca_bce_weight is not None:
         score_hyper_params["synthetic_rca_bce_weight"] = max(0.0, float(args.synthetic_rca_bce_weight))
     if args.synthetic_rca_rank_weight is not None:
@@ -3303,6 +3742,24 @@ def main():
             max(0.0, float(args.root_response_confidence_discount)),
             0.95,
         )
+    if args.root_response_use_innovation_split:
+        score_hyper_params["root_response_use_innovation_split"] = True
+    if args.pairwise_root_response:
+        score_hyper_params["use_pairwise_root_response_head"] = True
+        score_hyper_params["use_root_score_head"] = True
+        score_hyper_params["root_score_head_mode"] = "root_response"
+    if args.lambda_pairwise_root_response is not None:
+        score_hyper_params["lambda_pairwise_root_response"] = max(
+            0.0, float(args.lambda_pairwise_root_response)
+        )
+        if score_hyper_params["lambda_pairwise_root_response"] > 0.0:
+            score_hyper_params["use_pairwise_root_response_head"] = True
+            score_hyper_params["use_root_score_head"] = True
+            score_hyper_params["root_score_head_mode"] = "root_response"
+    if args.pairwise_root_response_logit_weight is not None:
+        score_hyper_params["pairwise_root_response_logit_weight"] = max(
+            0.0, float(args.pairwise_root_response_logit_weight)
+        )
     if args.root_response_source_branch_weight is not None:
         score_hyper_params["root_response_source_branch_weight"] = max(
             0.0, float(args.root_response_source_branch_weight)
@@ -3314,6 +3771,21 @@ def main():
     if args.root_response_response_suppress_weight is not None:
         score_hyper_params["root_response_response_suppress_weight"] = max(
             0.0, float(args.root_response_response_suppress_weight)
+        )
+    if args.lambda_event_responsibility is not None:
+        score_hyper_params["lambda_event_responsibility"] = max(
+            0.0, float(args.lambda_event_responsibility)
+        )
+        score_hyper_params["use_event_responsibility_head"] = (
+            score_hyper_params["lambda_event_responsibility"] > 0.0
+        )
+    if args.event_responsibility_rank_weight is not None:
+        score_hyper_params["event_responsibility_rank_weight"] = max(
+            0.0, float(args.event_responsibility_rank_weight)
+        )
+    if args.event_responsibility_effect_suppress_weight is not None:
+        score_hyper_params["event_responsibility_effect_suppress_weight"] = max(
+            0.0, float(args.event_responsibility_effect_suppress_weight)
         )
     if args.lambda_channel_masked is not None:
         score_hyper_params["lambda_channel_masked"] = max(0.0, float(args.lambda_channel_masked))
@@ -3350,6 +3822,12 @@ def main():
         score_hyper_params["rca_source_gate_weight"] = max(0.0, float(args.rca_source_gate_weight))
     if args.rca_root_score_weight is not None:
         score_hyper_params["rca_root_score_weight"] = max(0.0, float(args.rca_root_score_weight))
+    if args.rca_event_responsibility_weight is not None:
+        score_hyper_params["rca_event_responsibility_weight"] = max(
+            0.0, float(args.rca_event_responsibility_weight)
+        )
+        if score_hyper_params["rca_event_responsibility_weight"] > 0.0:
+            score_hyper_params["use_event_responsibility_head"] = True
     if args.rca_root_score_signal is not None:
         score_hyper_params["rca_root_score_signal"] = args.rca_root_score_signal
     if args.rca_root_score_pooling is not None:

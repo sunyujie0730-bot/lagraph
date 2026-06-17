@@ -39,6 +39,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import roc_auc_score, average_precision_score
 from scipy import stats as scipy_stats
 from torch import optim
+from torch.utils.data import DataLoader, Subset
 
 from ts_benchmark.baselines.self_impl.LaGraph.gcn_model import SparseGCN
 from ts_benchmark.baselines.utils import anomaly_detection_data_provider
@@ -109,6 +110,9 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "masked_rca_rank_weight": 1.0,
     "synthetic_rca_margin": 0.2,
     "synthetic_rca_topk": 5,
+    "synthetic_rca_positive_aggregation": "mean",
+    "synthetic_rca_positive_topk": 1,
+    "synthetic_rca_positive_min_weight": 0.0,
     "synthetic_rca_min_roots": 1,
     "synthetic_rca_max_roots": 3,
     "synthetic_rca_bce_weight": 1.0,
@@ -136,6 +140,12 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "source_effect_margin": 0.2,
     "source_effect_onset_margin": 0.2,
     "source_effect_specificity_weight": 0.0,
+    "source_effect_consistency_weight": 0.0,
+    "source_effect_consistency_rank_weight": 0.75,
+    "source_effect_consistency_effect_rank_weight": 0.75,
+    "source_effect_consistency_effect_suppress_weight": 0.25,
+    "source_effect_consistency_gate_align_weight": 0.20,
+    "source_effect_consistency_margin": 0.15,
     "lambda_source_effect_rca_head": 0.0,
     "source_effect_rca_head_bce_weight": 1.0,
     "source_effect_rca_head_rank_weight": 1.0,
@@ -144,6 +154,14 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "root_score_detach_features": True,
     "root_response_penalty_init": 1.0,
     "root_response_confidence_discount": 0.75,
+    "root_response_use_innovation_split": False,
+    "use_pairwise_root_response_head": False,
+    "pairwise_root_response_rank": 8,
+    "pairwise_root_response_graph_weight": 0.75,
+    "pairwise_root_response_reward_init": 0.25,
+    "pairwise_root_response_penalty_init": 0.50,
+    "pairwise_root_response_logit_weight": 1.0,
+    "lambda_pairwise_root_response": 0.0,
     "lambda_source_effect_root_score": 0.0,
     "root_score_bce_weight": 1.0,
     "root_score_rank_weight": 1.0,
@@ -151,6 +169,36 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "root_response_source_branch_weight": 0.0,
     "root_response_response_branch_weight": 0.0,
     "root_response_response_suppress_weight": 0.5,
+    "use_event_responsibility_head": False,
+    "event_responsibility_hidden": 16,
+    "event_responsibility_detach_features": False,
+    "lambda_event_responsibility": 0.0,
+    "event_responsibility_loss_mode": "bce",
+    "event_responsibility_bce_balance": True,
+    "event_responsibility_ce_weight": 1.0,
+    "event_responsibility_rank_weight": 0.5,
+    "event_responsibility_effect_suppress_weight": 0.25,
+    "event_responsibility_entropy_weight": 0.0,
+    "use_evidence_fusion_head": False,
+    "evidence_fusion_hidden": 16,
+    "evidence_fusion_detach_inputs": False,
+    "evidence_fusion_loss_mode": "bce",
+    "evidence_fusion_export_mode": "sigmoid",
+    "lambda_evidence_fusion": 0.0,
+    "evidence_fusion_bce_weight": 1.0,
+    "evidence_fusion_rank_weight": 1.0,
+    "evidence_fusion_effect_suppress_weight": 0.25,
+    "evidence_fusion_pairwise_effect_weight": 0.0,
+    "evidence_fusion_pairwise_effect_margin": 0.2,
+    "evidence_fusion_entropy_weight": 0.0,
+    "use_source_interaction_head": False,
+    "source_interaction_detach_inputs": True,
+    "lambda_source_interaction_head": 0.0,
+    "source_interaction_head_bce_weight": 1.0,
+    "source_interaction_head_rank_weight": 1.0,
+    "source_interaction_head_effect_suppress_weight": 0.25,
+    "source_interaction_head_pairwise_effect_weight": 0.5,
+    "source_interaction_head_pairwise_effect_margin": 0.15,
     "lambda_source_bottleneck": 0.0,
     "source_bottleneck_bce_weight": 1.0,
     "source_bottleneck_rank_weight": 0.5,
@@ -212,6 +260,8 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "channel_mechanism_score_weight": 0.1,
     "channel_mechanism_score_eps": 1e-6,
     "score_stats_max_samples": 2_000_000,
+    "score_stats_max_batches": 128,
+    "score_stats_num_workers": 0,
     "use_mechanism_coupled_decoder": False,
     "mechanism_coupling_init": 0.15,
     "use_source_preserving_decoder": False,
@@ -279,11 +329,26 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_synthetic_weight": 0.0,
     "rca_source_gate_weight": 0.0,
     "rca_root_score_weight": 0.0,
+    "rca_event_responsibility_weight": 0.0,
     "rca_root_score_signal": "prob",
     "rca_root_score_pooling": "mean",
     "rca_root_score_head_ratio": 0.30,
     "rca_root_score_head_points": 30,
     "rca_root_score_top_quantile": 0.80,
+    "rca_event_responsibility_pooling": "mean",
+    "rca_event_responsibility_head_ratio": 0.30,
+    "rca_event_responsibility_head_points": 30,
+    "rca_event_responsibility_top_quantile": 0.80,
+    "rca_evidence_fusion_weight": 0.0,
+    "rca_evidence_fusion_pooling": "mean",
+    "rca_evidence_fusion_head_ratio": 0.30,
+    "rca_evidence_fusion_head_points": 30,
+    "rca_evidence_fusion_top_quantile": 0.80,
+    "rca_source_interaction_head_weight": 0.0,
+    "rca_source_interaction_head_pooling": "head_mean",
+    "rca_source_interaction_head_ratio": 0.30,
+    "rca_source_interaction_head_points": 30,
+    "rca_source_interaction_head_top_quantile": 0.80,
     "rca_source_interaction_weight": 0.0,
     "rca_source_innovation_weight": 0.0,
     "rca_source_innovation_mode": "series",
@@ -335,14 +400,52 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_event_specificity_top_k": 1,
     "rca_event_specificity_threshold": 0.35,
     "rca_event_specificity_min_events": 20,
+    "rca_event_specificity_source_guard_weight": 0.0,
+    "rca_event_specificity_source_guard_floor": 0.0,
+    "rca_event_specificity_keep_top_k": 0,
+    "rca_event_specificity_fill_secondary_top_k": 0,
+    "rca_event_specificity_secondary_base_weight": 0.0,
+    "rca_event_specificity_secondary_onset_weight": 0.0,
+    "rca_event_specificity_secondary_source_gate_weight": 0.0,
+    "rca_event_specificity_secondary_mechanism_residual_weight": 0.0,
+    "rca_event_specificity_secondary_source_interaction_weight": 0.0,
+    "rca_event_specificity_secondary_evidence_fusion_weight": 0.0,
+    "rca_adaptive_evidence_rerank": False,
+    "rca_adaptive_evidence_top_k": 20,
+    "rca_adaptive_evidence_keep_top_k": 1,
+    "rca_adaptive_evidence_fill_top_k": 5,
+    "rca_adaptive_evidence_gate": "source_top_old_rank",
+    "rca_adaptive_evidence_source_old_rank_threshold": 1,
+    "rca_adaptive_evidence_source_margin_threshold": 0.0,
+    "rca_adaptive_evidence_source_base_weight": 0.45,
+    "rca_adaptive_evidence_source_onset_weight": 0.25,
+    "rca_adaptive_evidence_source_gate_weight": 1.0,
+    "rca_adaptive_evidence_source_mechanism_residual_weight": 0.25,
+    "rca_adaptive_evidence_source_interaction_weight": 0.25,
+    "rca_adaptive_evidence_fallback_original_weight": 1.0,
+    "rca_adaptive_evidence_fallback_base_weight": 0.45,
+    "rca_adaptive_evidence_fallback_onset_weight": 0.20,
     "rca_topk_rerank": False,
     "rca_topk_rerank_k": 5,
     "rca_topk_rerank_original_weight": 1.0,
+    "rca_topk_rerank_base_weight": 0.0,
     "rca_topk_rerank_group_weight": 0.0,
     "rca_topk_rerank_onset_weight": 0.0,
     "rca_topk_rerank_source_gate_weight": 0.0,
     "rca_topk_rerank_mechanism_residual_weight": 0.0,
+    "rca_topk_rerank_source_interaction_weight": 0.0,
     "rca_topk_rerank_graph_penalty_weight": 0.0,
+    "rca_topk_rerank_component_scope": "candidate",
+    "rca_topk_rerank_keep_primary_top_k": 0,
+    "rca_topk_rerank_fill_secondary_top_k": 0,
+    "rca_topk_rerank_secondary_original_weight": 0.0,
+    "rca_topk_rerank_secondary_base_weight": 0.0,
+    "rca_topk_rerank_secondary_group_weight": 0.0,
+    "rca_topk_rerank_secondary_onset_weight": 0.0,
+    "rca_topk_rerank_secondary_source_gate_weight": 0.0,
+    "rca_topk_rerank_secondary_mechanism_residual_weight": 0.0,
+    "rca_topk_rerank_secondary_source_interaction_weight": 0.0,
+    "rca_topk_rerank_secondary_graph_penalty_weight": 0.0,
     # --- v11.4 P0-2: POT 阈值参数 ---
     "pot_risk": 1e-4,            # POT EVT 风险水平
     "pot_num_quantiles": 1000,   # POT 分位数数量
@@ -1026,6 +1129,9 @@ class LaGraph:
         self._last_causal_channel_scores = None
         self._last_source_gate_channel_scores = None
         self._last_root_score_channel_scores = None
+        self._last_event_responsibility_channel_scores = None
+        self._last_evidence_fusion_channel_scores = None
+        self._last_source_interaction_head_channel_scores = None
         self._last_synthetic_rca_channel_scores = None
         self._last_channel_names = None
         self._channel_corr_prior = None
@@ -1294,6 +1400,30 @@ class LaGraph:
                 "source_effect_onset_rank_weight": getattr(
                     self.config, "source_effect_onset_rank_weight", None
                 ),
+                "source_effect_consistency_weight": getattr(
+                    self.config, "source_effect_consistency_weight", None
+                ),
+                "source_effect_consistency_rank_weight": getattr(
+                    self.config, "source_effect_consistency_rank_weight", None
+                ),
+                "source_effect_consistency_effect_rank_weight": getattr(
+                    self.config,
+                    "source_effect_consistency_effect_rank_weight",
+                    None,
+                ),
+                "source_effect_consistency_effect_suppress_weight": getattr(
+                    self.config,
+                    "source_effect_consistency_effect_suppress_weight",
+                    None,
+                ),
+                "source_effect_consistency_gate_align_weight": getattr(
+                    self.config,
+                    "source_effect_consistency_gate_align_weight",
+                    None,
+                ),
+                "source_effect_consistency_margin": getattr(
+                    self.config, "source_effect_consistency_margin", None
+                ),
                 "lambda_source_effect_rca_head": getattr(
                     self.config, "lambda_source_effect_rca_head", None
                 ),
@@ -1314,6 +1444,30 @@ class LaGraph:
                 "root_response_confidence_discount": getattr(
                     self.config, "root_response_confidence_discount", None
                 ),
+                "root_response_use_innovation_split": getattr(
+                    self.config, "root_response_use_innovation_split", None
+                ),
+                "use_pairwise_root_response_head": getattr(
+                    self.config, "use_pairwise_root_response_head", None
+                ),
+                "pairwise_root_response_rank": getattr(
+                    self.config, "pairwise_root_response_rank", None
+                ),
+                "pairwise_root_response_graph_weight": getattr(
+                    self.config, "pairwise_root_response_graph_weight", None
+                ),
+                "pairwise_root_response_reward_init": getattr(
+                    self.config, "pairwise_root_response_reward_init", None
+                ),
+                "pairwise_root_response_penalty_init": getattr(
+                    self.config, "pairwise_root_response_penalty_init", None
+                ),
+                "pairwise_root_response_logit_weight": getattr(
+                    self.config, "pairwise_root_response_logit_weight", None
+                ),
+                "lambda_pairwise_root_response": getattr(
+                    self.config, "lambda_pairwise_root_response", None
+                ),
                 "lambda_source_effect_root_score": getattr(
                     self.config, "lambda_source_effect_root_score", None
                 ),
@@ -1330,6 +1484,123 @@ class LaGraph:
                 ),
                 "root_response_response_suppress_weight": getattr(
                     self.config, "root_response_response_suppress_weight", None
+                ),
+                "use_event_responsibility_head": getattr(
+                    self.config, "use_event_responsibility_head", None
+                ),
+                "lambda_event_responsibility": getattr(
+                    self.config, "lambda_event_responsibility", None
+                ),
+                "event_responsibility_loss_mode": getattr(
+                    self.config, "event_responsibility_loss_mode", None
+                ),
+                "event_responsibility_bce_balance": getattr(
+                    self.config, "event_responsibility_bce_balance", None
+                ),
+                "event_responsibility_ce_weight": getattr(
+                    self.config, "event_responsibility_ce_weight", None
+                ),
+                "event_responsibility_rank_weight": getattr(
+                    self.config, "event_responsibility_rank_weight", None
+                ),
+                "event_responsibility_effect_suppress_weight": getattr(
+                    self.config, "event_responsibility_effect_suppress_weight", None
+                ),
+                "use_evidence_fusion_head": getattr(
+                    self.config, "use_evidence_fusion_head", None
+                ),
+                "lambda_evidence_fusion": getattr(
+                    self.config, "lambda_evidence_fusion", None
+                ),
+                "evidence_fusion_loss_mode": getattr(
+                    self.config, "evidence_fusion_loss_mode", None
+                ),
+                "evidence_fusion_export_mode": getattr(
+                    self.config, "evidence_fusion_export_mode", None
+                ),
+                "evidence_fusion_bce_weight": getattr(
+                    self.config, "evidence_fusion_bce_weight", None
+                ),
+                "evidence_fusion_rank_weight": getattr(
+                    self.config, "evidence_fusion_rank_weight", None
+                ),
+                "evidence_fusion_effect_suppress_weight": getattr(
+                    self.config, "evidence_fusion_effect_suppress_weight", None
+                ),
+                "rca_evidence_fusion_weight": getattr(
+                    self.config, "rca_evidence_fusion_weight", None
+                ),
+                "rca_evidence_fusion_pooling": getattr(
+                    self.config, "rca_evidence_fusion_pooling", None
+                ),
+                "rca_evidence_fusion_head_ratio": getattr(
+                    self.config, "rca_evidence_fusion_head_ratio", None
+                ),
+                "rca_evidence_fusion_head_points": getattr(
+                    self.config, "rca_evidence_fusion_head_points", None
+                ),
+                "rca_evidence_fusion_top_quantile": getattr(
+                    self.config, "rca_evidence_fusion_top_quantile", None
+                ),
+                "use_source_interaction_head": getattr(
+                    self.config, "use_source_interaction_head", None
+                ),
+                "source_interaction_detach_inputs": getattr(
+                    self.config, "source_interaction_detach_inputs", None
+                ),
+                "lambda_source_interaction_head": getattr(
+                    self.config, "lambda_source_interaction_head", None
+                ),
+                "source_interaction_head_bce_weight": getattr(
+                    self.config, "source_interaction_head_bce_weight", None
+                ),
+                "source_interaction_head_rank_weight": getattr(
+                    self.config, "source_interaction_head_rank_weight", None
+                ),
+                "source_interaction_head_effect_suppress_weight": getattr(
+                    self.config,
+                    "source_interaction_head_effect_suppress_weight",
+                    None,
+                ),
+                "source_interaction_head_pairwise_effect_weight": getattr(
+                    self.config,
+                    "source_interaction_head_pairwise_effect_weight",
+                    None,
+                ),
+                "source_interaction_head_pairwise_effect_margin": getattr(
+                    self.config,
+                    "source_interaction_head_pairwise_effect_margin",
+                    None,
+                ),
+                "rca_source_interaction_head_weight": getattr(
+                    self.config, "rca_source_interaction_head_weight", None
+                ),
+                "rca_source_interaction_head_pooling": getattr(
+                    self.config, "rca_source_interaction_head_pooling", None
+                ),
+                "rca_source_interaction_head_ratio": getattr(
+                    self.config, "rca_source_interaction_head_ratio", None
+                ),
+                "rca_source_interaction_head_points": getattr(
+                    self.config, "rca_source_interaction_head_points", None
+                ),
+                "rca_source_interaction_head_top_quantile": getattr(
+                    self.config, "rca_source_interaction_head_top_quantile", None
+                ),
+                "rca_event_responsibility_weight": getattr(
+                    self.config, "rca_event_responsibility_weight", None
+                ),
+                "rca_event_responsibility_pooling": getattr(
+                    self.config, "rca_event_responsibility_pooling", None
+                ),
+                "rca_event_responsibility_head_ratio": getattr(
+                    self.config, "rca_event_responsibility_head_ratio", None
+                ),
+                "rca_event_responsibility_head_points": getattr(
+                    self.config, "rca_event_responsibility_head_points", None
+                ),
+                "rca_event_responsibility_top_quantile": getattr(
+                    self.config, "rca_event_responsibility_top_quantile", None
                 ),
                 "rca_root_score_pooling": getattr(self.config, "rca_root_score_pooling", None),
                 "rca_root_score_head_ratio": getattr(self.config, "rca_root_score_head_ratio", None),
@@ -1443,10 +1714,98 @@ class LaGraph:
                 "rca_onset_weight": getattr(self.config, "rca_onset_weight", None),
                 "rca_onset_baseline_window": getattr(self.config, "rca_onset_baseline_window", None),
                 "rca_onset_z": getattr(self.config, "rca_onset_z", None),
+                "rca_event_specificity_keep_top_k": getattr(
+                    self.config, "rca_event_specificity_keep_top_k", None
+                ),
+                "rca_event_specificity_fill_secondary_top_k": getattr(
+                    self.config, "rca_event_specificity_fill_secondary_top_k", None
+                ),
+                "rca_event_specificity_secondary_base_weight": getattr(
+                    self.config, "rca_event_specificity_secondary_base_weight", None
+                ),
+                "rca_event_specificity_secondary_onset_weight": getattr(
+                    self.config, "rca_event_specificity_secondary_onset_weight", None
+                ),
+                "rca_event_specificity_secondary_source_gate_weight": getattr(
+                    self.config, "rca_event_specificity_secondary_source_gate_weight", None
+                ),
+                "rca_event_specificity_secondary_mechanism_residual_weight": getattr(
+                    self.config,
+                    "rca_event_specificity_secondary_mechanism_residual_weight",
+                    None,
+                ),
+                "rca_event_specificity_secondary_source_interaction_weight": getattr(
+                    self.config,
+                    "rca_event_specificity_secondary_source_interaction_weight",
+                    None,
+                ),
+                "rca_event_specificity_secondary_evidence_fusion_weight": getattr(
+                    self.config,
+                    "rca_event_specificity_secondary_evidence_fusion_weight",
+                    None,
+                ),
+                "rca_adaptive_evidence_rerank": getattr(
+                    self.config, "rca_adaptive_evidence_rerank", None
+                ),
+                "rca_adaptive_evidence_top_k": getattr(
+                    self.config, "rca_adaptive_evidence_top_k", None
+                ),
+                "rca_adaptive_evidence_keep_top_k": getattr(
+                    self.config, "rca_adaptive_evidence_keep_top_k", None
+                ),
+                "rca_adaptive_evidence_fill_top_k": getattr(
+                    self.config, "rca_adaptive_evidence_fill_top_k", None
+                ),
+                "rca_adaptive_evidence_gate": getattr(
+                    self.config, "rca_adaptive_evidence_gate", None
+                ),
+                "rca_adaptive_evidence_source_old_rank_threshold": getattr(
+                    self.config,
+                    "rca_adaptive_evidence_source_old_rank_threshold",
+                    None,
+                ),
+                "rca_adaptive_evidence_source_margin_threshold": getattr(
+                    self.config,
+                    "rca_adaptive_evidence_source_margin_threshold",
+                    None,
+                ),
+                "rca_adaptive_evidence_source_base_weight": getattr(
+                    self.config, "rca_adaptive_evidence_source_base_weight", None
+                ),
+                "rca_adaptive_evidence_source_onset_weight": getattr(
+                    self.config, "rca_adaptive_evidence_source_onset_weight", None
+                ),
+                "rca_adaptive_evidence_source_gate_weight": getattr(
+                    self.config, "rca_adaptive_evidence_source_gate_weight", None
+                ),
+                "rca_adaptive_evidence_source_mechanism_residual_weight": getattr(
+                    self.config,
+                    "rca_adaptive_evidence_source_mechanism_residual_weight",
+                    None,
+                ),
+                "rca_adaptive_evidence_source_interaction_weight": getattr(
+                    self.config,
+                    "rca_adaptive_evidence_source_interaction_weight",
+                    None,
+                ),
+                "rca_adaptive_evidence_fallback_original_weight": getattr(
+                    self.config,
+                    "rca_adaptive_evidence_fallback_original_weight",
+                    None,
+                ),
+                "rca_adaptive_evidence_fallback_base_weight": getattr(
+                    self.config, "rca_adaptive_evidence_fallback_base_weight", None
+                ),
+                "rca_adaptive_evidence_fallback_onset_weight": getattr(
+                    self.config, "rca_adaptive_evidence_fallback_onset_weight", None
+                ),
                 "rca_topk_rerank": getattr(self.config, "rca_topk_rerank", None),
                 "rca_topk_rerank_k": getattr(self.config, "rca_topk_rerank_k", None),
                 "rca_topk_rerank_original_weight": getattr(
                     self.config, "rca_topk_rerank_original_weight", None
+                ),
+                "rca_topk_rerank_base_weight": getattr(
+                    self.config, "rca_topk_rerank_base_weight", None
                 ),
                 "rca_topk_rerank_group_weight": getattr(
                     self.config, "rca_topk_rerank_group_weight", None
@@ -1460,8 +1819,44 @@ class LaGraph:
                 "rca_topk_rerank_mechanism_residual_weight": getattr(
                     self.config, "rca_topk_rerank_mechanism_residual_weight", None
                 ),
+                "rca_topk_rerank_source_interaction_weight": getattr(
+                    self.config, "rca_topk_rerank_source_interaction_weight", None
+                ),
                 "rca_topk_rerank_graph_penalty_weight": getattr(
                     self.config, "rca_topk_rerank_graph_penalty_weight", None
+                ),
+                "rca_topk_rerank_component_scope": getattr(
+                    self.config, "rca_topk_rerank_component_scope", None
+                ),
+                "rca_topk_rerank_keep_primary_top_k": getattr(
+                    self.config, "rca_topk_rerank_keep_primary_top_k", None
+                ),
+                "rca_topk_rerank_fill_secondary_top_k": getattr(
+                    self.config, "rca_topk_rerank_fill_secondary_top_k", None
+                ),
+                "rca_topk_rerank_secondary_original_weight": getattr(
+                    self.config, "rca_topk_rerank_secondary_original_weight", None
+                ),
+                "rca_topk_rerank_secondary_base_weight": getattr(
+                    self.config, "rca_topk_rerank_secondary_base_weight", None
+                ),
+                "rca_topk_rerank_secondary_group_weight": getattr(
+                    self.config, "rca_topk_rerank_secondary_group_weight", None
+                ),
+                "rca_topk_rerank_secondary_onset_weight": getattr(
+                    self.config, "rca_topk_rerank_secondary_onset_weight", None
+                ),
+                "rca_topk_rerank_secondary_source_gate_weight": getattr(
+                    self.config, "rca_topk_rerank_secondary_source_gate_weight", None
+                ),
+                "rca_topk_rerank_secondary_mechanism_residual_weight": getattr(
+                    self.config, "rca_topk_rerank_secondary_mechanism_residual_weight", None
+                ),
+                "rca_topk_rerank_secondary_source_interaction_weight": getattr(
+                    self.config, "rca_topk_rerank_secondary_source_interaction_weight", None
+                ),
+                "rca_topk_rerank_secondary_graph_penalty_weight": getattr(
+                    self.config, "rca_topk_rerank_secondary_graph_penalty_weight", None
                 ),
                 "use_state_aware_fusion": getattr(self.config, "use_state_aware_fusion", None),
                 "state_aware_num_states": getattr(self.config, "state_aware_num_states", None),
@@ -2032,6 +2427,33 @@ class LaGraph:
             return onset_scores.new_tensor(0.0)
         return torch.stack(losses).mean()
 
+    def _source_effect_pairwise_margin_loss(
+        self,
+        source_scores,
+        effect_scores,
+        source_mask,
+        effect_mask,
+        margin,
+    ):
+        margin = max(float(margin), 0.0)
+        losses = []
+        for b in range(source_scores.shape[0]):
+            roots = source_mask[b] > 0.5
+            effects = (effect_mask[b] > 0.5) & (~roots)
+            if roots.sum() == 0 or effects.sum() == 0:
+                continue
+            pos_score = source_scores[b, roots].mean()
+            hard_effect = torch.topk(
+                effect_scores[b, effects],
+                k=min(3, int(effects.sum().item())),
+            ).values.mean()
+            losses.append(
+                F.relu(source_scores.new_tensor(margin) + hard_effect - pos_score)
+            )
+        if not losses:
+            return source_scores.new_tensor(0.0)
+        return torch.stack(losses).mean()
+
     def _weighted_channel_bce(self, probs, target):
         probs = probs.clamp(1e-5, 1.0 - 1e-5)
         pos = target.sum().clamp_min(1.0)
@@ -2196,6 +2618,119 @@ class LaGraph:
         self._record_loss_debug("source_bottleneck_total_scaled", scaled)
         return scaled
 
+    def _source_effect_consistency_loss(
+        self,
+        gate_prob,
+        onset_signal,
+        mechanism_signal,
+        source_mask,
+        effect_mask,
+        source_onset_mask,
+        effect_time_mask,
+        onset_sum,
+        effect_time_sum,
+    ):
+        weight = float(getattr(self.config, "source_effect_consistency_weight", 0.0) or 0.0)
+        if weight <= 0 or gate_prob is None or mechanism_signal is None:
+            return source_mask.new_tensor(0.0)
+        if source_mask.sum() <= 0:
+            return source_mask.new_tensor(0.0)
+
+        dtype = gate_prob.dtype
+        eps = 1e-6
+        onset_signal = torch.clamp_min(onset_signal.to(dtype=dtype), 0.0)
+        mechanism_signal = torch.clamp_min(mechanism_signal.to(dtype=dtype), 0.0)
+        source_time = source_onset_mask.to(dtype=dtype)
+        effect_time = effect_time_mask.to(dtype=dtype)
+        onset_denom = onset_sum.to(dtype=dtype).clamp_min(1.0)
+        effect_denom = effect_time_sum.to(dtype=dtype).clamp_min(1.0)
+
+        def _time_mean(values, mask, denom):
+            return torch.einsum("blc,bl->bc", values, mask) / denom
+
+        source_gate = _time_mean(gate_prob, source_time, onset_denom).clamp(0.0, 1.0)
+        effect_gate = _time_mean(gate_prob, effect_time, effect_denom).clamp(0.0, 1.0)
+        source_onset = _time_mean(onset_signal, source_time, onset_denom)
+        effect_onset = _time_mean(onset_signal, effect_time, effect_denom)
+        source_mechanism = _time_mean(mechanism_signal, source_time, onset_denom)
+        effect_mechanism = _time_mean(mechanism_signal, effect_time, effect_denom)
+
+        def _shared_norm(source_values, effect_values):
+            denom = torch.maximum(
+                source_values.detach().amax(dim=1, keepdim=True),
+                effect_values.detach().amax(dim=1, keepdim=True),
+            ).clamp_min(eps)
+            return source_values / denom, effect_values / denom
+
+        source_onset_norm, effect_onset_norm = _shared_norm(source_onset, effect_onset)
+        source_mech_norm, effect_mech_norm = _shared_norm(source_mechanism, effect_mechanism)
+        source_support = torch.sqrt(
+            torch.clamp_min(source_onset_norm * source_mech_norm, 0.0) + eps
+        )
+        effect_support = torch.sqrt(
+            torch.clamp_min(effect_onset_norm * effect_mech_norm, 0.0) + eps
+        )
+        source_consistency = source_gate * source_support
+        effect_consistency = effect_gate * effect_support
+
+        total = source_consistency.new_tensor(0.0)
+        rank_weight = float(
+            getattr(self.config, "source_effect_consistency_rank_weight", 0.75) or 0.0
+        )
+        if rank_weight > 0:
+            rank_loss = self._synthetic_rca_ranking_loss(source_consistency, source_mask)
+            total = total + rank_weight * rank_loss
+            self._record_loss_debug("source_effect_consistency_rank_raw", rank_loss)
+
+        effect_rank_weight = float(
+            getattr(self.config, "source_effect_consistency_effect_rank_weight", 0.75)
+            or 0.0
+        )
+        if effect_rank_weight > 0 and effect_mask.sum() > 0:
+            effect_rank_loss = self._source_effect_pairwise_margin_loss(
+                source_consistency,
+                effect_consistency,
+                source_mask,
+                effect_mask,
+                float(
+                    getattr(self.config, "source_effect_consistency_margin", 0.15)
+                    or 0.15
+                ),
+            )
+            total = total + effect_rank_weight * effect_rank_loss
+            self._record_loss_debug(
+                "source_effect_consistency_effect_rank_raw",
+                effect_rank_loss,
+            )
+
+        suppress_weight = float(
+            getattr(self.config, "source_effect_consistency_effect_suppress_weight", 0.25)
+            or 0.0
+        )
+        if suppress_weight > 0 and effect_mask.sum() > 0:
+            suppress = (
+                effect_consistency * effect_mask.to(dtype=effect_consistency.dtype)
+            ).sum() / effect_mask.sum().clamp_min(1.0)
+            total = total + suppress_weight * suppress
+            self._record_loss_debug("source_effect_consistency_effect_suppress_raw", suppress)
+
+        align_weight = float(
+            getattr(self.config, "source_effect_consistency_gate_align_weight", 0.20)
+            or 0.0
+        )
+        if align_weight > 0:
+            root_mask = source_mask.to(dtype=source_gate.dtype)
+            align = (
+                F.relu(source_support.detach() - source_gate) * root_mask
+            ).sum() / root_mask.sum().clamp_min(1.0)
+            total = total + align_weight * align
+            self._record_loss_debug("source_effect_consistency_gate_align_raw", align)
+
+        scaled = weight * total
+        self._record_loss_debug("source_effect_consistency_inner", total)
+        self._record_loss_debug("source_effect_consistency_scaled", scaled)
+        return scaled
+
     def _channel_masked_modeling_loss(self, input_data, batch_idx=None):
         if not bool(getattr(self.config, "use_channel_masked_modeling", False)):
             return input_data.new_tensor(0.0)
@@ -2325,7 +2860,11 @@ class LaGraph:
         ) = self._make_source_effect_synthetic_batch(input_data)
         synth_rec, _, _, _, _, synth_aux, _ = self.model(
             synth_data,
-            return_root_score=bool(getattr(self.config, "use_root_score_head", False)),
+            return_root_score=(
+                bool(getattr(self.config, "use_root_score_head", False))
+                or bool(getattr(self.config, "use_evidence_fusion_head", False))
+                or bool(getattr(self.config, "use_source_interaction_head", False))
+            ),
         )
         if not synth_aux:
             return input_data.new_tensor(0.0)
@@ -2338,21 +2877,39 @@ class LaGraph:
         root_score_logits = synth_aux.get("root_score_logits")
         root_response_source_evidence = synth_aux.get("root_response_source_evidence")
         root_response_response_evidence = synth_aux.get("root_response_response_evidence")
+        root_response_pairwise_relation = synth_aux.get("root_response_pairwise_relation")
+        event_responsibility_logits = synth_aux.get("event_responsibility_logits")
+        evidence_fusion_logits = synth_aux.get("evidence_fusion_logits")
+        evidence_fusion_weights = synth_aux.get("evidence_fusion_weights")
+        source_interaction_logits = synth_aux.get("source_interaction_logits")
         gate_channel_scores = None
         if gate_prob is not None:
             gate_channel_scores = (gate_prob * event_mask.unsqueeze(-1)).sum(dim=1) / mask_sum
+
+        channel_err = F.l1_loss(synth_rec, synth_data, reduction="none")
+        if channel_err.shape[1] > 1:
+            prev_channel_err = torch.cat(
+                [
+                    torch.zeros_like(channel_err[:, :1, :]),
+                    channel_err[:, :-1, :],
+                ],
+                dim=1,
+            )
+        else:
+            prev_channel_err = torch.zeros_like(channel_err)
+        onset_signal = torch.relu(channel_err - prev_channel_err)
+        mechanism_signal = synth_aux.get("channel_mechanism_error")
 
         source_score = synth_aux.get("source_gate_score")
         if source_score is not None:
             channel_scores = (source_score * event_mask.unsqueeze(-1)).sum(dim=1) / mask_sum
         else:
-            channel_err = F.l1_loss(synth_rec, synth_data, reduction="none")
             channel_scores = (channel_err * event_mask.unsqueeze(-1)).sum(dim=1) / mask_sum
 
         if source_score is not None:
             time_channel_scores = source_score
         else:
-            time_channel_scores = F.l1_loss(synth_rec, synth_data, reduction="none")
+            time_channel_scores = channel_err
         onset_channel_scores = (
             time_channel_scores * source_onset_mask.unsqueeze(-1)
         ).sum(dim=1) / onset_sum
@@ -2367,6 +2924,18 @@ class LaGraph:
         specificity_weight = float(getattr(self.config, "source_effect_specificity_weight", 0.0) or 0.0)
         rca_head_weight = float(getattr(self.config, "lambda_source_effect_rca_head", 0.0) or 0.0)
         root_score_weight = float(getattr(self.config, "lambda_source_effect_root_score", 0.0) or 0.0)
+        pairwise_root_response_weight = float(
+            getattr(self.config, "lambda_pairwise_root_response", 0.0) or 0.0
+        )
+        event_responsibility_weight = float(
+            getattr(self.config, "lambda_event_responsibility", 0.0) or 0.0
+        )
+        evidence_fusion_weight = float(
+            getattr(self.config, "lambda_evidence_fusion", 0.0) or 0.0
+        )
+        source_interaction_head_weight = float(
+            getattr(self.config, "lambda_source_interaction_head", 0.0) or 0.0
+        )
 
         total = input_data.new_tensor(0.0)
         if gate_channel_scores is not None:
@@ -2400,6 +2969,18 @@ class LaGraph:
                     "source_effect_specificity_inner_weighted",
                     specificity_weight * gate_specificity,
                 )
+        consistency_loss = self._source_effect_consistency_loss(
+            gate_prob,
+            onset_signal,
+            mechanism_signal,
+            source_mask,
+            effect_mask,
+            source_onset_mask,
+            effect_time_mask,
+            onset_sum,
+            effect_time_sum,
+        )
+        total = total + consistency_loss
         if synth_rca_logits is not None and rca_head_weight > 0:
             pos = source_mask.sum().clamp_min(1.0)
             neg = (source_mask.numel() - source_mask.sum()).clamp_min(1.0)
@@ -2470,6 +3051,335 @@ class LaGraph:
             self._record_loss_debug(
                 "source_effect_root_score_inner_weighted",
                 root_score_weight * root_total,
+            )
+        if (
+            root_response_pairwise_relation is not None
+            and pairwise_root_response_weight > 0
+            and effect_mask.sum() > 0
+            and source_mask.sum() > 0
+        ):
+            relation = root_response_pairwise_relation.clamp_min(1e-8)
+            src = source_mask.to(dtype=relation.dtype)
+            eff = effect_mask.to(dtype=relation.dtype)
+            source_count = src.sum(dim=1).clamp_min(1.0)
+            effect_count = eff.sum(dim=1).clamp_min(1.0)
+            source_to_effect = (relation * src.unsqueeze(-1) * eff.unsqueeze(1)).sum(
+                dim=(1, 2)
+            ) / source_count
+            incoming_from_source = (relation * src.unsqueeze(-1)).sum(dim=1)
+            effect_coverage = (incoming_from_source * eff).sum(dim=1) / effect_count
+            valid = ((src.sum(dim=1) > 0) & (eff.sum(dim=1) > 0)).to(dtype=relation.dtype)
+            source_to_effect = source_to_effect.clamp(max=1.0)
+            effect_coverage = effect_coverage.clamp(max=1.0)
+            pair_loss = -(
+                torch.log(source_to_effect.clamp_min(1e-6))
+                + torch.log(effect_coverage.clamp_min(1e-6))
+            )
+            pair_loss = (pair_loss * valid).sum() / valid.sum().clamp_min(1.0)
+            total = total + pairwise_root_response_weight * pair_loss
+            self._record_loss_debug("pairwise_root_response_raw", pair_loss)
+            self._record_loss_debug(
+                "pairwise_root_response_inner_weighted",
+                pairwise_root_response_weight * pair_loss,
+            )
+        if event_responsibility_logits is not None and event_responsibility_weight > 0:
+            focus_mask = source_onset_mask
+            focus_sum = onset_sum
+            if focus_mask.sum() <= 0:
+                focus_mask = event_mask
+                focus_sum = mask_sum
+            responsibility_logits = (
+                event_responsibility_logits
+                * focus_mask.unsqueeze(-1).to(dtype=event_responsibility_logits.dtype)
+            ).sum(dim=1) / focus_sum
+            target = source_mask.to(dtype=responsibility_logits.dtype)
+            loss_mode = str(
+                getattr(self.config, "event_responsibility_loss_mode", "bce") or "bce"
+            ).lower()
+            if loss_mode in {"softmax", "softmax_ce", "ce"}:
+                target_dist = target / target.sum(dim=1, keepdim=True).clamp_min(1.0)
+                log_q = F.log_softmax(responsibility_logits, dim=-1)
+                q = torch.softmax(responsibility_logits, dim=-1)
+                resp_primary = -(target_dist * log_q).sum(dim=1).mean()
+            else:
+                q = torch.sigmoid(responsibility_logits)
+                bce_raw = F.binary_cross_entropy_with_logits(
+                    responsibility_logits,
+                    target,
+                    reduction="none",
+                )
+                if bool(getattr(self.config, "event_responsibility_bce_balance", True)):
+                    pos_count = target.sum().clamp_min(1.0)
+                    neg_count = (1.0 - target).sum().clamp_min(1.0)
+                    numel = float(target.numel())
+                    pos_weight = numel / (2.0 * pos_count)
+                    neg_weight = numel / (2.0 * neg_count)
+                    bce_weight = torch.where(target > 0.5, pos_weight, neg_weight)
+                    resp_primary = (bce_raw * bce_weight).mean()
+                else:
+                    resp_primary = bce_raw.mean()
+            resp_rank = self._synthetic_rca_ranking_loss(q, source_mask)
+            resp_total = (
+                float(getattr(self.config, "event_responsibility_ce_weight", 1.0) or 1.0)
+                * resp_primary
+                + float(getattr(self.config, "event_responsibility_rank_weight", 0.5) or 0.0)
+                * resp_rank
+            )
+            suppress_weight = float(
+                getattr(self.config, "event_responsibility_effect_suppress_weight", 0.25)
+                or 0.0
+            )
+            if suppress_weight > 0 and effect_mask.sum() > 0 and effect_time_mask.sum() > 0:
+                resp_prob_time = torch.sigmoid(event_responsibility_logits)
+                resp_effect_scores = (
+                    resp_prob_time * effect_time_mask.unsqueeze(-1).to(dtype=resp_prob_time.dtype)
+                ).sum(dim=1) / effect_time_sum
+                resp_effect_suppress = (
+                    resp_effect_scores * effect_mask.to(dtype=resp_effect_scores.dtype)
+                ).sum() / effect_mask.sum().clamp_min(1.0)
+                resp_total = resp_total + suppress_weight * resp_effect_suppress
+                self._record_loss_debug(
+                    "event_responsibility_effect_suppress_raw",
+                    resp_effect_suppress,
+                )
+            entropy_weight = float(
+                getattr(self.config, "event_responsibility_entropy_weight", 0.0) or 0.0
+            )
+            if entropy_weight > 0:
+                entropy = -(q.clamp_min(1e-8) * q.clamp_min(1e-8).log()).sum(dim=-1)
+                entropy = entropy.mean() / max(math.log(max(2, q.shape[-1])), 1e-8)
+                resp_total = resp_total + entropy_weight * entropy
+                self._record_loss_debug("event_responsibility_entropy_raw", entropy)
+            total = total + event_responsibility_weight * resp_total
+            self._record_loss_debug("event_responsibility_primary_raw", resp_primary)
+            self._record_loss_debug("event_responsibility_rank_raw", resp_rank)
+            self._record_loss_debug(
+                "event_responsibility_inner_weighted",
+                event_responsibility_weight * resp_total,
+            )
+        if evidence_fusion_logits is not None and evidence_fusion_weight > 0:
+            focus_mask = source_onset_mask
+            focus_sum = onset_sum
+            if focus_mask.sum() <= 0:
+                focus_mask = event_mask
+                focus_sum = mask_sum
+            fusion_logits = (
+                evidence_fusion_logits
+                * focus_mask.unsqueeze(-1).to(dtype=evidence_fusion_logits.dtype)
+            ).sum(dim=1) / focus_sum
+            target = source_mask.to(dtype=fusion_logits.dtype)
+            fusion_loss_mode = str(
+                getattr(self.config, "evidence_fusion_loss_mode", "bce") or "bce"
+            ).lower()
+            if fusion_loss_mode in {"softmax", "softmax_ce", "ce", "competition"}:
+                target_dist = target / target.sum(dim=1, keepdim=True).clamp_min(1.0)
+                log_q = F.log_softmax(fusion_logits, dim=-1)
+                fusion_primary = -(target_dist * log_q).sum(dim=1).mean()
+                fusion_prob = torch.softmax(fusion_logits, dim=-1)
+            else:
+                pos_count = target.sum().clamp_min(1.0)
+                neg_count = (1.0 - target).sum().clamp_min(1.0)
+                pos_weight = (neg_count / pos_count).clamp(1.0, 20.0)
+                fusion_primary = F.binary_cross_entropy_with_logits(
+                    fusion_logits,
+                    target,
+                    pos_weight=pos_weight,
+                )
+                fusion_prob = torch.sigmoid(fusion_logits)
+            fusion_rank = self._synthetic_rca_ranking_loss(fusion_prob, source_mask)
+            fusion_total = (
+                float(getattr(self.config, "evidence_fusion_bce_weight", 1.0) or 1.0)
+                * fusion_primary
+                + float(getattr(self.config, "evidence_fusion_rank_weight", 1.0) or 0.0)
+                * fusion_rank
+            )
+            suppress_weight = float(
+                getattr(self.config, "evidence_fusion_effect_suppress_weight", 0.25)
+                or 0.0
+            )
+            if suppress_weight > 0 and effect_mask.sum() > 0 and effect_time_mask.sum() > 0:
+                if fusion_loss_mode in {"softmax", "softmax_ce", "ce", "competition"}:
+                    fusion_prob_time = torch.softmax(evidence_fusion_logits, dim=-1)
+                else:
+                    fusion_prob_time = torch.sigmoid(evidence_fusion_logits)
+                fusion_effect_scores = (
+                    fusion_prob_time * effect_time_mask.unsqueeze(-1).to(dtype=fusion_prob_time.dtype)
+                ).sum(dim=1) / effect_time_sum
+                fusion_effect_suppress = (
+                    fusion_effect_scores * effect_mask.to(dtype=fusion_effect_scores.dtype)
+                ).sum() / effect_mask.sum().clamp_min(1.0)
+                fusion_total = fusion_total + suppress_weight * fusion_effect_suppress
+                self._record_loss_debug(
+                    "evidence_fusion_effect_suppress_raw",
+                    fusion_effect_suppress,
+                )
+            pairwise_effect_weight = float(
+                getattr(self.config, "evidence_fusion_pairwise_effect_weight", 0.0)
+                or 0.0
+            )
+            if (
+                pairwise_effect_weight > 0
+                and effect_mask.sum() > 0
+                and effect_time_mask.sum() > 0
+            ):
+                source_time = source_onset_mask.to(dtype=evidence_fusion_logits.dtype)
+                effect_time = effect_time_mask.to(dtype=evidence_fusion_logits.dtype)
+                fusion_source_scores = torch.einsum(
+                    "blc,bl->bc",
+                    evidence_fusion_logits,
+                    source_time,
+                ) / onset_sum.to(dtype=evidence_fusion_logits.dtype)
+                fusion_effect_scores = torch.einsum(
+                    "blc,bl->bc",
+                    evidence_fusion_logits,
+                    effect_time,
+                ) / effect_time_sum.to(dtype=evidence_fusion_logits.dtype)
+                pairwise_effect_margin = float(
+                    getattr(
+                        self.config,
+                        "evidence_fusion_pairwise_effect_margin",
+                        0.2,
+                    )
+                    or 0.2
+                )
+                fusion_pairwise_effect = self._source_effect_pairwise_margin_loss(
+                    fusion_source_scores,
+                    fusion_effect_scores,
+                    source_mask,
+                    effect_mask,
+                    pairwise_effect_margin,
+                )
+                fusion_total = (
+                    fusion_total + pairwise_effect_weight * fusion_pairwise_effect
+                )
+                self._record_loss_debug(
+                    "evidence_fusion_pairwise_effect_raw",
+                    fusion_pairwise_effect,
+                )
+            entropy_weight = float(
+                getattr(self.config, "evidence_fusion_entropy_weight", 0.0) or 0.0
+            )
+            if (
+                entropy_weight > 0
+                and evidence_fusion_weights is not None
+                and evidence_fusion_weights.shape[-1] > 1
+            ):
+                weights = evidence_fusion_weights.clamp_min(1e-8)
+                weight_entropy = -(weights * weights.log()).sum(dim=-1)
+                weight_entropy = weight_entropy / max(math.log(weights.shape[-1]), 1e-8)
+                focused_entropy = (
+                    weight_entropy
+                    * focus_mask.unsqueeze(-1).to(dtype=weight_entropy.dtype)
+                ).sum() / (
+                    focus_mask.sum().clamp_min(1.0) * max(1, weight_entropy.shape[-1])
+                )
+                fusion_total = fusion_total + entropy_weight * focused_entropy
+                self._record_loss_debug("evidence_fusion_weight_entropy_raw", focused_entropy)
+            total = total + evidence_fusion_weight * fusion_total
+            self._record_loss_debug("evidence_fusion_primary_raw", fusion_primary)
+            self._record_loss_debug("evidence_fusion_rank_raw", fusion_rank)
+            self._record_loss_debug(
+                "evidence_fusion_inner_weighted",
+                evidence_fusion_weight * fusion_total,
+            )
+        if source_interaction_logits is not None and source_interaction_head_weight > 0:
+            interaction_target = (
+                source_onset_mask.unsqueeze(-1).to(dtype=source_interaction_logits.dtype)
+                * source_mask.unsqueeze(1).to(dtype=source_interaction_logits.dtype)
+            )
+            interaction_focus = event_mask.unsqueeze(-1).to(
+                dtype=source_interaction_logits.dtype
+            ).expand_as(source_interaction_logits)
+            pos = (interaction_target * interaction_focus).sum().clamp_min(1.0)
+            neg = ((1.0 - interaction_target) * interaction_focus).sum().clamp_min(1.0)
+            pos_weight = (neg / pos).clamp(1.0, 20.0)
+            interaction_bce = F.binary_cross_entropy_with_logits(
+                source_interaction_logits,
+                interaction_target,
+                pos_weight=pos_weight,
+                reduction="none",
+            )
+            interaction_bce = (
+                interaction_bce * interaction_focus
+            ).sum() / interaction_focus.sum().clamp_min(1.0)
+            interaction_prob = torch.sigmoid(source_interaction_logits)
+            interaction_onset_scores = (
+                interaction_prob
+                * source_onset_mask.unsqueeze(-1).to(dtype=interaction_prob.dtype)
+            ).sum(dim=1) / onset_sum
+            interaction_rank = self._synthetic_rca_ranking_loss(
+                interaction_onset_scores,
+                source_mask,
+            )
+            interaction_total = (
+                float(getattr(self.config, "source_interaction_head_bce_weight", 1.0) or 1.0)
+                * interaction_bce
+                + float(getattr(self.config, "source_interaction_head_rank_weight", 1.0) or 0.0)
+                * interaction_rank
+            )
+            suppress_weight = float(
+                getattr(self.config, "source_interaction_head_effect_suppress_weight", 0.25)
+                or 0.0
+            )
+            if suppress_weight > 0 and effect_mask.sum() > 0 and effect_time_mask.sum() > 0:
+                interaction_effect_scores = (
+                    interaction_prob
+                    * effect_time_mask.unsqueeze(-1).to(dtype=interaction_prob.dtype)
+                ).sum(dim=1) / effect_time_sum
+                interaction_effect_suppress = (
+                    interaction_effect_scores * effect_mask.to(dtype=interaction_prob.dtype)
+                ).sum() / effect_mask.sum().clamp_min(1.0)
+                interaction_total = (
+                    interaction_total + suppress_weight * interaction_effect_suppress
+                )
+                self._record_loss_debug(
+                    "source_interaction_head_effect_suppress_raw",
+                    interaction_effect_suppress,
+                )
+            pairwise_effect_weight = float(
+                getattr(self.config, "source_interaction_head_pairwise_effect_weight", 0.5)
+                or 0.0
+            )
+            if pairwise_effect_weight > 0 and effect_mask.sum() > 0 and effect_time_mask.sum() > 0:
+                source_time = source_onset_mask.to(dtype=source_interaction_logits.dtype)
+                effect_time = effect_time_mask.to(dtype=source_interaction_logits.dtype)
+                interaction_source_scores = torch.einsum(
+                    "blc,bl->bc",
+                    source_interaction_logits,
+                    source_time,
+                ) / onset_sum.to(dtype=source_interaction_logits.dtype)
+                interaction_effect_scores = torch.einsum(
+                    "blc,bl->bc",
+                    source_interaction_logits,
+                    effect_time,
+                ) / effect_time_sum.to(dtype=source_interaction_logits.dtype)
+                interaction_pairwise = self._source_effect_pairwise_margin_loss(
+                    interaction_source_scores,
+                    interaction_effect_scores,
+                    source_mask,
+                    effect_mask,
+                    float(
+                        getattr(
+                            self.config,
+                            "source_interaction_head_pairwise_effect_margin",
+                            0.15,
+                        )
+                        or 0.15
+                    ),
+                )
+                interaction_total = (
+                    interaction_total + pairwise_effect_weight * interaction_pairwise
+                )
+                self._record_loss_debug(
+                    "source_interaction_head_pairwise_effect_raw",
+                    interaction_pairwise,
+                )
+            total = total + source_interaction_head_weight * interaction_total
+            self._record_loss_debug("source_interaction_head_bce_raw", interaction_bce)
+            self._record_loss_debug("source_interaction_head_rank_raw", interaction_rank)
+            self._record_loss_debug(
+                "source_interaction_head_inner_weighted",
+                source_interaction_head_weight * interaction_total,
             )
         source_branch_weight = float(
             getattr(self.config, "root_response_source_branch_weight", 0.0) or 0.0
@@ -2578,13 +3488,32 @@ class LaGraph:
     def _synthetic_rca_ranking_loss(self, channel_scores, channel_mask):
         margin = float(getattr(self.config, "synthetic_rca_margin", 0.2) or 0.2)
         hard_topk = int(getattr(self.config, "synthetic_rca_topk", 5) or 5)
+        positive_aggregation = str(
+            getattr(self.config, "synthetic_rca_positive_aggregation", "mean") or "mean"
+        ).lower()
+        positive_topk = int(getattr(self.config, "synthetic_rca_positive_topk", 1) or 1)
+        positive_min_weight = float(
+            getattr(self.config, "synthetic_rca_positive_min_weight", 0.0) or 0.0
+        )
+        positive_min_weight = min(max(positive_min_weight, 0.0), 1.0)
         losses = []
         for b in range(channel_scores.shape[0]):
             roots = channel_mask[b] > 0.5
             non_roots = ~roots
             if roots.sum() == 0 or non_roots.sum() == 0:
                 continue
-            pos_score = channel_scores[b, roots].mean()
+            pos_scores = channel_scores[b, roots]
+            if positive_aggregation in {"min", "weakest"}:
+                pos_score = pos_scores.min()
+            elif positive_aggregation in {"bottomk", "bottom", "weak_mean"}:
+                pos_k = min(max(1, positive_topk), pos_scores.numel())
+                pos_score = torch.topk(pos_scores, k=pos_k, largest=False).values.mean()
+            elif positive_aggregation in {"blend", "mean_bottomk", "mean_weak"}:
+                pos_k = min(max(1, positive_topk), pos_scores.numel())
+                weak_score = torch.topk(pos_scores, k=pos_k, largest=False).values.mean()
+                pos_score = (1.0 - positive_min_weight) * pos_scores.mean() + positive_min_weight * weak_score
+            else:
+                pos_score = pos_scores.mean()
             neg_scores = channel_scores[b, non_roots]
             k = min(max(1, hard_topk), neg_scores.numel())
             hard_neg = torch.topk(neg_scores, k=k).values.mean()
@@ -2753,6 +3682,50 @@ class LaGraph:
             f"{score_center:.6f}, scale={score_scale:.6f}"
         )
 
+    def _make_score_stats_loader(self, scaled_data: pd.DataFrame, tag: str):
+        batch_size = min(self.config.batch_size, 64)
+        stats_num_workers = int(getattr(self.config, "score_stats_num_workers", 0) or 0)
+        max_batches = int(getattr(self.config, "score_stats_max_batches", 128) or 0)
+        base_loader = anomaly_detection_data_provider(
+            scaled_data,
+            batch_size=batch_size,
+            win_size=self.config.win_size,
+            step=1,
+            mode="test",
+            num_workers=0,
+            prefetch_factor=getattr(self.config, "dataloader_prefetch_factor", 2),
+        )
+        dataset = base_loader.dataset
+        total_windows = len(dataset)
+        sampled_windows = total_windows
+        if max_batches > 0 and total_windows > max_batches * batch_size:
+            sampled_windows = max_batches * batch_size
+            sample_idx = np.linspace(
+                0,
+                total_windows - 1,
+                num=sampled_windows,
+                dtype=np.int64,
+            ).tolist()
+            dataset = Subset(dataset, sample_idx)
+
+        loader_kwargs = dict(
+            dataset=dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=stats_num_workers,
+            pin_memory=True,
+            persistent_workers=True if stats_num_workers > 0 else False,
+            drop_last=False,
+        )
+        if stats_num_workers > 0:
+            loader_kwargs["prefetch_factor"] = getattr(self.config, "dataloader_prefetch_factor", 2)
+        loader = DataLoader(**loader_kwargs)
+        print(
+            f"  [{tag}] stats windows={sampled_windows:,}/{total_windows:,}, "
+            f"batches={len(loader)}, workers={stats_num_workers}"
+        )
+        return loader, stats_num_workers
+
     # ======================== 训练（单卡）=======================
     @torch.no_grad()
     def _fit_channel_mechanism_score_stats(self, train_data: pd.DataFrame):
@@ -2769,20 +3742,11 @@ class LaGraph:
         self.model.eval()
 
         scaled_data = self._transform_input_frame(train_data)
-        loader = anomaly_detection_data_provider(
-            scaled_data,
-            batch_size=min(self.config.batch_size, 64),
-            win_size=self.config.win_size,
-            step=1,
-            mode="test",
-            num_workers=getattr(self.config, "dataloader_num_workers", 0),
-            prefetch_factor=getattr(self.config, "dataloader_prefetch_factor", 2),
-        )
+        loader, _ = self._make_score_stats_loader(scaled_data, "ChannelMechanism")
 
         scores = []
         max_samples = int(getattr(self.config, "score_stats_max_samples", 2_000_000) or 2_000_000)
-        batches = max(len(loader), 1)
-        per_batch_samples = max(1, int(math.ceil(max_samples / batches)))
+        per_batch_samples = max(1, int(math.ceil(max_samples / max(len(loader), 1))))
         for input_data, _ in loader:
             input_data = input_data.float().to(self.device)
             _, _, _, _, _, aux_losses, _ = self.model(input_data)
@@ -2832,15 +3796,7 @@ class LaGraph:
         self.model.eval()
 
         scaled_data = self._transform_input_frame(train_data)
-        loader = anomaly_detection_data_provider(
-            scaled_data,
-            batch_size=min(self.config.batch_size, 64),
-            win_size=self.config.win_size,
-            step=1,
-            mode="test",
-            num_workers=getattr(self.config, "dataloader_num_workers", 0),
-            prefetch_factor=getattr(self.config, "dataloader_prefetch_factor", 2),
-        )
+        loader, _ = self._make_score_stats_loader(scaled_data, "SynthAux")
 
         scores = []
         for input_data, _ in loader:
@@ -3079,6 +4035,81 @@ class LaGraph:
                 self.config,
                 "root_response_confidence_discount",
                 0.75,
+            ),
+            root_response_use_innovation_split=getattr(
+                self.config,
+                "root_response_use_innovation_split",
+                False,
+            ),
+            use_pairwise_root_response_head=getattr(
+                self.config,
+                "use_pairwise_root_response_head",
+                False,
+            ),
+            pairwise_root_response_rank=getattr(
+                self.config,
+                "pairwise_root_response_rank",
+                8,
+            ),
+            pairwise_root_response_graph_weight=getattr(
+                self.config,
+                "pairwise_root_response_graph_weight",
+                0.75,
+            ),
+            pairwise_root_response_reward_init=getattr(
+                self.config,
+                "pairwise_root_response_reward_init",
+                0.25,
+            ),
+            pairwise_root_response_penalty_init=getattr(
+                self.config,
+                "pairwise_root_response_penalty_init",
+                0.50,
+            ),
+            pairwise_root_response_logit_weight=getattr(
+                self.config,
+                "pairwise_root_response_logit_weight",
+                1.0,
+            ),
+            use_event_responsibility_head=getattr(
+                self.config,
+                "use_event_responsibility_head",
+                False,
+            ),
+            event_responsibility_hidden=getattr(
+                self.config,
+                "event_responsibility_hidden",
+                16,
+            ),
+            event_responsibility_detach_features=getattr(
+                self.config,
+                "event_responsibility_detach_features",
+                False,
+            ),
+            use_evidence_fusion_head=getattr(
+                self.config,
+                "use_evidence_fusion_head",
+                False,
+            ),
+            evidence_fusion_hidden=getattr(
+                self.config,
+                "evidence_fusion_hidden",
+                16,
+            ),
+            evidence_fusion_detach_inputs=getattr(
+                self.config,
+                "evidence_fusion_detach_inputs",
+                False,
+            ),
+            use_source_interaction_head=getattr(
+                self.config,
+                "use_source_interaction_head",
+                False,
+            ),
+            source_interaction_detach_inputs=getattr(
+                self.config,
+                "source_interaction_detach_inputs",
+                True,
             ),
             use_channel_temporal_corefinement=getattr(
                 self.config, "use_channel_temporal_corefinement", False
@@ -3457,6 +4488,81 @@ class LaGraph:
                 "root_response_confidence_discount",
                 0.75,
             ),
+            root_response_use_innovation_split=getattr(
+                self.config,
+                "root_response_use_innovation_split",
+                False,
+            ),
+            use_pairwise_root_response_head=getattr(
+                self.config,
+                "use_pairwise_root_response_head",
+                False,
+            ),
+            pairwise_root_response_rank=getattr(
+                self.config,
+                "pairwise_root_response_rank",
+                8,
+            ),
+            pairwise_root_response_graph_weight=getattr(
+                self.config,
+                "pairwise_root_response_graph_weight",
+                0.75,
+            ),
+            pairwise_root_response_reward_init=getattr(
+                self.config,
+                "pairwise_root_response_reward_init",
+                0.25,
+            ),
+            pairwise_root_response_penalty_init=getattr(
+                self.config,
+                "pairwise_root_response_penalty_init",
+                0.50,
+            ),
+            pairwise_root_response_logit_weight=getattr(
+                self.config,
+                "pairwise_root_response_logit_weight",
+                1.0,
+            ),
+            use_event_responsibility_head=getattr(
+                self.config,
+                "use_event_responsibility_head",
+                False,
+            ),
+            event_responsibility_hidden=getattr(
+                self.config,
+                "event_responsibility_hidden",
+                16,
+            ),
+            event_responsibility_detach_features=getattr(
+                self.config,
+                "event_responsibility_detach_features",
+                False,
+            ),
+            use_evidence_fusion_head=getattr(
+                self.config,
+                "use_evidence_fusion_head",
+                False,
+            ),
+            evidence_fusion_hidden=getattr(
+                self.config,
+                "evidence_fusion_hidden",
+                16,
+            ),
+            evidence_fusion_detach_inputs=getattr(
+                self.config,
+                "evidence_fusion_detach_inputs",
+                False,
+            ),
+            use_source_interaction_head=getattr(
+                self.config,
+                "use_source_interaction_head",
+                False,
+            ),
+            source_interaction_detach_inputs=getattr(
+                self.config,
+                "source_interaction_detach_inputs",
+                True,
+            ),
             use_channel_temporal_corefinement=getattr(
                 self.config, "use_channel_temporal_corefinement", False
             ),
@@ -3733,6 +4839,30 @@ class LaGraph:
                 "root_response_confidence_discount": getattr(
                     self.config, "root_response_confidence_discount", None
                 ),
+                "root_response_use_innovation_split": getattr(
+                    self.config, "root_response_use_innovation_split", None
+                ),
+                "use_pairwise_root_response_head": getattr(
+                    self.config, "use_pairwise_root_response_head", None
+                ),
+                "pairwise_root_response_rank": getattr(
+                    self.config, "pairwise_root_response_rank", None
+                ),
+                "pairwise_root_response_graph_weight": getattr(
+                    self.config, "pairwise_root_response_graph_weight", None
+                ),
+                "pairwise_root_response_reward_init": getattr(
+                    self.config, "pairwise_root_response_reward_init", None
+                ),
+                "pairwise_root_response_penalty_init": getattr(
+                    self.config, "pairwise_root_response_penalty_init", None
+                ),
+                "pairwise_root_response_logit_weight": getattr(
+                    self.config, "pairwise_root_response_logit_weight", None
+                ),
+                "lambda_pairwise_root_response": getattr(
+                    self.config, "lambda_pairwise_root_response", None
+                ),
                 "lambda_source_effect_root_score": getattr(
                     self.config, "lambda_source_effect_root_score", None
                 ),
@@ -3749,6 +4879,42 @@ class LaGraph:
                 ),
                 "root_response_response_suppress_weight": getattr(
                     self.config, "root_response_response_suppress_weight", None
+                ),
+                "use_event_responsibility_head": getattr(
+                    self.config, "use_event_responsibility_head", None
+                ),
+                "lambda_event_responsibility": getattr(
+                    self.config, "lambda_event_responsibility", None
+                ),
+                "event_responsibility_loss_mode": getattr(
+                    self.config, "event_responsibility_loss_mode", None
+                ),
+                "event_responsibility_bce_balance": getattr(
+                    self.config, "event_responsibility_bce_balance", None
+                ),
+                "event_responsibility_ce_weight": getattr(
+                    self.config, "event_responsibility_ce_weight", None
+                ),
+                "event_responsibility_rank_weight": getattr(
+                    self.config, "event_responsibility_rank_weight", None
+                ),
+                "event_responsibility_effect_suppress_weight": getattr(
+                    self.config, "event_responsibility_effect_suppress_weight", None
+                ),
+                "rca_event_responsibility_weight": getattr(
+                    self.config, "rca_event_responsibility_weight", None
+                ),
+                "rca_event_responsibility_pooling": getattr(
+                    self.config, "rca_event_responsibility_pooling", None
+                ),
+                "rca_event_responsibility_head_ratio": getattr(
+                    self.config, "rca_event_responsibility_head_ratio", None
+                ),
+                "rca_event_responsibility_head_points": getattr(
+                    self.config, "rca_event_responsibility_head_points", None
+                ),
+                "rca_event_responsibility_top_quantile": getattr(
+                    self.config, "rca_event_responsibility_top_quantile", None
                 ),
                 "rca_root_score_weight": getattr(self.config, "rca_root_score_weight", None),
                 "rca_root_score_signal": getattr(self.config, "rca_root_score_signal", None),
@@ -3771,6 +4937,9 @@ class LaGraph:
                 "rca_topk_rerank_original_weight": getattr(
                     self.config, "rca_topk_rerank_original_weight", None
                 ),
+                "rca_topk_rerank_base_weight": getattr(
+                    self.config, "rca_topk_rerank_base_weight", None
+                ),
                 "rca_topk_rerank_group_weight": getattr(
                     self.config, "rca_topk_rerank_group_weight", None
                 ),
@@ -3783,8 +4952,14 @@ class LaGraph:
                 "rca_topk_rerank_mechanism_residual_weight": getattr(
                     self.config, "rca_topk_rerank_mechanism_residual_weight", None
                 ),
+                "rca_topk_rerank_source_interaction_weight": getattr(
+                    self.config, "rca_topk_rerank_source_interaction_weight", None
+                ),
                 "rca_topk_rerank_graph_penalty_weight": getattr(
                     self.config, "rca_topk_rerank_graph_penalty_weight", None
+                ),
+                "rca_topk_rerank_component_scope": getattr(
+                    self.config, "rca_topk_rerank_component_scope", None
                 ),
                 "use_synthetic_score": getattr(self.config, "use_synthetic_score", None),
                 "synthetic_score_weight": getattr(self.config, "synthetic_score_weight", None),
@@ -4025,7 +5200,11 @@ class LaGraph:
         raw_model = self._get_raw_model()
         x_rec, A_adaptive, _, _, _, aux_losses, _ = raw_model(
             input_data,
-            return_root_score=bool(getattr(self.config, "use_root_score_head", False)),
+            return_root_score=(
+                bool(getattr(self.config, "use_root_score_head", False))
+                or bool(getattr(self.config, "use_evidence_fusion_head", False))
+                or bool(getattr(self.config, "use_source_interaction_head", False))
+            ),
         )
         channel_err = F.l1_loss(x_rec, input_data, reduction="none")
         if hasattr(raw_model, "_normalize_score_error"):
@@ -4077,6 +5256,38 @@ class LaGraph:
                 root_score_err = aux_losses.get("root_score_prob")
         if root_score_err is None:
             root_score_err = torch.zeros_like(channel_err)
+        event_responsibility_err = None
+        if aux_losses:
+            event_responsibility_logits = aux_losses.get("event_responsibility_logits")
+            if event_responsibility_logits is not None:
+                event_responsibility_err = torch.softmax(event_responsibility_logits, dim=-1)
+        if event_responsibility_err is None:
+            event_responsibility_err = torch.zeros_like(channel_err)
+        evidence_fusion_err = None
+        if aux_losses:
+            evidence_fusion_logits = aux_losses.get("evidence_fusion_logits")
+            if evidence_fusion_logits is not None:
+                evidence_fusion_export_mode = str(
+                    getattr(self.config, "evidence_fusion_export_mode", "sigmoid")
+                    or "sigmoid"
+                ).lower()
+                if evidence_fusion_export_mode in {
+                    "softmax",
+                    "responsibility",
+                    "competition",
+                }:
+                    evidence_fusion_err = torch.softmax(evidence_fusion_logits, dim=-1)
+                else:
+                    evidence_fusion_err = torch.sigmoid(evidence_fusion_logits)
+        if evidence_fusion_err is None:
+            evidence_fusion_err = torch.zeros_like(channel_err)
+        source_interaction_head_err = None
+        if aux_losses:
+            source_interaction_logits = aux_losses.get("source_interaction_logits")
+            if source_interaction_logits is not None:
+                source_interaction_head_err = torch.sigmoid(source_interaction_logits)
+        if source_interaction_head_err is None:
+            source_interaction_head_err = torch.zeros_like(channel_err)
         return (
             score.cpu().numpy(),
             channel_err.cpu().numpy(),
@@ -4086,6 +5297,9 @@ class LaGraph:
             source_gate_err.cpu().numpy(),
             synthetic_rca_window_scores.cpu().numpy(),
             root_score_err.cpu().numpy(),
+            event_responsibility_err.cpu().numpy(),
+            evidence_fusion_err.cpu().numpy(),
+            source_interaction_head_err.cpu().numpy(),
         )
 
     def _graph_propagated_channel_error(self, channel_err, A_adaptive):
@@ -4218,6 +5432,9 @@ class LaGraph:
         causal_channel_sums = np.zeros_like(channel_sums)
         source_gate_channel_sums = np.zeros_like(channel_sums)
         root_score_channel_sums = np.zeros_like(channel_sums)
+        event_responsibility_channel_sums = np.zeros_like(channel_sums)
+        evidence_fusion_channel_sums = np.zeros_like(channel_sums)
+        source_interaction_head_channel_sums = np.zeros_like(channel_sums)
         synthetic_rca_channel_diff = np.zeros((total_length + 1, n_channels), dtype=np.float64)
         channel_counts = np.zeros(total_length, dtype=np.float64)
 
@@ -4244,6 +5461,9 @@ class LaGraph:
                     source_gate_channel_err,
                     synthetic_rca_channel_err,
                     root_score_channel_err,
+                    event_responsibility_channel_err,
+                    evidence_fusion_channel_err,
+                    source_interaction_head_channel_err,
                 ) = self._detect_forward_with_channels(input_data)
                 self._add_window_channel_score_group(
                     [
@@ -4253,6 +5473,9 @@ class LaGraph:
                         causal_channel_sums,
                         source_gate_channel_sums,
                         root_score_channel_sums,
+                        event_responsibility_channel_sums,
+                        evidence_fusion_channel_sums,
+                        source_interaction_head_channel_sums,
                     ],
                     channel_counts,
                     [
@@ -4262,6 +5485,9 @@ class LaGraph:
                         causal_channel_err,
                         source_gate_channel_err,
                         root_score_channel_err,
+                        event_responsibility_channel_err,
+                        evidence_fusion_channel_err,
+                        source_interaction_head_channel_err,
                     ],
                     cursor,
                 )
@@ -4307,6 +5533,24 @@ class LaGraph:
             root_score_channel_sums,
             channel_counts[:, None],
             out=np.zeros_like(root_score_channel_sums),
+            where=channel_counts[:, None] > 0,
+        ).astype(np.float32)
+        self._last_event_responsibility_channel_scores = np.divide(
+            event_responsibility_channel_sums,
+            channel_counts[:, None],
+            out=np.zeros_like(event_responsibility_channel_sums),
+            where=channel_counts[:, None] > 0,
+        ).astype(np.float32)
+        self._last_evidence_fusion_channel_scores = np.divide(
+            evidence_fusion_channel_sums,
+            channel_counts[:, None],
+            out=np.zeros_like(evidence_fusion_channel_sums),
+            where=channel_counts[:, None] > 0,
+        ).astype(np.float32)
+        self._last_source_interaction_head_channel_scores = np.divide(
+            source_interaction_head_channel_sums,
+            channel_counts[:, None],
+            out=np.zeros_like(source_interaction_head_channel_sums),
             where=channel_counts[:, None] > 0,
         ).astype(np.float32)
         synthetic_rca_channel_sums = np.cumsum(synthetic_rca_channel_diff[:-1], axis=0)
@@ -4588,6 +5832,9 @@ class LaGraph:
         causal_channel_sums = None
         source_gate_channel_sums = None
         root_score_channel_sums = None
+        event_responsibility_channel_sums = None
+        evidence_fusion_channel_sums = None
+        source_interaction_head_channel_sums = None
         synthetic_rca_channel_diff = None
         channel_counts = None
         window_cursor = 0
@@ -4598,6 +5845,9 @@ class LaGraph:
             causal_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             source_gate_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             root_score_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
+            event_responsibility_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
+            evidence_fusion_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
+            source_interaction_head_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             synthetic_rca_channel_diff = np.zeros((total_length + 1, scaled_test.shape[1]), dtype=np.float64)
             channel_counts = np.zeros(total_length, dtype=np.float64)
 
@@ -4613,6 +5863,9 @@ class LaGraph:
                     source_gate_channel_err,
                     synthetic_rca_channel_err,
                     root_score_channel_err,
+                    event_responsibility_channel_err,
+                    evidence_fusion_channel_err,
+                    source_interaction_head_channel_err,
                 ) = self._detect_forward_with_channels(input_data)
                 self._add_window_channel_score_group(
                     [
@@ -4622,6 +5875,9 @@ class LaGraph:
                         causal_channel_sums,
                         source_gate_channel_sums,
                         root_score_channel_sums,
+                        event_responsibility_channel_sums,
+                        evidence_fusion_channel_sums,
+                        source_interaction_head_channel_sums,
                     ],
                     channel_counts,
                     [
@@ -4631,6 +5887,9 @@ class LaGraph:
                         causal_channel_err,
                         source_gate_channel_err,
                         root_score_channel_err,
+                        event_responsibility_channel_err,
+                        evidence_fusion_channel_err,
+                        source_interaction_head_channel_err,
                     ],
                     window_cursor,
                 )
@@ -4688,6 +5947,24 @@ class LaGraph:
                 out=np.zeros_like(root_score_channel_sums),
                 where=channel_counts[:, None] > 0,
             ).astype(np.float32)
+            self._last_event_responsibility_channel_scores = np.divide(
+                event_responsibility_channel_sums,
+                channel_counts[:, None],
+                out=np.zeros_like(event_responsibility_channel_sums),
+                where=channel_counts[:, None] > 0,
+            ).astype(np.float32)
+            self._last_evidence_fusion_channel_scores = np.divide(
+                evidence_fusion_channel_sums,
+                channel_counts[:, None],
+                out=np.zeros_like(evidence_fusion_channel_sums),
+                where=channel_counts[:, None] > 0,
+            ).astype(np.float32)
+            self._last_source_interaction_head_channel_scores = np.divide(
+                source_interaction_head_channel_sums,
+                channel_counts[:, None],
+                out=np.zeros_like(source_interaction_head_channel_sums),
+                where=channel_counts[:, None] > 0,
+            ).astype(np.float32)
             synthetic_rca_channel_sums = np.cumsum(synthetic_rca_channel_diff[:-1], axis=0)
             self._last_synthetic_rca_channel_scores = np.divide(
                 synthetic_rca_channel_sums,
@@ -4703,6 +5980,9 @@ class LaGraph:
             self._last_causal_channel_scores = None
             self._last_source_gate_channel_scores = None
             self._last_root_score_channel_scores = None
+            self._last_event_responsibility_channel_scores = None
+            self._last_evidence_fusion_channel_scores = None
+            self._last_source_interaction_head_channel_scores = None
             self._last_synthetic_rca_channel_scores = None
             self._last_channel_names = list(test_data.columns) if event_local_rca else None
 
@@ -5056,6 +6336,7 @@ class LaGraph:
         order,
         event_scores,
         feature_names,
+        event_base_scores,
         group_scores,
         event_onset_scores,
         event_source_gate_scores,
@@ -5074,52 +6355,126 @@ class LaGraph:
 
         candidate_indices = order_list[:top_k]
 
+        event_scores = np.asarray(event_scores, dtype=np.float64)
+        event_base_scores = np.asarray(event_base_scores, dtype=np.float64)
+        event_onset_scores = np.asarray(event_onset_scores, dtype=np.float64)
+        event_source_gate_scores = np.asarray(event_source_gate_scores, dtype=np.float64)
+        event_mechanism_residual_scores = np.asarray(
+            event_mechanism_residual_scores,
+            dtype=np.float64,
+        )
+        event_graph_scores = np.asarray(event_graph_scores, dtype=np.float64)
+        source_interaction_scores = event_base_scores * np.maximum(
+            event_onset_scores,
+            event_mechanism_residual_scores,
+        )
+        all_group_values = np.asarray(
+            [
+                float(group_scores.get(self._root_cause_group_name(name), 0.0))
+                for name in feature_names
+            ],
+            dtype=np.float64,
+        )
+        component_scope = str(
+            getattr(self.config, "rca_topk_rerank_component_scope", "candidate") or "candidate"
+        ).lower()
+        use_event_scope = component_scope in {"event", "global", "full"}
+
         def _candidate_norm(values):
             arr = np.asarray([values[idx] for idx in candidate_indices], dtype=np.float64)
             return self._normalize_event_component(arr)
 
-        event_scores = np.asarray(event_scores, dtype=np.float64)
-        group_values = np.asarray(
-            [
-                float(group_scores.get(self._root_cause_group_name(feature_names[idx]), 0.0))
-                for idx in candidate_indices
-            ],
-            dtype=np.float64,
-        )
-        group_norm = self._normalize_event_component(group_values)
-        original_norm = _candidate_norm(event_scores)
-        onset_norm = _candidate_norm(event_onset_scores)
-        source_gate_norm = _candidate_norm(event_source_gate_scores)
-        mechanism_residual_norm = _candidate_norm(event_mechanism_residual_scores)
-        graph_norm = _candidate_norm(event_graph_scores)
+        def _event_norm(values):
+            arr = self._normalize_event_component(np.asarray(values, dtype=np.float64))
+            return np.asarray([arr[idx] for idx in candidate_indices], dtype=np.float64)
 
-        original_weight = float(getattr(self.config, "rca_topk_rerank_original_weight", 1.0) or 0.0)
-        group_weight = float(getattr(self.config, "rca_topk_rerank_group_weight", 0.0) or 0.0)
-        onset_weight = float(getattr(self.config, "rca_topk_rerank_onset_weight", 0.0) or 0.0)
-        source_gate_weight = float(
-            getattr(self.config, "rca_topk_rerank_source_gate_weight", 0.0) or 0.0
-        )
-        mechanism_residual_weight = float(
-            getattr(self.config, "rca_topk_rerank_mechanism_residual_weight", 0.0) or 0.0
-        )
-        graph_penalty_weight = float(
-            getattr(self.config, "rca_topk_rerank_graph_penalty_weight", 0.0) or 0.0
-        )
+        normalizer = _event_norm if use_event_scope else _candidate_norm
+        group_norm = normalizer(all_group_values)
+        original_norm = normalizer(event_scores)
+        base_norm = normalizer(event_base_scores)
+        onset_norm = normalizer(event_onset_scores)
+        source_gate_norm = normalizer(event_source_gate_scores)
+        mechanism_residual_norm = normalizer(event_mechanism_residual_scores)
+        source_interaction_norm = normalizer(source_interaction_scores)
+        graph_norm = normalizer(event_graph_scores)
 
-        rerank_signal = (
-            original_weight * original_norm
-            + group_weight * group_norm
-            + onset_weight * onset_norm
-            + source_gate_weight * source_gate_norm
-            + mechanism_residual_weight * mechanism_residual_norm
-            - graph_penalty_weight * graph_norm
-        )
-        reranked_pairs = sorted(
+        def _weighted_signal(prefix):
+            original_weight = float(
+                getattr(self.config, f"{prefix}_original_weight", 1.0) or 0.0
+            )
+            base_weight = float(getattr(self.config, f"{prefix}_base_weight", 0.0) or 0.0)
+            group_weight = float(getattr(self.config, f"{prefix}_group_weight", 0.0) or 0.0)
+            onset_weight = float(getattr(self.config, f"{prefix}_onset_weight", 0.0) or 0.0)
+            source_gate_weight = float(
+                getattr(self.config, f"{prefix}_source_gate_weight", 0.0) or 0.0
+            )
+            mechanism_residual_weight = float(
+                getattr(self.config, f"{prefix}_mechanism_residual_weight", 0.0) or 0.0
+            )
+            source_interaction_weight = float(
+                getattr(self.config, f"{prefix}_source_interaction_weight", 0.0) or 0.0
+            )
+            graph_penalty_weight = float(
+                getattr(self.config, f"{prefix}_graph_penalty_weight", 0.0) or 0.0
+            )
+            return (
+                original_weight * original_norm
+                + base_weight * base_norm
+                + group_weight * group_norm
+                + onset_weight * onset_norm
+                + source_gate_weight * source_gate_norm
+                + mechanism_residual_weight * mechanism_residual_norm
+                + source_interaction_weight * source_interaction_norm
+                - graph_penalty_weight * graph_norm
+            )
+
+        rerank_signal = _weighted_signal("rca_topk_rerank")
+        primary_pairs = sorted(
             zip(candidate_indices, rerank_signal.tolist()),
             key=lambda item: item[1],
             reverse=True,
         )
-        reranked_top = [idx for idx, _ in reranked_pairs]
+        primary_top = [idx for idx, _ in primary_pairs]
+
+        keep_primary_top_k = int(
+            getattr(self.config, "rca_topk_rerank_keep_primary_top_k", 0) or 0
+        )
+        fill_secondary_top_k = int(
+            getattr(self.config, "rca_topk_rerank_fill_secondary_top_k", 0) or 0
+        )
+        secondary_scores = None
+        secondary_rank = {}
+        if keep_primary_top_k > 0 and fill_secondary_top_k > keep_primary_top_k:
+            secondary_signal = _weighted_signal("rca_topk_rerank_secondary")
+            secondary_pairs = sorted(
+                zip(candidate_indices, secondary_signal.tolist()),
+                key=lambda item: item[1],
+                reverse=True,
+            )
+            secondary_scores = {
+                int(idx): float(score)
+                for idx, score in secondary_pairs
+            }
+            secondary_rank = {
+                int(idx): int(rank)
+                for rank, (idx, _) in enumerate(secondary_pairs, start=1)
+            }
+            keep_primary_top_k = min(max(0, keep_primary_top_k), top_k)
+            fill_secondary_top_k = min(max(keep_primary_top_k, fill_secondary_top_k), top_k)
+            reranked_top = []
+            for idx in primary_top[:keep_primary_top_k]:
+                if idx not in reranked_top:
+                    reranked_top.append(idx)
+            for idx, _ in secondary_pairs:
+                if len(reranked_top) >= fill_secondary_top_k:
+                    break
+                if idx not in reranked_top:
+                    reranked_top.append(idx)
+            for idx in primary_top:
+                if idx not in reranked_top:
+                    reranked_top.append(idx)
+        else:
+            reranked_top = primary_top
 
         adjusted_scores = event_scores.copy()
         original_top_scores = sorted(
@@ -5132,9 +6487,14 @@ class LaGraph:
         rerank_info = {
             int(idx): {
                 "topk_rerank_score": float(score),
+                "topk_rerank_primary_score": float(score),
+                "topk_rerank_secondary_score": float(
+                    secondary_scores.get(int(idx), 0.0) if secondary_scores is not None else 0.0
+                ),
                 "topk_rerank_original_rank": int(candidate_indices.index(idx) + 1),
+                "topk_rerank_secondary_rank": int(secondary_rank.get(int(idx), 0)),
             }
-            for idx, score in reranked_pairs
+            for idx, score in primary_pairs
         }
         final_order = np.asarray(reranked_top + order_list[top_k:], dtype=np.int64)
         return final_order, adjusted_scores, rerank_info
@@ -5202,6 +6562,21 @@ class LaGraph:
         root_score_top_quantile=0.80,
         source_innovation_channel_scores=None,
         synthetic_channel_scores=None,
+        event_responsibility_channel_scores=None,
+        event_responsibility_pooling="mean",
+        event_responsibility_head_ratio=0.30,
+        event_responsibility_head_points=30,
+        event_responsibility_top_quantile=0.80,
+        evidence_fusion_channel_scores=None,
+        evidence_fusion_pooling="mean",
+        evidence_fusion_head_ratio=0.30,
+        evidence_fusion_head_points=30,
+        evidence_fusion_top_quantile=0.80,
+        source_interaction_head_channel_scores=None,
+        source_interaction_head_pooling="head_mean",
+        source_interaction_head_ratio=0.30,
+        source_interaction_head_points=30,
+        source_interaction_head_top_quantile=0.80,
         counterfactual_channel_scores=None,
         use_source_propagation=False,
         graph_weight=0.0,
@@ -5216,6 +6591,9 @@ class LaGraph:
         source_consensus_mode="sqrt_bg",
         causal_weight=0.0,
         synthetic_weight=0.0,
+        event_responsibility_weight=0.0,
+        evidence_fusion_weight=0.0,
+        source_interaction_head_weight=0.0,
         source_gate_weight=0.0,
         root_score_weight=0.0,
         source_interaction_weight=0.0,
@@ -5344,6 +6722,45 @@ class LaGraph:
                 if synthetic_channel_scores is not None
                 else np.zeros_like(event_raw_scores)
             )
+            event_responsibility_scores = (
+                self._aggregate_root_score_event_component(
+                    event_responsibility_channel_scores,
+                    score_start,
+                    score_end,
+                    root_score_pooling=event_responsibility_pooling,
+                    head_ratio=event_responsibility_head_ratio,
+                    head_points=event_responsibility_head_points,
+                    top_quantile=event_responsibility_top_quantile,
+                )
+                if event_responsibility_channel_scores is not None
+                else np.zeros_like(event_raw_scores)
+            )
+            event_evidence_fusion_scores = (
+                self._aggregate_root_score_event_component(
+                    evidence_fusion_channel_scores,
+                    score_start,
+                    score_end,
+                    root_score_pooling=evidence_fusion_pooling,
+                    head_ratio=evidence_fusion_head_ratio,
+                    head_points=evidence_fusion_head_points,
+                    top_quantile=evidence_fusion_top_quantile,
+                )
+                if evidence_fusion_channel_scores is not None
+                else np.zeros_like(event_raw_scores)
+            )
+            event_source_interaction_head_scores = (
+                self._aggregate_root_score_event_component(
+                    source_interaction_head_channel_scores,
+                    score_start,
+                    score_end,
+                    root_score_pooling=source_interaction_head_pooling,
+                    head_ratio=source_interaction_head_ratio,
+                    head_points=source_interaction_head_points,
+                    top_quantile=source_interaction_head_top_quantile,
+                )
+                if source_interaction_head_channel_scores is not None
+                else np.zeros_like(event_raw_scores)
+            )
             event_counterfactual_scores = (
                 counterfactual_channel_scores[score_start:score_end].mean(axis=0)
                 if counterfactual_channel_scores is not None
@@ -5396,6 +6813,11 @@ class LaGraph:
                 root_score_norm = self._normalize_event_component(event_root_scores)
                 source_innovation_norm = self._normalize_event_component(event_source_innovation_scores)
                 synthetic_norm = self._normalize_event_component(event_synthetic_scores)
+                responsibility_norm = self._normalize_event_component(event_responsibility_scores)
+                evidence_fusion_norm = self._normalize_event_component(event_evidence_fusion_scores)
+                source_interaction_head_norm = self._normalize_event_component(
+                    event_source_interaction_head_scores
+                )
                 counterfactual_norm = self._normalize_event_component(event_counterfactual_scores)
                 source_score_norm = self._normalize_event_component(event_source_scores)
                 onset_norm = self._normalize_event_component(event_onset_scores)
@@ -5438,6 +6860,9 @@ class LaGraph:
                     + root_score_weight * root_score_norm
                     + source_innovation_weight * source_innovation_norm
                     + synthetic_weight * synthetic_norm
+                    + event_responsibility_weight * responsibility_norm
+                    + evidence_fusion_weight * evidence_fusion_norm
+                    + source_interaction_head_weight * source_interaction_head_norm
                     + counterfactual_weight * counterfactual_norm
                 )
                 if source_interaction_weight > 0.0:
@@ -5487,6 +6912,9 @@ class LaGraph:
                     + mechanism_guided_source_weight * event_mechanism_guided_source_scores
                     + adaptive_mechanism_gate_weight * event_adaptive_mechanism_scores
                     + synthetic_weight * synthetic_norm
+                    + event_responsibility_weight * responsibility_norm
+                    + evidence_fusion_weight * evidence_fusion_norm
+                    + source_interaction_head_weight * source_interaction_head_norm
                     + counterfactual_weight * counterfactual_norm
                 )
                 if source_interaction_weight > 0.0:
@@ -5605,6 +7033,9 @@ class LaGraph:
                         + root_score_weight * root_score_norm
                         + source_innovation_weight * source_innovation_norm
                         + synthetic_weight * synthetic_norm
+                        + event_responsibility_weight * responsibility_norm
+                        + evidence_fusion_weight * evidence_fusion_norm
+                        + source_interaction_head_weight * source_interaction_head_norm
                         + counterfactual_weight * counterfactual_norm
                     )
                 event_scores = (
@@ -5711,6 +7142,7 @@ class LaGraph:
                 order,
                 event_scores,
                 feature_names,
+                event_base_scores,
                 group_scores,
                 event_onset_scores,
                 event_source_gate_scores,
@@ -5749,6 +7181,11 @@ class LaGraph:
                     "source_gate_score": float(event_source_gate_scores[idx]),
                     "root_score": float(event_root_scores[idx]),
                     "source_innovation_score": float(event_source_innovation_scores[idx]),
+                    "event_responsibility_score": float(event_responsibility_scores[idx]),
+                    "evidence_fusion_score": float(event_evidence_fusion_scores[idx]),
+                    "source_interaction_head_score": float(
+                        event_source_interaction_head_scores[idx]
+                    ),
                     "mechanism_guided_source_score": float(event_mechanism_guided_source_scores[idx]),
                     "adaptive_mechanism_gate_score": float(event_adaptive_mechanism_gate_scores[idx]),
                     "adaptive_mechanism_score": float(event_adaptive_mechanism_scores[idx]),
@@ -5777,8 +7214,17 @@ class LaGraph:
                     "topk_rerank_score": float(
                         topk_rerank_info.get(int(idx), {}).get("topk_rerank_score", 0.0)
                     ),
+                    "topk_rerank_primary_score": float(
+                        topk_rerank_info.get(int(idx), {}).get("topk_rerank_primary_score", 0.0)
+                    ),
+                    "topk_rerank_secondary_score": float(
+                        topk_rerank_info.get(int(idx), {}).get("topk_rerank_secondary_score", 0.0)
+                    ),
                     "topk_rerank_original_rank": int(
                         topk_rerank_info.get(int(idx), {}).get("topk_rerank_original_rank", 0)
+                    ),
+                    "topk_rerank_secondary_rank": int(
+                        topk_rerank_info.get(int(idx), {}).get("topk_rerank_secondary_rank", 0)
                     ),
                 }
                 for rank, idx in enumerate(order)
@@ -5813,6 +7259,16 @@ class LaGraph:
         top_k=1,
         threshold=0.35,
         min_events=20,
+        source_guard_weight=0.0,
+        source_guard_floor=0.0,
+        keep_top_k=0,
+        fill_secondary_top_k=0,
+        secondary_base_weight=0.0,
+        secondary_onset_weight=0.0,
+        secondary_source_gate_weight=0.0,
+        secondary_mechanism_residual_weight=0.0,
+        secondary_source_interaction_weight=0.0,
+        secondary_evidence_fusion_weight=0.0,
     ):
         """Down-rank channels that behave like generic responders across many predicted events."""
         weight = float(weight or 0.0)
@@ -5820,6 +7276,29 @@ class LaGraph:
             return events
         top_k = max(1, int(top_k or 1))
         min_events = max(1, int(min_events or 1))
+        source_guard_weight = min(max(float(source_guard_weight or 0.0), 0.0), 1.0)
+        source_guard_floor = min(max(float(source_guard_floor or 0.0), 0.0), 1.0)
+        keep_top_k = max(0, int(keep_top_k or 0))
+        fill_secondary_top_k = max(0, int(fill_secondary_top_k or 0))
+        secondary_base_weight = float(secondary_base_weight or 0.0)
+        secondary_onset_weight = float(secondary_onset_weight or 0.0)
+        secondary_source_gate_weight = float(secondary_source_gate_weight or 0.0)
+        secondary_mechanism_residual_weight = float(secondary_mechanism_residual_weight or 0.0)
+        secondary_source_interaction_weight = float(secondary_source_interaction_weight or 0.0)
+        secondary_evidence_fusion_weight = float(secondary_evidence_fusion_weight or 0.0)
+        use_secondary_fill = (
+            keep_top_k > 0
+            and fill_secondary_top_k > keep_top_k
+            and (
+                abs(secondary_base_weight)
+                + abs(secondary_onset_weight)
+                + abs(secondary_source_gate_weight)
+                + abs(secondary_mechanism_residual_weight)
+                + abs(secondary_source_interaction_weight)
+                + abs(secondary_evidence_fusion_weight)
+            )
+            > 0.0
+        )
         valid_events = [event for event in events if event.get("channel_ranking")]
         if len(valid_events) < min_events:
             return events
@@ -5854,18 +7333,39 @@ class LaGraph:
                 base_scores = (raw_scores - raw_scores.min()) / (raw_scores.max() - raw_scores.min())
             else:
                 base_scores = np.zeros_like(raw_scores, dtype=np.float64)
+            source_guard_scores = np.asarray(
+                [float(item.get("source_gate_score", 0.0)) for item in ranking],
+                dtype=np.float64,
+            )
+            if (
+                source_guard_weight > 0.0
+                and source_guard_scores.size
+                and float(source_guard_scores.max() - source_guard_scores.min()) > 1e-12
+            ):
+                source_guard_norm = (
+                    (source_guard_scores - source_guard_scores.min())
+                    / (source_guard_scores.max() - source_guard_scores.min())
+                )
+            else:
+                source_guard_norm = np.zeros_like(raw_scores, dtype=np.float64)
 
             adjusted_items = []
             for idx, item in enumerate(ranking):
                 name = item.get("name", "")
                 nuisance_rate = float(top_counts.get(name, 0)) / total_events
                 nuisance_penalty = weight * nuisance_rate
+                if source_guard_weight > 0.0:
+                    guarded_source = max(0.0, float(source_guard_norm[idx]) - source_guard_floor)
+                    guarded_source = guarded_source / max(1.0 - source_guard_floor, 1e-12)
+                    nuisance_penalty *= max(0.0, 1.0 - source_guard_weight * guarded_source)
                 specificity_score = float(base_scores[idx]) - nuisance_penalty
                 new_item = dict(item)
                 new_item.setdefault("raw_rank", int(item.get("rank", idx + 1)))
                 new_item.setdefault("raw_score", float(item.get("score", 0.0)))
                 new_item["specificity_base_score"] = float(base_scores[idx])
                 new_item["specificity_adjusted_score"] = specificity_score
+                new_item["specificity_source_guard_score"] = float(source_guard_norm[idx])
+                new_item["specificity_source_guard_weight"] = float(source_guard_weight)
                 new_item["nuisance_rate"] = nuisance_rate
                 new_item["nuisance_penalty"] = nuisance_penalty
                 new_item["score"] = specificity_score
@@ -5876,6 +7376,72 @@ class LaGraph:
                 key=lambda item: float(item.get("specificity_adjusted_score", item.get("score", 0.0))),
                 reverse=True,
             )
+            if use_secondary_fill and len(adjusted_items) > keep_top_k:
+                fill_limit = min(fill_secondary_top_k, len(adjusted_items))
+                protected_count = min(keep_top_k, len(adjusted_items))
+                base_arr = np.asarray(
+                    [float(item.get("base_score", 0.0)) for item in adjusted_items],
+                    dtype=np.float64,
+                )
+                onset_arr = np.asarray(
+                    [float(item.get("onset_score", 0.0)) for item in adjusted_items],
+                    dtype=np.float64,
+                )
+                source_gate_arr = np.asarray(
+                    [float(item.get("source_gate_score", 0.0)) for item in adjusted_items],
+                    dtype=np.float64,
+                )
+                mechanism_arr = np.asarray(
+                    [float(item.get("mechanism_residual_score", 0.0)) for item in adjusted_items],
+                    dtype=np.float64,
+                )
+                evidence_fusion_arr = np.asarray(
+                    [float(item.get("evidence_fusion_score", 0.0)) for item in adjusted_items],
+                    dtype=np.float64,
+                )
+                interaction_arr = base_arr * np.maximum(onset_arr, mechanism_arr)
+                secondary_scores = (
+                    secondary_base_weight * self._normalize_event_component(base_arr)
+                    + secondary_onset_weight * self._normalize_event_component(onset_arr)
+                    + secondary_source_gate_weight * self._normalize_event_component(source_gate_arr)
+                    + secondary_mechanism_residual_weight * self._normalize_event_component(mechanism_arr)
+                    + secondary_source_interaction_weight
+                    * self._normalize_event_component(interaction_arr)
+                    + secondary_evidence_fusion_weight
+                    * self._normalize_event_component(evidence_fusion_arr)
+                )
+                secondary_pairs = sorted(
+                    enumerate(secondary_scores.tolist()),
+                    key=lambda pair: pair[1],
+                    reverse=True,
+                )
+                for idx, score in enumerate(secondary_scores.tolist()):
+                    adjusted_items[idx]["specificity_secondary_score"] = float(score)
+                    adjusted_items[idx]["specificity_secondary_rank"] = 0
+                    adjusted_items[idx]["specificity_post_fill_protected"] = idx < protected_count
+                for rank, (idx, _) in enumerate(secondary_pairs, start=1):
+                    adjusted_items[idx]["specificity_secondary_rank"] = int(rank)
+
+                filled_items = list(adjusted_items[:protected_count])
+                selected_names = {str(item.get("name", "")) for item in filled_items}
+                for idx, _ in secondary_pairs:
+                    if len(filled_items) >= fill_limit:
+                        break
+                    item = adjusted_items[idx]
+                    name = str(item.get("name", ""))
+                    if name in selected_names:
+                        continue
+                    item["specificity_post_fill_selected"] = True
+                    filled_items.append(item)
+                    selected_names.add(name)
+                for item in adjusted_items:
+                    name = str(item.get("name", ""))
+                    if name in selected_names:
+                        continue
+                    filled_items.append(item)
+                    selected_names.add(name)
+                adjusted_items = filled_items
+
             for rank, item in enumerate(adjusted_items, start=1):
                 item["rank"] = int(rank)
             event["channel_ranking"] = adjusted_items
@@ -5883,6 +7449,200 @@ class LaGraph:
             event["event_specificity_applied"] = True
             event["event_specificity_top_k"] = int(top_k)
             event["event_specificity_max_rate"] = float(max_rate)
+            event["event_specificity_keep_top_k"] = int(keep_top_k)
+            event["event_specificity_fill_secondary_top_k"] = int(fill_secondary_top_k)
+        return events
+
+    def _apply_rca_adaptive_evidence_rerank(
+        self,
+        events,
+        enabled=False,
+        top_k=20,
+        keep_top_k=1,
+        fill_top_k=5,
+        gate="source_top_old_rank",
+        source_old_rank_threshold=1,
+        source_margin_threshold=0.0,
+        source_base_weight=0.45,
+        source_onset_weight=0.25,
+        source_gate_weight=1.0,
+        source_mechanism_residual_weight=0.25,
+        source_interaction_weight=0.25,
+        fallback_original_weight=1.0,
+        fallback_base_weight=0.45,
+        fallback_onset_weight=0.20,
+    ):
+        """Choose source-evidence fill only when it agrees with base-heavy evidence."""
+        if not enabled or not events:
+            return events
+        top_k = max(1, int(top_k or 20))
+        keep_top_k = max(0, int(keep_top_k or 0))
+        fill_top_k = max(1, int(fill_top_k or top_k))
+        source_old_rank_threshold = max(1, int(source_old_rank_threshold or 1))
+        source_margin_threshold = float(source_margin_threshold or 0.0)
+        gate = str(gate or "source_top_old_rank").lower()
+
+        source_base_weight = float(source_base_weight or 0.0)
+        source_onset_weight = float(source_onset_weight or 0.0)
+        source_gate_weight = float(source_gate_weight or 0.0)
+        source_mechanism_residual_weight = float(source_mechanism_residual_weight or 0.0)
+        source_interaction_weight = float(source_interaction_weight or 0.0)
+        fallback_original_weight = float(fallback_original_weight or 0.0)
+        fallback_base_weight = float(fallback_base_weight or 0.0)
+        fallback_onset_weight = float(fallback_onset_weight or 0.0)
+
+        for event in events:
+            ranking = event.get("channel_ranking", [])
+            if not ranking:
+                continue
+            candidate_count = min(top_k, len(ranking))
+            if candidate_count <= 1:
+                continue
+
+            base_arr = np.asarray(
+                [float(item.get("base_score", item.get("score", 0.0))) for item in ranking],
+                dtype=np.float64,
+            )
+            onset_arr = np.asarray(
+                [float(item.get("onset_score", 0.0)) for item in ranking],
+                dtype=np.float64,
+            )
+            source_gate_arr = np.asarray(
+                [float(item.get("source_gate_score", 0.0)) for item in ranking],
+                dtype=np.float64,
+            )
+            mechanism_arr = np.asarray(
+                [float(item.get("mechanism_residual_score", 0.0)) for item in ranking],
+                dtype=np.float64,
+            )
+            original_arr = np.asarray(
+                [
+                    1.0
+                    / max(
+                        int(
+                            item.get(
+                                "topk_rerank_original_rank",
+                                item.get("raw_rank", item.get("rank", idx + 1)),
+                            )
+                        )
+                        or idx + 1,
+                        1,
+                    )
+                    for idx, item in enumerate(ranking)
+                ],
+                dtype=np.float64,
+            )
+            interaction_arr = base_arr * np.maximum.reduce(
+                [source_gate_arr, onset_arr, mechanism_arr]
+            )
+
+            source_scores = (
+                source_base_weight * self._normalize_event_component(base_arr)
+                + source_onset_weight * self._normalize_event_component(onset_arr)
+                + source_gate_weight * self._normalize_event_component(source_gate_arr)
+                + source_mechanism_residual_weight * self._normalize_event_component(mechanism_arr)
+                + source_interaction_weight * self._normalize_event_component(interaction_arr)
+            )
+            fallback_scores = (
+                fallback_original_weight * self._normalize_event_component(original_arr)
+                + fallback_base_weight * self._normalize_event_component(base_arr)
+                + fallback_onset_weight * self._normalize_event_component(onset_arr)
+            )
+
+            candidate_indices = list(range(candidate_count))
+            source_order = sorted(
+                candidate_indices,
+                key=lambda idx: (float(source_scores[idx]), -idx),
+                reverse=True,
+            )
+            fallback_order = sorted(
+                candidate_indices,
+                key=lambda idx: (float(fallback_scores[idx]), -idx),
+                reverse=True,
+            )
+            if not source_order or not fallback_order:
+                continue
+            source_top_idx = int(source_order[0])
+            fallback_rank_of_source_top = int(fallback_order.index(source_top_idx) + 1)
+            source_rank_of_exported_top = (
+                int(source_order.index(0) + 1) if 0 in source_order else candidate_count + 1
+            )
+            top3_overlap = len(set(source_order[:3]) & set(fallback_order[:3])) / float(
+                max(min(3, len(candidate_indices)), 1)
+            )
+            source_margin = 0.0
+            if len(source_order) > 1:
+                source_margin = float(source_scores[source_order[0]] - source_scores[source_order[1]])
+
+            if gate in {"source_top_old_rank", "source_top_fallback_rank"}:
+                use_source = fallback_rank_of_source_top <= source_old_rank_threshold
+                gate_value = float(fallback_rank_of_source_top)
+            elif gate in {"exported_top_source_rank", "current_top_source_rank"}:
+                use_source = source_rank_of_exported_top <= source_old_rank_threshold
+                gate_value = float(source_rank_of_exported_top)
+            elif gate in {"top3_overlap", "overlap"}:
+                use_source = top3_overlap >= (1.0 / 3.0)
+                gate_value = float(top3_overlap)
+            elif gate in {"source_margin"}:
+                use_source = source_margin >= source_margin_threshold
+                gate_value = float(source_margin)
+            else:
+                use_source = fallback_rank_of_source_top <= source_old_rank_threshold
+                gate_value = float(fallback_rank_of_source_top)
+
+            if use_source:
+                protected_count = min(keep_top_k, candidate_count)
+                fill_limit = min(max(fill_top_k, protected_count), candidate_count)
+                new_order = list(range(protected_count))
+                selected = set(new_order)
+                for idx in source_order:
+                    if len(new_order) >= fill_limit:
+                        break
+                    if idx in selected:
+                        continue
+                    new_order.append(idx)
+                    selected.add(idx)
+                for idx in candidate_indices:
+                    if idx not in selected:
+                        new_order.append(idx)
+                        selected.add(idx)
+                final_scores = source_scores
+            else:
+                new_order = fallback_order + list(range(candidate_count, len(ranking)))
+                selected = set(new_order)
+                for idx in range(len(ranking)):
+                    if idx not in selected:
+                        new_order.append(idx)
+                        selected.add(idx)
+                final_scores = fallback_scores
+
+            if use_source:
+                selected = set(new_order)
+                for idx in range(candidate_count, len(ranking)):
+                    if idx not in selected:
+                        new_order.append(idx)
+                        selected.add(idx)
+
+            adjusted_items = []
+            for rank, idx in enumerate(new_order, start=1):
+                item = dict(ranking[idx])
+                item["rank"] = int(rank)
+                item["adaptive_evidence_source_score"] = float(source_scores[idx])
+                item["adaptive_evidence_fallback_score"] = float(fallback_scores[idx])
+                item["adaptive_evidence_used_source"] = bool(use_source)
+                item["adaptive_evidence_gate_value"] = float(gate_value)
+                item["score"] = float(final_scores[idx])
+                adjusted_items.append(item)
+            event["channel_ranking"] = adjusted_items
+            event["top_channels"] = adjusted_items[:20]
+            event["adaptive_evidence_rerank_applied"] = True
+            event["adaptive_evidence_used_source"] = bool(use_source)
+            event["adaptive_evidence_gate"] = gate
+            event["adaptive_evidence_gate_value"] = float(gate_value)
+            event["adaptive_evidence_source_top_fallback_rank"] = fallback_rank_of_source_top
+            event["adaptive_evidence_exported_top_source_rank"] = source_rank_of_exported_top
+            event["adaptive_evidence_top3_overlap"] = float(top3_overlap)
+            event["adaptive_evidence_source_margin"] = float(source_margin)
         return events
 
     @staticmethod
@@ -6013,6 +7773,33 @@ class LaGraph:
             root_score_channel_scores = np.zeros_like(base_channel_scores)
         else:
             root_score_channel_scores = root_score_channel_scores[score_slice]
+        event_responsibility_channel_scores = getattr(
+            self,
+            "_last_event_responsibility_channel_scores",
+            None,
+        )
+        if event_responsibility_channel_scores is None:
+            event_responsibility_channel_scores = np.zeros_like(base_channel_scores)
+        else:
+            event_responsibility_channel_scores = event_responsibility_channel_scores[score_slice]
+        evidence_fusion_channel_scores = getattr(
+            self,
+            "_last_evidence_fusion_channel_scores",
+            None,
+        )
+        if evidence_fusion_channel_scores is None:
+            evidence_fusion_channel_scores = np.zeros_like(base_channel_scores)
+        else:
+            evidence_fusion_channel_scores = evidence_fusion_channel_scores[score_slice]
+        source_interaction_head_channel_scores = getattr(
+            self,
+            "_last_source_interaction_head_channel_scores",
+            None,
+        )
+        if source_interaction_head_channel_scores is None:
+            source_interaction_head_channel_scores = np.zeros_like(base_channel_scores)
+        else:
+            source_interaction_head_channel_scores = source_interaction_head_channel_scores[score_slice]
         synthetic_channel_scores = getattr(self, "_last_synthetic_rca_channel_scores", None)
         if synthetic_channel_scores is None:
             synthetic_channel_scores = np.zeros_like(base_channel_scores)
@@ -6039,6 +7826,7 @@ class LaGraph:
         source_consensus_mode = str(getattr(self.config, "rca_source_consensus_mode", "sqrt_bg") or "sqrt_bg")
         causal_weight = _cfg_float("rca_causal_weight", 0.0)
         synthetic_weight = _cfg_float("rca_synthetic_weight", 0.0)
+        event_responsibility_weight = _cfg_float("rca_event_responsibility_weight", 0.0)
         source_gate_weight = _cfg_float("rca_source_gate_weight", 0.0)
         root_score_weight = _cfg_float("rca_root_score_weight", 0.0)
         root_score_signal = str(getattr(self.config, "rca_root_score_signal", "prob") or "prob")
@@ -6046,6 +7834,30 @@ class LaGraph:
         root_score_head_ratio = _cfg_float("rca_root_score_head_ratio", 0.30)
         root_score_head_points = _cfg_int("rca_root_score_head_points", 30)
         root_score_top_quantile = _cfg_float("rca_root_score_top_quantile", 0.80)
+        event_responsibility_pooling = str(
+            getattr(self.config, "rca_event_responsibility_pooling", "mean") or "mean"
+        )
+        event_responsibility_head_ratio = _cfg_float("rca_event_responsibility_head_ratio", 0.30)
+        event_responsibility_head_points = _cfg_int("rca_event_responsibility_head_points", 30)
+        event_responsibility_top_quantile = _cfg_float("rca_event_responsibility_top_quantile", 0.80)
+        evidence_fusion_weight = _cfg_float("rca_evidence_fusion_weight", 0.0)
+        evidence_fusion_pooling = str(
+            getattr(self.config, "rca_evidence_fusion_pooling", "mean") or "mean"
+        )
+        evidence_fusion_head_ratio = _cfg_float("rca_evidence_fusion_head_ratio", 0.30)
+        evidence_fusion_head_points = _cfg_int("rca_evidence_fusion_head_points", 30)
+        evidence_fusion_top_quantile = _cfg_float("rca_evidence_fusion_top_quantile", 0.80)
+        source_interaction_head_weight = _cfg_float("rca_source_interaction_head_weight", 0.0)
+        source_interaction_head_pooling = str(
+            getattr(self.config, "rca_source_interaction_head_pooling", "head_mean")
+            or "head_mean"
+        )
+        source_interaction_head_ratio = _cfg_float("rca_source_interaction_head_ratio", 0.30)
+        source_interaction_head_points = _cfg_int("rca_source_interaction_head_points", 30)
+        source_interaction_head_top_quantile = _cfg_float(
+            "rca_source_interaction_head_top_quantile",
+            0.80,
+        )
         source_interaction_weight = _cfg_float("rca_source_interaction_weight", 0.0)
         source_innovation_weight = _cfg_float("rca_source_innovation_weight", 0.0)
         source_innovation_mode = str(
@@ -6120,6 +7932,93 @@ class LaGraph:
         event_specificity_top_k = _cfg_int("rca_event_specificity_top_k", 1)
         event_specificity_threshold = _cfg_float("rca_event_specificity_threshold", 0.35)
         event_specificity_min_events = _cfg_int("rca_event_specificity_min_events", 20)
+        event_specificity_source_guard_weight = _cfg_float(
+            "rca_event_specificity_source_guard_weight",
+            0.0,
+        )
+        event_specificity_source_guard_floor = _cfg_float(
+            "rca_event_specificity_source_guard_floor",
+            0.0,
+        )
+        event_specificity_keep_top_k = _cfg_int("rca_event_specificity_keep_top_k", 0)
+        event_specificity_fill_secondary_top_k = _cfg_int(
+            "rca_event_specificity_fill_secondary_top_k",
+            0,
+        )
+        event_specificity_secondary_base_weight = _cfg_float(
+            "rca_event_specificity_secondary_base_weight",
+            0.0,
+        )
+        event_specificity_secondary_onset_weight = _cfg_float(
+            "rca_event_specificity_secondary_onset_weight",
+            0.0,
+        )
+        event_specificity_secondary_source_gate_weight = _cfg_float(
+            "rca_event_specificity_secondary_source_gate_weight",
+            0.0,
+        )
+        event_specificity_secondary_mechanism_residual_weight = _cfg_float(
+            "rca_event_specificity_secondary_mechanism_residual_weight",
+            0.0,
+        )
+        event_specificity_secondary_source_interaction_weight = _cfg_float(
+            "rca_event_specificity_secondary_source_interaction_weight",
+            0.0,
+        )
+        event_specificity_secondary_evidence_fusion_weight = _cfg_float(
+            "rca_event_specificity_secondary_evidence_fusion_weight",
+            0.0,
+        )
+        adaptive_evidence_rerank = bool(
+            getattr(self.config, "rca_adaptive_evidence_rerank", False)
+        )
+        adaptive_evidence_top_k = _cfg_int("rca_adaptive_evidence_top_k", 20)
+        adaptive_evidence_keep_top_k = _cfg_int("rca_adaptive_evidence_keep_top_k", 1)
+        adaptive_evidence_fill_top_k = _cfg_int("rca_adaptive_evidence_fill_top_k", 5)
+        adaptive_evidence_gate = str(
+            getattr(self.config, "rca_adaptive_evidence_gate", "source_top_old_rank")
+            or "source_top_old_rank"
+        )
+        adaptive_evidence_source_old_rank_threshold = _cfg_int(
+            "rca_adaptive_evidence_source_old_rank_threshold",
+            1,
+        )
+        adaptive_evidence_source_margin_threshold = _cfg_float(
+            "rca_adaptive_evidence_source_margin_threshold",
+            0.0,
+        )
+        adaptive_evidence_source_base_weight = _cfg_float(
+            "rca_adaptive_evidence_source_base_weight",
+            0.45,
+        )
+        adaptive_evidence_source_onset_weight = _cfg_float(
+            "rca_adaptive_evidence_source_onset_weight",
+            0.25,
+        )
+        adaptive_evidence_source_gate_weight = _cfg_float(
+            "rca_adaptive_evidence_source_gate_weight",
+            1.0,
+        )
+        adaptive_evidence_source_mechanism_residual_weight = _cfg_float(
+            "rca_adaptive_evidence_source_mechanism_residual_weight",
+            0.25,
+        )
+        adaptive_evidence_source_interaction_weight = _cfg_float(
+            "rca_adaptive_evidence_source_interaction_weight",
+            0.25,
+        )
+        adaptive_evidence_fallback_original_weight = _cfg_float(
+            "rca_adaptive_evidence_fallback_original_weight",
+            1.0,
+        )
+        adaptive_evidence_fallback_base_weight = _cfg_float(
+            "rca_adaptive_evidence_fallback_base_weight",
+            0.45,
+        )
+        adaptive_evidence_fallback_onset_weight = _cfg_float(
+            "rca_adaptive_evidence_fallback_onset_weight",
+            0.20,
+        )
         export_lite = bool(getattr(self.config, "rca_export_lite", False))
         export_top_k = int(getattr(self.config, "rca_export_top_k", 20) or 20)
         max_channel_ranking = export_top_k if export_lite else None
@@ -6141,6 +8040,8 @@ class LaGraph:
                 + causal_weight * causal_channel_scores
                 + source_gate_weight * source_gate_channel_scores
                 + root_score_weight * root_score_channel_scores
+                + event_responsibility_weight * event_responsibility_channel_scores
+                + evidence_fusion_weight * evidence_fusion_channel_scores
                 + source_innovation_weight * (
                     source_innovation_channel_scores
                     if source_innovation_channel_scores is not None
@@ -6164,6 +8065,8 @@ class LaGraph:
                 + causal_weight * causal_channel_scores
                 + source_gate_weight * source_gate_channel_scores
                 + root_score_weight * root_score_channel_scores
+                + event_responsibility_weight * event_responsibility_channel_scores
+                + evidence_fusion_weight * evidence_fusion_channel_scores
                 + source_innovation_weight * (
                     source_innovation_channel_scores
                     if source_innovation_channel_scores is not None
@@ -6188,6 +8091,8 @@ class LaGraph:
                 + mechanism_weight * mechanism_channel_scores
                 + source_gate_weight * source_gate_channel_scores
                 + root_score_weight * root_score_channel_scores
+                + event_responsibility_weight * event_responsibility_channel_scores
+                + evidence_fusion_weight * evidence_fusion_channel_scores
                 + source_innovation_weight * (
                     source_innovation_channel_scores
                     if source_innovation_channel_scores is not None
@@ -6226,6 +8131,21 @@ class LaGraph:
             root_score_top_quantile=root_score_top_quantile,
             source_innovation_channel_scores=source_innovation_channel_scores,
             synthetic_channel_scores=synthetic_channel_scores,
+            event_responsibility_channel_scores=event_responsibility_channel_scores,
+            event_responsibility_pooling=event_responsibility_pooling,
+            event_responsibility_head_ratio=event_responsibility_head_ratio,
+            event_responsibility_head_points=event_responsibility_head_points,
+            event_responsibility_top_quantile=event_responsibility_top_quantile,
+            evidence_fusion_channel_scores=evidence_fusion_channel_scores,
+            evidence_fusion_pooling=evidence_fusion_pooling,
+            evidence_fusion_head_ratio=evidence_fusion_head_ratio,
+            evidence_fusion_head_points=evidence_fusion_head_points,
+            evidence_fusion_top_quantile=evidence_fusion_top_quantile,
+            source_interaction_head_channel_scores=source_interaction_head_channel_scores,
+            source_interaction_head_pooling=source_interaction_head_pooling,
+            source_interaction_head_ratio=source_interaction_head_ratio,
+            source_interaction_head_points=source_interaction_head_points,
+            source_interaction_head_top_quantile=source_interaction_head_top_quantile,
             counterfactual_channel_scores=counterfactual_channel_scores,
             use_source_propagation=use_source_propagation,
             graph_weight=graph_weight,
@@ -6240,6 +8160,9 @@ class LaGraph:
             source_consensus_mode=source_consensus_mode,
             causal_weight=causal_weight,
             synthetic_weight=synthetic_weight,
+            event_responsibility_weight=event_responsibility_weight,
+            evidence_fusion_weight=evidence_fusion_weight,
+            source_interaction_head_weight=source_interaction_head_weight,
             source_gate_weight=source_gate_weight,
             root_score_weight=root_score_weight,
             source_interaction_weight=source_interaction_weight,
@@ -6313,6 +8236,21 @@ class LaGraph:
                     root_score_top_quantile=root_score_top_quantile,
                     source_innovation_channel_scores=source_innovation_channel_scores,
                     synthetic_channel_scores=synthetic_channel_scores,
+                    event_responsibility_channel_scores=event_responsibility_channel_scores,
+                    event_responsibility_pooling=event_responsibility_pooling,
+                    event_responsibility_head_ratio=event_responsibility_head_ratio,
+                    event_responsibility_head_points=event_responsibility_head_points,
+                    event_responsibility_top_quantile=event_responsibility_top_quantile,
+                    evidence_fusion_channel_scores=evidence_fusion_channel_scores,
+                    evidence_fusion_pooling=evidence_fusion_pooling,
+                    evidence_fusion_head_ratio=evidence_fusion_head_ratio,
+                    evidence_fusion_head_points=evidence_fusion_head_points,
+                    evidence_fusion_top_quantile=evidence_fusion_top_quantile,
+                    source_interaction_head_channel_scores=source_interaction_head_channel_scores,
+                    source_interaction_head_pooling=source_interaction_head_pooling,
+                    source_interaction_head_ratio=source_interaction_head_ratio,
+                    source_interaction_head_points=source_interaction_head_points,
+                    source_interaction_head_top_quantile=source_interaction_head_top_quantile,
                     counterfactual_channel_scores=counterfactual_channel_scores,
                     use_source_propagation=use_source_propagation,
                     graph_weight=graph_weight,
@@ -6327,6 +8265,9 @@ class LaGraph:
                     source_consensus_mode=source_consensus_mode,
                     causal_weight=causal_weight,
                     synthetic_weight=synthetic_weight,
+                    event_responsibility_weight=event_responsibility_weight,
+                    evidence_fusion_weight=evidence_fusion_weight,
+                    source_interaction_head_weight=source_interaction_head_weight,
                     source_gate_weight=source_gate_weight,
                     root_score_weight=root_score_weight,
                     source_interaction_weight=source_interaction_weight,
@@ -6393,6 +8334,21 @@ class LaGraph:
                     root_score_top_quantile=root_score_top_quantile,
                     source_innovation_channel_scores=source_innovation_channel_scores,
                     synthetic_channel_scores=synthetic_channel_scores,
+                    event_responsibility_channel_scores=event_responsibility_channel_scores,
+                    event_responsibility_pooling=event_responsibility_pooling,
+                    event_responsibility_head_ratio=event_responsibility_head_ratio,
+                    event_responsibility_head_points=event_responsibility_head_points,
+                    event_responsibility_top_quantile=event_responsibility_top_quantile,
+                    evidence_fusion_channel_scores=evidence_fusion_channel_scores,
+                    evidence_fusion_pooling=evidence_fusion_pooling,
+                    evidence_fusion_head_ratio=evidence_fusion_head_ratio,
+                    evidence_fusion_head_points=evidence_fusion_head_points,
+                    evidence_fusion_top_quantile=evidence_fusion_top_quantile,
+                    source_interaction_head_channel_scores=source_interaction_head_channel_scores,
+                    source_interaction_head_pooling=source_interaction_head_pooling,
+                    source_interaction_head_ratio=source_interaction_head_ratio,
+                    source_interaction_head_points=source_interaction_head_points,
+                    source_interaction_head_top_quantile=source_interaction_head_top_quantile,
                     counterfactual_channel_scores=counterfactual_channel_scores,
                     use_source_propagation=use_source_propagation,
                     graph_weight=graph_weight,
@@ -6407,6 +8363,9 @@ class LaGraph:
                     source_consensus_mode=source_consensus_mode,
                     causal_weight=causal_weight,
                     synthetic_weight=synthetic_weight,
+                    event_responsibility_weight=event_responsibility_weight,
+                    evidence_fusion_weight=evidence_fusion_weight,
+                    source_interaction_head_weight=source_interaction_head_weight,
                     source_gate_weight=source_gate_weight,
                     root_score_weight=root_score_weight,
                     source_interaction_weight=source_interaction_weight,
@@ -6471,6 +8430,21 @@ class LaGraph:
                 root_score_top_quantile=root_score_top_quantile,
                 source_innovation_channel_scores=source_innovation_channel_scores,
                 synthetic_channel_scores=synthetic_channel_scores,
+                event_responsibility_channel_scores=event_responsibility_channel_scores,
+                event_responsibility_pooling=event_responsibility_pooling,
+                event_responsibility_head_ratio=event_responsibility_head_ratio,
+                event_responsibility_head_points=event_responsibility_head_points,
+                event_responsibility_top_quantile=event_responsibility_top_quantile,
+                evidence_fusion_channel_scores=evidence_fusion_channel_scores,
+                evidence_fusion_pooling=evidence_fusion_pooling,
+                evidence_fusion_head_ratio=evidence_fusion_head_ratio,
+                evidence_fusion_head_points=evidence_fusion_head_points,
+                evidence_fusion_top_quantile=evidence_fusion_top_quantile,
+                source_interaction_head_channel_scores=source_interaction_head_channel_scores,
+                source_interaction_head_pooling=source_interaction_head_pooling,
+                source_interaction_head_ratio=source_interaction_head_ratio,
+                source_interaction_head_points=source_interaction_head_points,
+                source_interaction_head_top_quantile=source_interaction_head_top_quantile,
                 counterfactual_channel_scores=counterfactual_channel_scores,
                 use_source_propagation=use_source_propagation,
                 graph_weight=graph_weight,
@@ -6485,6 +8459,9 @@ class LaGraph:
                 source_consensus_mode=source_consensus_mode,
                 causal_weight=causal_weight,
                 synthetic_weight=synthetic_weight,
+                event_responsibility_weight=event_responsibility_weight,
+                evidence_fusion_weight=evidence_fusion_weight,
+                source_interaction_head_weight=source_interaction_head_weight,
                 source_gate_weight=source_gate_weight,
                 root_score_weight=root_score_weight,
                 source_interaction_weight=source_interaction_weight,
@@ -6527,6 +8504,44 @@ class LaGraph:
                     top_k=event_specificity_top_k,
                     threshold=event_specificity_threshold,
                     min_events=event_specificity_min_events,
+                    source_guard_weight=event_specificity_source_guard_weight,
+                    source_guard_floor=event_specificity_source_guard_floor,
+                    keep_top_k=event_specificity_keep_top_k,
+                    fill_secondary_top_k=event_specificity_fill_secondary_top_k,
+                    secondary_base_weight=event_specificity_secondary_base_weight,
+                    secondary_onset_weight=event_specificity_secondary_onset_weight,
+                    secondary_source_gate_weight=event_specificity_secondary_source_gate_weight,
+                    secondary_mechanism_residual_weight=(
+                        event_specificity_secondary_mechanism_residual_weight
+                    ),
+                    secondary_source_interaction_weight=(
+                        event_specificity_secondary_source_interaction_weight
+                    ),
+                    secondary_evidence_fusion_weight=(
+                        event_specificity_secondary_evidence_fusion_weight
+                    ),
+                )
+        if adaptive_evidence_rerank and predicted_events_by_key:
+            for key_name, key_events in list(predicted_events_by_key.items()):
+                predicted_events_by_key[key_name] = self._apply_rca_adaptive_evidence_rerank(
+                    key_events,
+                    enabled=adaptive_evidence_rerank,
+                    top_k=adaptive_evidence_top_k,
+                    keep_top_k=adaptive_evidence_keep_top_k,
+                    fill_top_k=adaptive_evidence_fill_top_k,
+                    gate=adaptive_evidence_gate,
+                    source_old_rank_threshold=adaptive_evidence_source_old_rank_threshold,
+                    source_margin_threshold=adaptive_evidence_source_margin_threshold,
+                    source_base_weight=adaptive_evidence_source_base_weight,
+                    source_onset_weight=adaptive_evidence_source_onset_weight,
+                    source_gate_weight=adaptive_evidence_source_gate_weight,
+                    source_mechanism_residual_weight=(
+                        adaptive_evidence_source_mechanism_residual_weight
+                    ),
+                    source_interaction_weight=adaptive_evidence_source_interaction_weight,
+                    fallback_original_weight=adaptive_evidence_fallback_original_weight,
+                    fallback_base_weight=adaptive_evidence_fallback_base_weight,
+                    fallback_onset_weight=adaptive_evidence_fallback_onset_weight,
                 )
 
         predicted_events = predicted_events_by_key.get(pred_key, [])
@@ -6556,6 +8571,21 @@ class LaGraph:
                 root_score_top_quantile=root_score_top_quantile,
                 source_innovation_channel_scores=source_innovation_channel_scores,
                 synthetic_channel_scores=synthetic_channel_scores,
+                event_responsibility_channel_scores=event_responsibility_channel_scores,
+                event_responsibility_pooling=event_responsibility_pooling,
+                event_responsibility_head_ratio=event_responsibility_head_ratio,
+                event_responsibility_head_points=event_responsibility_head_points,
+                event_responsibility_top_quantile=event_responsibility_top_quantile,
+                evidence_fusion_channel_scores=evidence_fusion_channel_scores,
+                evidence_fusion_pooling=evidence_fusion_pooling,
+                evidence_fusion_head_ratio=evidence_fusion_head_ratio,
+                evidence_fusion_head_points=evidence_fusion_head_points,
+                evidence_fusion_top_quantile=evidence_fusion_top_quantile,
+                source_interaction_head_channel_scores=source_interaction_head_channel_scores,
+                source_interaction_head_pooling=source_interaction_head_pooling,
+                source_interaction_head_ratio=source_interaction_head_ratio,
+                source_interaction_head_points=source_interaction_head_points,
+                source_interaction_head_top_quantile=source_interaction_head_top_quantile,
                 counterfactual_channel_scores=counterfactual_channel_scores,
                 use_source_propagation=use_source_propagation,
                 graph_weight=graph_weight,
@@ -6570,6 +8600,9 @@ class LaGraph:
                 source_consensus_mode=source_consensus_mode,
                 causal_weight=causal_weight,
                 synthetic_weight=synthetic_weight,
+                event_responsibility_weight=event_responsibility_weight,
+                evidence_fusion_weight=evidence_fusion_weight,
+                source_interaction_head_weight=source_interaction_head_weight,
                 source_gate_weight=source_gate_weight,
                 root_score_weight=root_score_weight,
                 source_interaction_weight=source_interaction_weight,
@@ -6611,6 +8644,43 @@ class LaGraph:
                     top_k=event_specificity_top_k,
                     threshold=event_specificity_threshold,
                     min_events=event_specificity_min_events,
+                    source_guard_weight=event_specificity_source_guard_weight,
+                    source_guard_floor=event_specificity_source_guard_floor,
+                    keep_top_k=event_specificity_keep_top_k,
+                    fill_secondary_top_k=event_specificity_fill_secondary_top_k,
+                    secondary_base_weight=event_specificity_secondary_base_weight,
+                    secondary_onset_weight=event_specificity_secondary_onset_weight,
+                    secondary_source_gate_weight=event_specificity_secondary_source_gate_weight,
+                    secondary_mechanism_residual_weight=(
+                        event_specificity_secondary_mechanism_residual_weight
+                    ),
+                    secondary_source_interaction_weight=(
+                        event_specificity_secondary_source_interaction_weight
+                    ),
+                    secondary_evidence_fusion_weight=(
+                        event_specificity_secondary_evidence_fusion_weight
+                    ),
+                )
+            if adaptive_evidence_rerank:
+                predicted_events = self._apply_rca_adaptive_evidence_rerank(
+                    predicted_events,
+                    enabled=adaptive_evidence_rerank,
+                    top_k=adaptive_evidence_top_k,
+                    keep_top_k=adaptive_evidence_keep_top_k,
+                    fill_top_k=adaptive_evidence_fill_top_k,
+                    gate=adaptive_evidence_gate,
+                    source_old_rank_threshold=adaptive_evidence_source_old_rank_threshold,
+                    source_margin_threshold=adaptive_evidence_source_margin_threshold,
+                    source_base_weight=adaptive_evidence_source_base_weight,
+                    source_onset_weight=adaptive_evidence_source_onset_weight,
+                    source_gate_weight=adaptive_evidence_source_gate_weight,
+                    source_mechanism_residual_weight=(
+                        adaptive_evidence_source_mechanism_residual_weight
+                    ),
+                    source_interaction_weight=adaptive_evidence_source_interaction_weight,
+                    fallback_original_weight=adaptive_evidence_fallback_original_weight,
+                    fallback_base_weight=adaptive_evidence_fallback_base_weight,
+                    fallback_onset_weight=adaptive_evidence_fallback_onset_weight,
                 )
 
         from datetime import datetime
@@ -6656,6 +8726,13 @@ class LaGraph:
             "rca_root_score_head_points": root_score_head_points,
             "rca_root_score_top_quantile": root_score_top_quantile,
             "rca_source_interaction_weight": source_interaction_weight,
+            "rca_source_interaction_head_weight": source_interaction_head_weight,
+            "rca_source_interaction_head_pooling": source_interaction_head_pooling,
+            "rca_source_interaction_head_ratio": source_interaction_head_ratio,
+            "rca_source_interaction_head_points": source_interaction_head_points,
+            "rca_source_interaction_head_top_quantile": (
+                source_interaction_head_top_quantile
+            ),
             "rca_source_innovation_weight": source_innovation_weight,
             "rca_source_innovation_mode": source_innovation_mode,
             "rca_source_innovation_neighbor_weight": source_innovation_neighbor_weight,
@@ -6697,12 +8774,56 @@ class LaGraph:
             "rca_event_specificity_top_k": event_specificity_top_k,
             "rca_event_specificity_threshold": event_specificity_threshold,
             "rca_event_specificity_min_events": event_specificity_min_events,
+            "rca_event_specificity_source_guard_weight": event_specificity_source_guard_weight,
+            "rca_event_specificity_source_guard_floor": event_specificity_source_guard_floor,
+            "rca_event_specificity_keep_top_k": event_specificity_keep_top_k,
+            "rca_event_specificity_fill_secondary_top_k": event_specificity_fill_secondary_top_k,
+            "rca_event_specificity_secondary_base_weight": event_specificity_secondary_base_weight,
+            "rca_event_specificity_secondary_onset_weight": event_specificity_secondary_onset_weight,
+            "rca_event_specificity_secondary_source_gate_weight": (
+                event_specificity_secondary_source_gate_weight
+            ),
+            "rca_event_specificity_secondary_mechanism_residual_weight": (
+                event_specificity_secondary_mechanism_residual_weight
+            ),
+            "rca_event_specificity_secondary_source_interaction_weight": (
+                event_specificity_secondary_source_interaction_weight
+            ),
+            "rca_event_specificity_secondary_evidence_fusion_weight": (
+                event_specificity_secondary_evidence_fusion_weight
+            ),
+            "rca_adaptive_evidence_rerank": adaptive_evidence_rerank,
+            "rca_adaptive_evidence_top_k": adaptive_evidence_top_k,
+            "rca_adaptive_evidence_keep_top_k": adaptive_evidence_keep_top_k,
+            "rca_adaptive_evidence_fill_top_k": adaptive_evidence_fill_top_k,
+            "rca_adaptive_evidence_gate": adaptive_evidence_gate,
+            "rca_adaptive_evidence_source_old_rank_threshold": (
+                adaptive_evidence_source_old_rank_threshold
+            ),
+            "rca_adaptive_evidence_source_margin_threshold": (
+                adaptive_evidence_source_margin_threshold
+            ),
+            "rca_adaptive_evidence_source_base_weight": adaptive_evidence_source_base_weight,
+            "rca_adaptive_evidence_source_onset_weight": adaptive_evidence_source_onset_weight,
+            "rca_adaptive_evidence_source_gate_weight": adaptive_evidence_source_gate_weight,
+            "rca_adaptive_evidence_source_mechanism_residual_weight": (
+                adaptive_evidence_source_mechanism_residual_weight
+            ),
+            "rca_adaptive_evidence_source_interaction_weight": (
+                adaptive_evidence_source_interaction_weight
+            ),
+            "rca_adaptive_evidence_fallback_original_weight": (
+                adaptive_evidence_fallback_original_weight
+            ),
+            "rca_adaptive_evidence_fallback_base_weight": adaptive_evidence_fallback_base_weight,
+            "rca_adaptive_evidence_fallback_onset_weight": adaptive_evidence_fallback_onset_weight,
             "rca_topk_rerank": bool(getattr(self.config, "rca_topk_rerank", False)),
             "rca_topk_rerank_k": _cfg_int("rca_topk_rerank_k", 5),
             "rca_topk_rerank_original_weight": _cfg_float(
                 "rca_topk_rerank_original_weight",
                 1.0,
             ),
+            "rca_topk_rerank_base_weight": _cfg_float("rca_topk_rerank_base_weight", 0.0),
             "rca_topk_rerank_group_weight": _cfg_float("rca_topk_rerank_group_weight", 0.0),
             "rca_topk_rerank_onset_weight": _cfg_float("rca_topk_rerank_onset_weight", 0.0),
             "rca_topk_rerank_source_gate_weight": _cfg_float(
@@ -6713,8 +8834,55 @@ class LaGraph:
                 "rca_topk_rerank_mechanism_residual_weight",
                 0.0,
             ),
+            "rca_topk_rerank_source_interaction_weight": _cfg_float(
+                "rca_topk_rerank_source_interaction_weight",
+                0.0,
+            ),
             "rca_topk_rerank_graph_penalty_weight": _cfg_float(
                 "rca_topk_rerank_graph_penalty_weight",
+                0.0,
+            ),
+            "rca_topk_rerank_component_scope": str(
+                getattr(self.config, "rca_topk_rerank_component_scope", "candidate") or "candidate"
+            ),
+            "rca_topk_rerank_keep_primary_top_k": _cfg_int(
+                "rca_topk_rerank_keep_primary_top_k",
+                0,
+            ),
+            "rca_topk_rerank_fill_secondary_top_k": _cfg_int(
+                "rca_topk_rerank_fill_secondary_top_k",
+                0,
+            ),
+            "rca_topk_rerank_secondary_original_weight": _cfg_float(
+                "rca_topk_rerank_secondary_original_weight",
+                0.0,
+            ),
+            "rca_topk_rerank_secondary_base_weight": _cfg_float(
+                "rca_topk_rerank_secondary_base_weight",
+                0.0,
+            ),
+            "rca_topk_rerank_secondary_group_weight": _cfg_float(
+                "rca_topk_rerank_secondary_group_weight",
+                0.0,
+            ),
+            "rca_topk_rerank_secondary_onset_weight": _cfg_float(
+                "rca_topk_rerank_secondary_onset_weight",
+                0.0,
+            ),
+            "rca_topk_rerank_secondary_source_gate_weight": _cfg_float(
+                "rca_topk_rerank_secondary_source_gate_weight",
+                0.0,
+            ),
+            "rca_topk_rerank_secondary_mechanism_residual_weight": _cfg_float(
+                "rca_topk_rerank_secondary_mechanism_residual_weight",
+                0.0,
+            ),
+            "rca_topk_rerank_secondary_source_interaction_weight": _cfg_float(
+                "rca_topk_rerank_secondary_source_interaction_weight",
+                0.0,
+            ),
+            "rca_topk_rerank_secondary_graph_penalty_weight": _cfg_float(
+                "rca_topk_rerank_secondary_graph_penalty_weight",
                 0.0,
             ),
             "rca_event_head_ratio": event_head_ratio,
@@ -6738,6 +8906,30 @@ class LaGraph:
             ),
             "source_effect_prior_topk": _cfg_int("source_effect_prior_topk", 5),
             "source_effect_onset_rank_weight": _cfg_float("source_effect_onset_rank_weight", 0.0),
+            "source_effect_consistency_weight": _cfg_float(
+                "source_effect_consistency_weight",
+                0.0,
+            ),
+            "source_effect_consistency_rank_weight": _cfg_float(
+                "source_effect_consistency_rank_weight",
+                0.75,
+            ),
+            "source_effect_consistency_effect_rank_weight": _cfg_float(
+                "source_effect_consistency_effect_rank_weight",
+                0.75,
+            ),
+            "source_effect_consistency_effect_suppress_weight": _cfg_float(
+                "source_effect_consistency_effect_suppress_weight",
+                0.25,
+            ),
+            "source_effect_consistency_gate_align_weight": _cfg_float(
+                "source_effect_consistency_gate_align_weight",
+                0.20,
+            ),
+            "source_effect_consistency_margin": _cfg_float(
+                "source_effect_consistency_margin",
+                0.15,
+            ),
             "source_effect_specificity_weight": _cfg_float("source_effect_specificity_weight", 0.0),
             "lambda_source_effect_rca_head": _cfg_float("lambda_source_effect_rca_head", 0.0),
             "source_effect_rca_head_bce_weight": _cfg_float(
@@ -6764,6 +8956,33 @@ class LaGraph:
                 "root_response_confidence_discount",
                 0.75,
             ),
+            "root_response_use_innovation_split": bool(
+                getattr(self.config, "root_response_use_innovation_split", False)
+            ),
+            "use_pairwise_root_response_head": bool(
+                getattr(self.config, "use_pairwise_root_response_head", False)
+            ),
+            "pairwise_root_response_rank": _cfg_int("pairwise_root_response_rank", 8),
+            "pairwise_root_response_graph_weight": _cfg_float(
+                "pairwise_root_response_graph_weight",
+                0.75,
+            ),
+            "pairwise_root_response_reward_init": _cfg_float(
+                "pairwise_root_response_reward_init",
+                0.25,
+            ),
+            "pairwise_root_response_penalty_init": _cfg_float(
+                "pairwise_root_response_penalty_init",
+                0.50,
+            ),
+            "pairwise_root_response_logit_weight": _cfg_float(
+                "pairwise_root_response_logit_weight",
+                1.0,
+            ),
+            "lambda_pairwise_root_response": _cfg_float(
+                "lambda_pairwise_root_response",
+                0.0,
+            ),
             "root_response_response_branch_weight": _cfg_float(
                 "root_response_response_branch_weight",
                 0.0,
@@ -6771,6 +8990,114 @@ class LaGraph:
             "root_response_response_suppress_weight": _cfg_float(
                 "root_response_response_suppress_weight",
                 0.5,
+            ),
+            "use_event_responsibility_head": bool(
+                getattr(self.config, "use_event_responsibility_head", False)
+            ),
+            "lambda_event_responsibility": _cfg_float("lambda_event_responsibility", 0.0),
+            "event_responsibility_loss_mode": str(
+                getattr(self.config, "event_responsibility_loss_mode", "bce") or "bce"
+            ),
+            "event_responsibility_bce_balance": bool(
+                getattr(self.config, "event_responsibility_bce_balance", True)
+            ),
+            "event_responsibility_ce_weight": _cfg_float(
+                "event_responsibility_ce_weight",
+                1.0,
+            ),
+            "event_responsibility_rank_weight": _cfg_float(
+                "event_responsibility_rank_weight",
+                0.5,
+            ),
+            "event_responsibility_effect_suppress_weight": _cfg_float(
+                "event_responsibility_effect_suppress_weight",
+                0.25,
+            ),
+            "rca_event_responsibility_weight": event_responsibility_weight,
+            "rca_event_responsibility_pooling": event_responsibility_pooling,
+            "rca_event_responsibility_head_ratio": event_responsibility_head_ratio,
+            "rca_event_responsibility_head_points": event_responsibility_head_points,
+            "rca_event_responsibility_top_quantile": event_responsibility_top_quantile,
+            "use_evidence_fusion_head": bool(
+                getattr(self.config, "use_evidence_fusion_head", False)
+            ),
+            "evidence_fusion_hidden": _cfg_int("evidence_fusion_hidden", 16),
+            "evidence_fusion_detach_inputs": bool(
+                getattr(self.config, "evidence_fusion_detach_inputs", False)
+            ),
+            "lambda_evidence_fusion": _cfg_float("lambda_evidence_fusion", 0.0),
+            "evidence_fusion_loss_mode": str(
+                getattr(self.config, "evidence_fusion_loss_mode", "bce") or "bce"
+            ),
+            "evidence_fusion_export_mode": str(
+                getattr(self.config, "evidence_fusion_export_mode", "sigmoid")
+                or "sigmoid"
+            ),
+            "evidence_fusion_bce_weight": _cfg_float(
+                "evidence_fusion_bce_weight",
+                1.0,
+            ),
+            "evidence_fusion_rank_weight": _cfg_float(
+                "evidence_fusion_rank_weight",
+                1.0,
+            ),
+            "evidence_fusion_effect_suppress_weight": _cfg_float(
+                "evidence_fusion_effect_suppress_weight",
+                0.25,
+            ),
+            "evidence_fusion_pairwise_effect_weight": _cfg_float(
+                "evidence_fusion_pairwise_effect_weight",
+                0.0,
+            ),
+            "evidence_fusion_pairwise_effect_margin": _cfg_float(
+                "evidence_fusion_pairwise_effect_margin",
+                0.2,
+            ),
+            "evidence_fusion_entropy_weight": _cfg_float(
+                "evidence_fusion_entropy_weight",
+                0.0,
+            ),
+            "rca_evidence_fusion_weight": evidence_fusion_weight,
+            "rca_evidence_fusion_pooling": evidence_fusion_pooling,
+            "rca_evidence_fusion_head_ratio": evidence_fusion_head_ratio,
+            "rca_evidence_fusion_head_points": evidence_fusion_head_points,
+            "rca_evidence_fusion_top_quantile": evidence_fusion_top_quantile,
+            "use_source_interaction_head": bool(
+                getattr(self.config, "use_source_interaction_head", False)
+            ),
+            "source_interaction_detach_inputs": bool(
+                getattr(self.config, "source_interaction_detach_inputs", True)
+            ),
+            "lambda_source_interaction_head": _cfg_float(
+                "lambda_source_interaction_head",
+                0.0,
+            ),
+            "source_interaction_head_bce_weight": _cfg_float(
+                "source_interaction_head_bce_weight",
+                1.0,
+            ),
+            "source_interaction_head_rank_weight": _cfg_float(
+                "source_interaction_head_rank_weight",
+                1.0,
+            ),
+            "source_interaction_head_effect_suppress_weight": _cfg_float(
+                "source_interaction_head_effect_suppress_weight",
+                0.25,
+            ),
+            "source_interaction_head_pairwise_effect_weight": _cfg_float(
+                "source_interaction_head_pairwise_effect_weight",
+                0.5,
+            ),
+            "source_interaction_head_pairwise_effect_margin": _cfg_float(
+                "source_interaction_head_pairwise_effect_margin",
+                0.15,
+            ),
+            "rca_source_interaction_head_weight": source_interaction_head_weight,
+            "rca_source_interaction_head_pooling": source_interaction_head_pooling,
+            "rca_source_interaction_head_ratio": source_interaction_head_ratio,
+            "rca_source_interaction_head_points": source_interaction_head_points,
+            "rca_source_interaction_head_top_quantile": (
+                source_interaction_head_top_quantile
             ),
             "lambda_source_bottleneck": _cfg_float("lambda_source_bottleneck", 0.0),
             "source_bottleneck_bce_weight": _cfg_float("source_bottleneck_bce_weight", 1.0),

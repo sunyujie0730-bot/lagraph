@@ -442,6 +442,229 @@ class RootResponseRCAHead(nn.Module):
         )
 
 
+class PairwiseRootResponseRCAHead(nn.Module):
+    """Pairwise source-response head for variable-level RCA.
+
+    The head learns a compact source-to-response relation matrix and uses it to
+    reward variables that explain downstream response evidence while penalizing
+    variables that are better explained as responses.
+    """
+
+    def __init__(
+        self,
+        source_dim,
+        response_dim,
+        hidden,
+        channel,
+        relation_rank=8,
+        dropout=0.1,
+        response_penalty_init=1.0,
+        source_confidence_discount=0.75,
+        graph_weight_init=0.75,
+        explanation_reward_init=0.25,
+        response_pair_penalty_init=0.50,
+        pairwise_logit_weight=1.0,
+    ):
+        super().__init__()
+        hidden = max(8, min(int(hidden), 16))
+        response_hidden = max(4, min(hidden // 2, 8))
+        self.channel = int(channel)
+        self.relation_rank = max(2, int(relation_rank))
+        self.pairwise_logit_weight = max(float(pairwise_logit_weight), 0.0)
+        self.source_confidence_discount = min(
+            max(float(source_confidence_discount), 0.0),
+            0.95,
+        )
+
+        self.source_net = nn.Sequential(
+            nn.Linear(source_dim, hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden, 1),
+        )
+        self.response_net = nn.Sequential(
+            nn.Linear(response_dim, response_hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(response_hidden, 1),
+        )
+        self.source_relation = nn.Parameter(
+            torch.empty(self.channel, self.relation_rank),
+        )
+        self.response_relation = nn.Parameter(
+            torch.empty(self.channel, self.relation_rank),
+        )
+        self.relation_scale_raw = nn.Parameter(torch.tensor(float(np.log(np.expm1(1.0)))))
+
+        response_penalty_init = max(float(response_penalty_init), 1e-4)
+        explanation_reward_init = max(float(explanation_reward_init), 1e-4)
+        response_pair_penalty_init = max(float(response_pair_penalty_init), 1e-4)
+        graph_weight_init = min(max(float(graph_weight_init), 1e-3), 1.0 - 1e-3)
+        self.response_penalty_raw = nn.Parameter(
+            torch.tensor(float(np.log(np.expm1(response_penalty_init)))),
+        )
+        self.explanation_reward_raw = nn.Parameter(
+            torch.tensor(float(np.log(np.expm1(explanation_reward_init)))),
+        )
+        self.response_pair_penalty_raw = nn.Parameter(
+            torch.tensor(float(np.log(np.expm1(response_pair_penalty_init)))),
+        )
+        self.graph_weight_logit = nn.Parameter(
+            torch.tensor(float(np.log(graph_weight_init / (1.0 - graph_weight_init)))),
+        )
+
+        nn.init.normal_(self.source_relation, mean=0.0, std=0.02)
+        nn.init.normal_(self.response_relation, mean=0.0, std=0.02)
+        nn.init.constant_(self.source_net[-1].bias, -2.0)
+        nn.init.constant_(self.response_net[-1].bias, 0.0)
+
+    def _relation_prior(self, A_adaptive, dtype, device):
+        C = self.channel
+        eye = torch.eye(C, device=device, dtype=dtype)
+        learned_logits = (
+            self.source_relation.to(dtype=dtype)
+            @ self.response_relation.to(dtype=dtype).transpose(0, 1)
+        ) / np.sqrt(float(self.relation_rank))
+        learned_logits = F.softplus(self.relation_scale_raw).to(dtype=dtype) * learned_logits
+        learned_logits = learned_logits.masked_fill(eye.bool(), -20.0)
+
+        if A_adaptive is None:
+            return torch.softmax(learned_logits, dim=-1).unsqueeze(0)
+
+        graph = A_adaptive.to(dtype=dtype).clamp_min(0.0)
+        graph = graph * (1.0 - eye.unsqueeze(0))
+        graph = graph / graph.sum(dim=-1, keepdim=True).clamp_min(1e-8)
+        graph_logits = torch.log(graph.clamp_min(1e-8))
+        graph_weight = torch.sigmoid(self.graph_weight_logit).to(dtype=dtype)
+        logits = graph_weight * graph_logits + (1.0 - graph_weight) * learned_logits.unsqueeze(0)
+        logits = logits.masked_fill(eye.bool().unsqueeze(0), -30.0)
+        return torch.softmax(logits, dim=-1)
+
+    def forward(self, source_features, response_features, A_adaptive=None):
+        source_evidence = self.source_net(source_features).squeeze(-1)
+        response_evidence = F.softplus(self.response_net(response_features).squeeze(-1))
+        source_confidence = torch.sigmoid(source_evidence)
+        relation = self._relation_prior(
+            A_adaptive,
+            dtype=source_features.dtype,
+            device=source_features.device,
+        )
+        if relation.shape[0] == 1 and source_features.shape[0] > 1:
+            relation = relation.expand(source_features.shape[0], -1, -1)
+
+        source_support = torch.einsum("bij,blj->bli", relation, response_evidence)
+        source_signal = source_confidence * F.softplus(source_evidence)
+        response_support = torch.einsum("bij,bli->blj", relation, source_signal)
+        response_discount = 1.0 - self.source_confidence_discount * source_confidence
+        base_response_evidence = response_discount * response_evidence
+        pair_response_evidence = F.softplus(self.response_pair_penalty_raw) * response_support
+        effective_response_evidence = (
+            base_response_evidence
+            + self.pairwise_logit_weight * pair_response_evidence
+        )
+        logits = (
+            source_evidence
+            + self.pairwise_logit_weight
+            * F.softplus(self.explanation_reward_raw)
+            * source_support
+            - F.softplus(self.response_penalty_raw) * effective_response_evidence
+        )
+        return (
+            logits,
+            source_evidence,
+            response_evidence,
+            source_confidence,
+            effective_response_evidence,
+            relation,
+            source_support,
+            response_support,
+        )
+
+
+class EventResponsibilityHead(nn.Module):
+    """Point-wise channel responsibility head for event-level RCA."""
+
+    def __init__(self, feature_dim, hidden=16, dropout=0.1):
+        super().__init__()
+        hidden = max(8, min(int(hidden), 32))
+        self.net = nn.Sequential(
+            nn.Linear(feature_dim, hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden, 1),
+        )
+        nn.init.constant_(self.net[-1].bias, -2.0)
+
+    def forward(self, features):
+        return self.net(features).squeeze(-1)
+
+
+class EvidenceFusionHead(nn.Module):
+    """Learn evidence weights for variable-level RCA.
+
+    Each variable is represented by a small vector of diagnostic evidence
+    channels. The head predicts a simplex weight over those channels and uses
+    the weighted evidence as the root-cause logit. This keeps the learned
+    fusion interpretable and avoids a large variable-token Transformer before
+    we have enough real RCA labels.
+    """
+
+    def __init__(self, evidence_dim, hidden=16, dropout=0.1, eps=1e-6):
+        super().__init__()
+        self.evidence_dim = int(evidence_dim)
+        self.eps = float(eps)
+        hidden = max(8, min(int(hidden), 32))
+        self.gate_net = nn.Sequential(
+            nn.Linear(self.evidence_dim, hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden, self.evidence_dim),
+        )
+        self.logit_scale_raw = nn.Parameter(torch.tensor(float(np.log(np.expm1(1.0)))))
+        self.logit_bias = nn.Parameter(torch.tensor(-1.0))
+        nn.init.zeros_(self.gate_net[-1].weight)
+        nn.init.zeros_(self.gate_net[-1].bias)
+
+    def forward(self, evidence):
+        center = evidence.mean(dim=2, keepdim=True)
+        scale = evidence.std(dim=2, keepdim=True, unbiased=False).clamp_min(self.eps)
+        normalized = (evidence - center) / scale
+        weights = torch.softmax(self.gate_net(normalized), dim=-1)
+        fused = (weights * normalized).sum(dim=-1)
+        logits = F.softplus(self.logit_scale_raw) * fused + self.logit_bias
+        return logits, weights
+
+
+class SourceInteractionHead(nn.Module):
+    """Constrained source-interaction head for variable-level RCA.
+
+    The head keeps the current RCA inductive bias differentiable: a source
+    should have high local anomaly evidence and at least one source-support
+    cue, rather than only a large propagated response.
+    """
+
+    def __init__(self, evidence_dim=5, eps=1e-6):
+        super().__init__()
+        self.evidence_dim = int(evidence_dim)
+        self.eps = float(eps)
+        if self.evidence_dim < 2:
+            raise ValueError("SourceInteractionHead requires at least two evidence channels.")
+        self.support_logits = nn.Parameter(torch.zeros(self.evidence_dim - 1))
+        self.logit_scale_raw = nn.Parameter(torch.tensor(float(np.log(np.expm1(1.0)))))
+        self.logit_bias = nn.Parameter(torch.tensor(-2.0))
+
+    def forward(self, evidence):
+        positive = torch.log1p(torch.clamp_min(evidence, 0.0))
+        denom = positive.amax(dim=2, keepdim=True).clamp_min(self.eps)
+        normalized = positive / denom
+        anchor = normalized[..., 0]
+        support_weights = torch.softmax(self.support_logits, dim=0)
+        support = (normalized[..., 1:] * support_weights).sum(dim=-1)
+        interaction = torch.sqrt(torch.clamp_min(anchor * support, 0.0) + self.eps)
+        logits = F.softplus(self.logit_scale_raw) * interaction + self.logit_bias
+        return logits, support_weights
+
+
 class SparseGCN(nn.Module):
     """
     SparseLaGraph v11.2 — 极简双图协同异常检测模型
@@ -535,6 +758,21 @@ class SparseGCN(nn.Module):
                  root_score_detach_features=True,
                  root_response_penalty_init=1.0,
                  root_response_confidence_discount=0.75,
+                 root_response_use_innovation_split=False,
+                 use_pairwise_root_response_head=False,
+                 pairwise_root_response_rank=8,
+                 pairwise_root_response_graph_weight=0.75,
+                 pairwise_root_response_reward_init=0.25,
+                 pairwise_root_response_penalty_init=0.50,
+                 pairwise_root_response_logit_weight=1.0,
+                 use_event_responsibility_head=False,
+                 event_responsibility_hidden=16,
+                 event_responsibility_detach_features=False,
+                 use_evidence_fusion_head=False,
+                 evidence_fusion_hidden=16,
+                 evidence_fusion_detach_inputs=False,
+                 use_source_interaction_head=False,
+                 source_interaction_detach_inputs=True,
                  use_channel_temporal_corefinement=False,
                  corefinement_init=0.10,
                  corefinement_detach_first_pass=True,
@@ -618,6 +856,21 @@ class SparseGCN(nn.Module):
             max(float(root_response_confidence_discount), 0.0),
             0.95,
         )
+        self.root_response_use_innovation_split = bool(root_response_use_innovation_split)
+        self.use_pairwise_root_response_head = bool(use_pairwise_root_response_head)
+        self.pairwise_root_response_rank = int(pairwise_root_response_rank)
+        self.pairwise_root_response_graph_weight = float(pairwise_root_response_graph_weight)
+        self.pairwise_root_response_reward_init = float(pairwise_root_response_reward_init)
+        self.pairwise_root_response_penalty_init = float(pairwise_root_response_penalty_init)
+        self.pairwise_root_response_logit_weight = float(pairwise_root_response_logit_weight)
+        self.use_event_responsibility_head = bool(use_event_responsibility_head)
+        self.event_responsibility_hidden = int(event_responsibility_hidden)
+        self.event_responsibility_detach_features = bool(event_responsibility_detach_features)
+        self.use_evidence_fusion_head = bool(use_evidence_fusion_head)
+        self.evidence_fusion_hidden = int(evidence_fusion_hidden)
+        self.evidence_fusion_detach_inputs = bool(evidence_fusion_detach_inputs)
+        self.use_source_interaction_head = bool(use_source_interaction_head)
+        self.source_interaction_detach_inputs = bool(source_interaction_detach_inputs)
         self.use_channel_temporal_corefinement = bool(use_channel_temporal_corefinement)
         self.corefinement_init = float(corefinement_init)
         self.corefinement_detach_first_pass = bool(corefinement_detach_first_pass)
@@ -842,14 +1095,26 @@ class SparseGCN(nn.Module):
             "root-response",
             "response_decomposition",
         }:
-            self.root_score_head = RootResponseRCAHead(
-                source_dim=8,
-                response_dim=3,
+            head_kwargs = dict(
+                source_dim=9 if self.root_response_use_innovation_split else 8,
+                response_dim=2 if self.root_response_use_innovation_split else 3,
                 hidden=root_hidden,
                 dropout=dropout,
                 response_penalty_init=self.root_response_penalty_init,
                 source_confidence_discount=self.root_response_confidence_discount,
             )
+            if self.use_pairwise_root_response_head:
+                self.root_score_head = PairwiseRootResponseRCAHead(
+                    **head_kwargs,
+                    channel=c_out,
+                    relation_rank=self.pairwise_root_response_rank,
+                    graph_weight_init=self.pairwise_root_response_graph_weight,
+                    explanation_reward_init=self.pairwise_root_response_reward_init,
+                    response_pair_penalty_init=self.pairwise_root_response_penalty_init,
+                    pairwise_logit_weight=self.pairwise_root_response_logit_weight,
+                )
+            else:
+                self.root_score_head = RootResponseRCAHead(**head_kwargs)
         else:
             self.root_score_head = nn.Sequential(
                 nn.Linear(7, root_hidden),
@@ -929,6 +1194,30 @@ class SparseGCN(nn.Module):
         else:
             self.synthetic_rca_head = None
 
+        if self.use_event_responsibility_head:
+            self.event_responsibility_head = EventResponsibilityHead(
+                feature_dim=8,
+                hidden=self.event_responsibility_hidden,
+                dropout=dropout,
+            )
+        else:
+            self.event_responsibility_head = None
+
+        if self.use_evidence_fusion_head:
+            with torch.random.fork_rng(devices=[]):
+                self.evidence_fusion_head = EvidenceFusionHead(
+                    evidence_dim=8,
+                    hidden=self.evidence_fusion_hidden,
+                    dropout=0.0,
+                )
+        else:
+            self.evidence_fusion_head = None
+
+        if self.use_source_interaction_head:
+            self.source_interaction_head = SourceInteractionHead(evidence_dim=5)
+        else:
+            self.source_interaction_head = None
+
         self.use_freq_loss = False
         self.lambda_freq = 0.0
         self.use_contrastive = False
@@ -971,6 +1260,15 @@ class SparseGCN(nn.Module):
         self._set_trainable(self.source_gate_net, self.use_source_gate)
         self.source_gate_bias.requires_grad = self.use_source_gate
         self._set_trainable(self.root_score_head, self.use_root_score_head)
+        self._set_trainable(
+            self.event_responsibility_head,
+            self.use_event_responsibility_head,
+        )
+        self._set_trainable(self.evidence_fusion_head, self.use_evidence_fusion_head)
+        self._set_trainable(
+            self.source_interaction_head,
+            self.use_source_interaction_head,
+        )
         self._set_trainable(self.corefinement_fusion, self.use_channel_temporal_corefinement)
         self.corefinement_logit.requires_grad = self.use_channel_temporal_corefinement
         self._set_trainable(
@@ -1199,6 +1497,14 @@ class SparseGCN(nn.Module):
         root_response_response_evidence = None
         root_response_source_confidence = None
         root_response_effective_response_evidence = None
+        root_response_pairwise_relation = None
+        root_response_pairwise_source_support = None
+        root_response_pairwise_response_support = None
+        event_responsibility_logits = None
+        evidence_fusion_logits = None
+        evidence_fusion_weights = None
+        source_interaction_logits = None
+        source_interaction_weights = None
 
         if self.use_lagged_causal_graph and self.lagged_causal_graph is not None:
             causal_input = resid.detach() if self.causal_detach_backbone else resid
@@ -1460,7 +1766,101 @@ class SparseGCN(nn.Module):
         trend_out = self.trend_linear(trend)
         x_rec = resid_out + trend_out
 
-        if self.use_root_score_head and return_root_score:
+        if self.use_source_interaction_head and return_root_score:
+            interaction_recon_error = torch.abs(x_rec - x)
+            if interaction_recon_error.shape[1] > 1:
+                prev_interaction_error = torch.cat(
+                    [
+                        torch.zeros_like(interaction_recon_error[:, :1, :]),
+                        interaction_recon_error[:, :-1, :],
+                    ],
+                    dim=1,
+                )
+            else:
+                prev_interaction_error = torch.zeros_like(interaction_recon_error)
+            interaction_onset_delta = torch.relu(
+                interaction_recon_error - prev_interaction_error
+            )
+            if channel_mechanism_error is not None:
+                interaction_mechanism_error = channel_mechanism_error.to(dtype=resid.dtype)
+            elif self.use_channel_graph:
+                interaction_mechanism_error = torch.abs(
+                    resid - self._graph_neighbor_context(resid, A_adaptive)
+                )
+            else:
+                interaction_mechanism_error = torch.zeros_like(resid)
+            interaction_gate = source_gate if source_gate is not None else torch.zeros_like(resid)
+            interaction_graph_delta = torch.abs(resid_adapted - resid)
+            interaction_features = torch.stack(
+                [
+                    interaction_recon_error,
+                    interaction_onset_delta,
+                    interaction_mechanism_error,
+                    interaction_gate,
+                    interaction_graph_delta,
+                ],
+                dim=-1,
+            )
+            if self.training and self.source_interaction_detach_inputs:
+                interaction_features = interaction_features.detach()
+            source_interaction_logits, source_interaction_weights = (
+                self.source_interaction_head(interaction_features)
+            )
+
+        if self.use_event_responsibility_head:
+            if channel_mechanism_error is not None:
+                responsibility_mechanism_error = channel_mechanism_error.to(dtype=resid.dtype)
+            elif self.use_channel_graph:
+                responsibility_mechanism_error = torch.abs(
+                    resid - self._graph_neighbor_context(resid, A_adaptive)
+                )
+            else:
+                responsibility_mechanism_error = torch.zeros_like(resid)
+            responsibility_causal_error = (
+                causal_channel_error.to(dtype=resid.dtype)
+                if causal_channel_error is not None
+                else torch.zeros_like(resid)
+            )
+            responsibility_gate = source_gate if source_gate is not None else torch.zeros_like(resid)
+            responsibility_gate_score = (
+                source_gate_score.to(dtype=resid.dtype)
+                if source_gate_score is not None
+                else torch.zeros_like(resid)
+            )
+            responsibility_recon_error = torch.abs(x_rec - x)
+            if responsibility_recon_error.shape[1] > 1:
+                prev_error = torch.cat(
+                    [
+                        torch.zeros_like(responsibility_recon_error[:, :1, :]),
+                        responsibility_recon_error[:, :-1, :],
+                    ],
+                    dim=1,
+                )
+            else:
+                prev_error = torch.zeros_like(responsibility_recon_error)
+            responsibility_onset_delta = torch.relu(responsibility_recon_error - prev_error)
+            responsibility_graph_delta = torch.abs(resid_adapted - resid)
+            responsibility_features = torch.stack(
+                [
+                    torch.log1p(responsibility_recon_error),
+                    torch.log1p(torch.abs(resid)),
+                    torch.log1p(torch.abs(responsibility_mechanism_error)),
+                    torch.log1p(torch.abs(responsibility_causal_error)),
+                    responsibility_gate,
+                    torch.log1p(torch.clamp_min(responsibility_gate_score, 0.0)),
+                    torch.log1p(responsibility_onset_delta),
+                    torch.log1p(responsibility_graph_delta),
+                ],
+                dim=-1,
+            )
+            if self.training and self.event_responsibility_detach_features:
+                responsibility_features = responsibility_features.detach()
+            event_responsibility_logits = self.event_responsibility_head(
+                responsibility_features,
+            )
+
+        need_root_score_outputs = self.use_root_score_head and return_root_score
+        if need_root_score_outputs:
             if channel_mechanism_error is not None:
                 mechanism_error_feat = channel_mechanism_error.to(dtype=resid.dtype)
             elif self.use_channel_graph:
@@ -1497,38 +1897,79 @@ class SparseGCN(nn.Module):
                     ).clamp_min(0.0)
                 else:
                     propagation_support = torch.zeros_like(recon_error)
-                propagation_gap = torch.abs(recon_error - propagation_support)
-                source_features = torch.stack(
-                    [
-                        torch.log1p(recon_error),
-                        torch.log1p(torch.abs(resid)),
-                        torch.log1p(torch.abs(mechanism_error_feat)),
-                        torch.log1p(torch.abs(causal_error_feat)),
-                        gate_feat,
-                        torch.log1p(stage_delta),
-                        torch.log1p(onset_delta),
-                        torch.log1p(source_flow),
-                    ],
-                    dim=-1,
-                )
-                response_features = torch.stack(
-                    [
-                        torch.log1p(propagation_support),
-                        torch.log1p(graph_delta),
-                        torch.log1p(propagation_gap),
-                    ],
-                    dim=-1,
-                )
+                if self.root_response_use_innovation_split:
+                    source_innovation = torch.relu(recon_error - propagation_support)
+                    explained_response = torch.minimum(recon_error, propagation_support)
+                    source_features = torch.stack(
+                        [
+                            torch.log1p(recon_error),
+                            torch.log1p(torch.abs(resid)),
+                            torch.log1p(torch.abs(mechanism_error_feat)),
+                            torch.log1p(torch.abs(causal_error_feat)),
+                            gate_feat,
+                            torch.log1p(stage_delta),
+                            torch.log1p(onset_delta),
+                            torch.log1p(source_flow),
+                            torch.log1p(source_innovation),
+                        ],
+                        dim=-1,
+                    )
+                    response_features = torch.stack(
+                        [
+                            torch.log1p(explained_response),
+                            torch.log1p(graph_delta),
+                        ],
+                        dim=-1,
+                    )
+                else:
+                    propagation_gap = torch.abs(recon_error - propagation_support)
+                    source_features = torch.stack(
+                        [
+                            torch.log1p(recon_error),
+                            torch.log1p(torch.abs(resid)),
+                            torch.log1p(torch.abs(mechanism_error_feat)),
+                            torch.log1p(torch.abs(causal_error_feat)),
+                            gate_feat,
+                            torch.log1p(stage_delta),
+                            torch.log1p(onset_delta),
+                            torch.log1p(source_flow),
+                        ],
+                        dim=-1,
+                    )
+                    response_features = torch.stack(
+                        [
+                            torch.log1p(propagation_support),
+                            torch.log1p(graph_delta),
+                            torch.log1p(propagation_gap),
+                        ],
+                        dim=-1,
+                    )
                 if self.training and self.root_score_detach_features:
                     source_features = source_features.detach()
                     response_features = response_features.detach()
-                (
-                    root_score_logits,
-                    root_response_source_evidence,
-                    root_response_response_evidence,
-                    root_response_source_confidence,
-                    root_response_effective_response_evidence,
-                ) = self.root_score_head(source_features, response_features)
+                if self.use_pairwise_root_response_head:
+                    (
+                        root_score_logits,
+                        root_response_source_evidence,
+                        root_response_response_evidence,
+                        root_response_source_confidence,
+                        root_response_effective_response_evidence,
+                        root_response_pairwise_relation,
+                        root_response_pairwise_source_support,
+                        root_response_pairwise_response_support,
+                    ) = self.root_score_head(
+                        source_features,
+                        response_features,
+                        A_adaptive=A_adaptive,
+                    )
+                else:
+                    (
+                        root_score_logits,
+                        root_response_source_evidence,
+                        root_response_response_evidence,
+                        root_response_source_confidence,
+                        root_response_effective_response_evidence,
+                    ) = self.root_score_head(source_features, response_features)
             else:
                 root_features = torch.stack(
                     [
@@ -1545,6 +1986,67 @@ class SparseGCN(nn.Module):
                 if self.training and self.root_score_detach_features:
                     root_features = root_features.detach()
                 root_score_logits = self.root_score_head(root_features).squeeze(-1)
+
+        if self.use_evidence_fusion_head and return_root_score:
+            fusion_recon_error = torch.abs(x_rec - x)
+            if fusion_recon_error.shape[1] > 1:
+                prev_fusion_error = torch.cat(
+                    [
+                        torch.zeros_like(fusion_recon_error[:, :1, :]),
+                        fusion_recon_error[:, :-1, :],
+                    ],
+                    dim=1,
+                )
+            else:
+                prev_fusion_error = torch.zeros_like(fusion_recon_error)
+            fusion_onset_delta = torch.relu(fusion_recon_error - prev_fusion_error)
+            if channel_mechanism_error is not None:
+                fusion_mechanism_error = channel_mechanism_error.to(dtype=resid.dtype)
+            elif self.use_channel_graph:
+                fusion_mechanism_error = torch.abs(
+                    resid - self._graph_neighbor_context(resid, A_adaptive)
+                )
+            else:
+                fusion_mechanism_error = torch.zeros_like(resid)
+            fusion_causal_error = (
+                causal_channel_error.to(dtype=resid.dtype)
+                if causal_channel_error is not None
+                else torch.zeros_like(resid)
+            )
+            fusion_gate = source_gate if source_gate is not None else torch.zeros_like(resid)
+            fusion_gate_score = (
+                source_gate_score.to(dtype=resid.dtype)
+                if source_gate_score is not None
+                else torch.zeros_like(resid)
+            )
+            fusion_root_prob = (
+                torch.sigmoid(root_score_logits)
+                if root_score_logits is not None
+                else torch.zeros_like(resid)
+            )
+            fusion_event_prob = (
+                torch.sigmoid(event_responsibility_logits)
+                if event_responsibility_logits is not None
+                else torch.zeros_like(resid)
+            )
+            evidence_features = torch.stack(
+                [
+                    torch.log1p(fusion_recon_error),
+                    torch.log1p(torch.abs(fusion_mechanism_error)),
+                    torch.log1p(torch.abs(fusion_causal_error)),
+                    fusion_gate,
+                    torch.log1p(torch.clamp_min(fusion_gate_score, 0.0)),
+                    torch.log1p(fusion_onset_delta),
+                    fusion_root_prob,
+                    fusion_event_prob,
+                ],
+                dim=-1,
+            )
+            if self.training and self.evidence_fusion_detach_inputs:
+                evidence_features = evidence_features.detach()
+            evidence_fusion_logits, evidence_fusion_weights = self.evidence_fusion_head(
+                evidence_features,
+            )
 
         aux_losses = {}
         aux_losses['sparse_loss'] = self.get_sparse_loss()
@@ -1603,10 +2105,37 @@ class SparseGCN(nn.Module):
             aux_losses['root_response_effective_response_evidence'] = (
                 root_response_effective_response_evidence
             )
+        if root_response_pairwise_relation is not None:
+            aux_losses['root_response_pairwise_relation'] = root_response_pairwise_relation
+        if root_response_pairwise_source_support is not None:
+            aux_losses['root_response_pairwise_source_support'] = (
+                root_response_pairwise_source_support
+            )
+        if root_response_pairwise_response_support is not None:
+            aux_losses['root_response_pairwise_response_support'] = (
+                root_response_pairwise_response_support
+            )
         if synthetic_logits is not None:
             aux_losses['synthetic_logits'] = synthetic_logits
         if synthetic_rca_logits is not None:
             aux_losses['synthetic_rca_logits'] = synthetic_rca_logits
+        if event_responsibility_logits is not None:
+            aux_losses['event_responsibility_logits'] = event_responsibility_logits
+            aux_losses['event_responsibility_prob'] = torch.sigmoid(event_responsibility_logits)
+        if evidence_fusion_logits is not None:
+            aux_losses['evidence_fusion_logits'] = evidence_fusion_logits
+            aux_losses['evidence_fusion_prob'] = torch.sigmoid(evidence_fusion_logits)
+            aux_losses['evidence_fusion_responsibility'] = torch.softmax(
+                evidence_fusion_logits,
+                dim=-1,
+            )
+        if evidence_fusion_weights is not None:
+            aux_losses['evidence_fusion_weights'] = evidence_fusion_weights
+        if source_interaction_logits is not None:
+            aux_losses['source_interaction_logits'] = source_interaction_logits
+            aux_losses['source_interaction_prob'] = torch.sigmoid(source_interaction_logits)
+        if source_interaction_weights is not None:
+            aux_losses['source_interaction_weights'] = source_interaction_weights.detach()
         if graph_fusion_gate is not None:
             aux_losses['graph_fusion_gate_mean'] = graph_fusion_gate.detach().mean()
             aux_losses['graph_fusion_residual_weight'] = torch.sigmoid(

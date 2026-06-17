@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate root-cause ranking reports with Hit@K, MRR, PR@K, MAP@K, and NDCG@K."""
+"""Evaluate root-cause ranking reports with ranking and temporal RCA metrics."""
 
 from __future__ import annotations
 
@@ -44,9 +44,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--k", type=int, nargs="+", default=[1, 3, 5])
     parser.add_argument(
         "--score-mode",
-        choices=["exported", "components"],
+        choices=["exported", "components", "responsibility"],
         default="exported",
-        help="Use exported ranking or recompute ranking from base/graph/mechanism/contrast component scores.",
+        help=(
+            "Use exported ranking, recompute ranking from component scores, or derive a "
+            "sparse event-level responsibility distribution."
+        ),
     )
     parser.add_argument("--component-base-weight", type=float, default=1.0)
     parser.add_argument("--component-source-score-weight", type=float, default=0.0)
@@ -62,6 +65,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--component-source-interaction-weight", type=float, default=0.0)
     parser.add_argument("--component-graph-penalty-weight", type=float, default=0.0)
     parser.add_argument("--component-normalize", action="store_true")
+    parser.add_argument(
+        "--responsibility-weights",
+        type=str,
+        default="base=0.45,source_gate=1.0,onset=0.25",
+        help=(
+            "Comma-separated component weights for --score-mode responsibility, e.g. "
+            "base=0.45,source_gate=1.0,onset=0.25."
+        ),
+    )
+    parser.add_argument(
+        "--responsibility-dist",
+        choices=["positive_l1", "softmax"],
+        default="positive_l1",
+        help="Distribution transform used by --score-mode responsibility.",
+    )
+    parser.add_argument(
+        "--responsibility-top-m",
+        type=int,
+        default=20,
+        help="Keep only the top-M evidence variables before normalizing responsibility. 0 keeps all.",
+    )
+    parser.add_argument("--responsibility-power", type=float, default=2.0)
+    parser.add_argument("--responsibility-tau", type=float, default=1.0)
     parser.add_argument(
         "--method-name",
         type=str,
@@ -83,6 +109,18 @@ def parse_args() -> argparse.Namespace:
         help="Candidate set used by random baseline. 'prediction' uses the same ranked names exported by LaGraph.",
     )
     parser.add_argument("--save-csv", type=Path, default=None)
+    parser.add_argument(
+        "--cw-rcs-score-key",
+        type=str,
+        default="score",
+        help="Ranking item score used as attribution confidence for CW-RCS@K.",
+    )
+    parser.add_argument(
+        "--temporal-hm-beta",
+        type=float,
+        default=1.0,
+        help="Beta for TemporalHM. beta>1 emphasizes early identification; beta<1 emphasizes persistence.",
+    )
     return parser.parse_args()
 
 
@@ -200,6 +238,23 @@ def ranking_names(pred_event: dict, scope: str) -> list[str]:
     return names
 
 
+def ranking_items(pred_event: dict | None, scope: str) -> list[dict]:
+    if not pred_event:
+        return []
+    key = "group_ranking" if scope == "group" else "channel_ranking"
+    items = pred_event.get(key, [])
+    if scope == "channel":
+        return list(items)
+
+    grouped: dict[str, dict] = {}
+    for item in items:
+        name = root_cause_group_name(item.get("name", ""))
+        score = float(item.get("score", 0.0))
+        if name not in grouped or score > float(grouped[name].get("score", 0.0)):
+            grouped[name] = {**item, "name": name, "score": score}
+    return sorted(grouped.values(), key=lambda item: float(item.get("score", 0.0)), reverse=True)
+
+
 def normalize_component(values: list[float]) -> list[float]:
     if not values:
         return values
@@ -283,6 +338,126 @@ def component_ranking_names(
     ]
 
 
+RESPONSIBILITY_COMPONENT_KEYS = {
+    "final": "score",
+    "pre": "pre_rerank_score",
+    "base": "base_score",
+    "source_gate": "source_gate_score",
+    "root": "root_score",
+    "event_resp": "event_responsibility_score",
+    "event_responsibility": "event_responsibility_score",
+    "onset": "onset_score",
+    "mech_resid": "mechanism_residual_score",
+    "mechanism_residual": "mechanism_residual_score",
+    "graph": "graph_score",
+    "source": "source_score",
+}
+
+
+def parse_responsibility_weights(spec: str) -> dict[str, float]:
+    weights = {}
+    for part in str(spec or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" not in part:
+            raise ValueError(f"Invalid responsibility weight {part!r}; expected name=value")
+        name, value = part.split("=", 1)
+        weights[name.strip()] = float(value)
+    if not weights:
+        weights = {"base": 0.45, "source_gate": 1.0, "onset": 0.25}
+    return weights
+
+
+def responsibility_component_values(items: list[dict]) -> dict[str, list[float]]:
+    values = {
+        name: [float(item.get(key, 0.0)) for item in items]
+        for name, key in RESPONSIBILITY_COMPONENT_KEYS.items()
+    }
+    values["graph_low"] = [-value for value in values["graph"]]
+    values["response_penalty"] = values["graph"]
+    values["source_interaction"] = [
+        values["base"][idx] * max(values["onset"][idx], values["mech_resid"][idx])
+        for idx in range(len(items))
+    ]
+    return values
+
+
+def responsibility_distribution(scores: list[float], args: argparse.Namespace) -> list[float]:
+    if not scores:
+        return []
+    keep = set(range(len(scores)))
+    top_m = int(getattr(args, "responsibility_top_m", 0) or 0)
+    if top_m > 0:
+        keep = {
+            idx
+            for idx, _ in sorted(
+                enumerate(scores),
+                key=lambda item: item[1],
+                reverse=True,
+            )[: min(top_m, len(scores))]
+        }
+    mode = str(getattr(args, "responsibility_dist", "positive_l1") or "positive_l1")
+    if mode == "softmax":
+        tau = max(float(getattr(args, "responsibility_tau", 1.0) or 1.0), 1e-6)
+        max_value = max((scores[idx] / tau for idx in keep), default=0.0)
+        weights = [
+            math.exp((scores[idx] / tau) - max_value) if idx in keep else 0.0
+            for idx in range(len(scores))
+        ]
+    else:
+        kept_min = min((scores[idx] for idx in keep), default=min(scores))
+        power = max(float(getattr(args, "responsibility_power", 1.0) or 1.0), 1e-6)
+        weights = [
+            max(scores[idx] - kept_min, 0.0) ** power if idx in keep else 0.0
+            for idx in range(len(scores))
+        ]
+    total = sum(weights)
+    if total <= 1e-12:
+        uniform = 1.0 / max(len(keep), 1)
+        return [uniform if idx in keep else 0.0 for idx in range(len(scores))]
+    return [value / total for value in weights]
+
+
+def responsibility_ranking_and_q(
+    pred_event: dict | None,
+    scope: str,
+    args: argparse.Namespace,
+) -> tuple[list[str], dict[str, float]]:
+    if not pred_event:
+        return [], {}
+    items = pred_event.get("channel_ranking", [])
+    if not items:
+        return ranking_names(pred_event, scope), {}
+    names = [item.get("name", "") for item in items]
+    components = responsibility_component_values(items)
+    normalized = {key: normalize_component(value) for key, value in components.items()}
+    scores = [0.0 for _ in items]
+    for key, weight in parse_responsibility_weights(args.responsibility_weights).items():
+        values = normalized.get(key)
+        if values is None:
+            raise KeyError(f"Unknown responsibility component {key!r}")
+        for idx, value in enumerate(values):
+            scores[idx] += weight * value
+    q_values = responsibility_distribution(scores, args)
+    order = sorted(range(len(items)), key=lambda idx: scores[idx], reverse=True)
+    if scope == "channel":
+        ranking = [names[idx] for idx in order]
+        return ranking, {names[idx]: q_values[idx] for idx in range(len(items))}
+
+    group_scores: dict[str, float] = {}
+    group_q: dict[str, float] = {}
+    for idx, name in enumerate(names):
+        group = root_cause_group_name(items[idx].get("group") or name)
+        group_scores[group] = max(group_scores.get(group, float("-inf")), scores[idx])
+        group_q[group] = group_q.get(group, 0.0) + q_values[idx]
+    ranking = [
+        group
+        for group, _ in sorted(group_scores.items(), key=lambda item: item[1], reverse=True)
+    ]
+    return ranking, group_q
+
+
 def meta_candidates(meta: dict, scope: str) -> list[str]:
     if scope == "group":
         return list(meta.get("group_scope", []))
@@ -321,6 +496,7 @@ def metric_row(ranking: list[str], roots: set[str], k_values: list[int]) -> dict
         row[f"Precision@{k}"] = hits / max(k, 1)
         row[f"PR@{k}"] = row[f"Precision@{k}"]
         row[f"Recall@{k}"] = hits / max(len(roots), 1)
+        row[f"TopKRecall@{k}"] = row[f"Recall@{k}"]
         precision_sum = 0.0
         seen_hits = 0
         dcg = 0.0
@@ -336,6 +512,147 @@ def metric_row(ranking: list[str], roots: set[str], k_values: list[int]) -> dict
     return row
 
 
+def cw_rcs_row(
+    pred_event: dict | None,
+    roots: set[str],
+    k_values: list[int],
+    scope: str,
+    score_key: str = "score",
+    expected_candidates: int | None = None,
+) -> dict:
+    items = ranking_items(pred_event, scope)
+    row = {}
+    denom = sum(abs(float(item.get(score_key, item.get("score", 0.0)))) for item in items)
+    expected = max(int(expected_candidates or len(items) or 0), 0)
+    coverage = len(items) / expected if expected > 0 else 1.0
+    truncated = 1.0 if expected > 0 and len(items) < expected else 0.0
+    weight_by_name = {
+        item.get("name", ""): abs(float(item.get(score_key, item.get("score", 0.0)))) / denom
+        for item in items
+    } if denom > 1e-12 else {}
+    ranking = [item.get("name", "") for item in items]
+    for k in k_values:
+        topk = set(ranking[:k])
+        row[f"CW-RCS@{k}"] = (
+            sum(weight_by_name.get(root, 0.0) for root in roots if root in topk)
+            / max(len(roots), 1)
+        )
+    row["CW_RCS_DenomCoverage"] = coverage
+    row["CW_RCS_Truncated"] = truncated
+    return row
+
+
+def cw_rcs_from_q(
+    ranking: list[str],
+    q_by_name: dict[str, float],
+    roots: set[str],
+    k_values: list[int],
+) -> dict:
+    row = {}
+    for k in k_values:
+        topk = set(ranking[:k])
+        row[f"CW-RCS@{k}"] = (
+            sum(q_by_name.get(root, 0.0) for root in roots if root in topk)
+            / max(len(roots), 1)
+        )
+    row["CW_RCS_DenomCoverage"] = 1.0
+    row["CW_RCS_Truncated"] = 0.0
+    return row
+
+
+def _temporal_hm(early: float, persistence: float, beta: float, eps: float = 1e-12) -> float:
+    beta2 = float(beta) ** 2
+    return ((1.0 + beta2) * early * persistence) / (beta2 * early + persistence + eps)
+
+
+def temporal_hm_row(
+    meta_event: dict,
+    pred_events: list[dict],
+    roots: set[str],
+    k_values: list[int],
+    scope: str,
+    beta: float = 1.0,
+    eval_args: argparse.Namespace | None = None,
+) -> dict:
+    start = int(meta_event.get("start", 0))
+    end = int(meta_event.get("end", start))
+    length = max(0, end - start)
+    row = {}
+    if length <= 0:
+        for k in k_values:
+            row[f"TemporalE@{k}"] = math.nan
+            row[f"TemporalA@{k}"] = math.nan
+            row[f"TemporalHM@{k}"] = math.nan
+            row[f"TemporalRecallA@{k}"] = math.nan
+            row[f"TemporalHMRecall@{k}"] = math.nan
+        return row
+
+    event_rankings = []
+    if eval_args is None:
+        eval_args = argparse.Namespace(score_mode="exported", scope=scope)
+    for event in pred_events:
+        event_rankings.append(
+            (
+                int(event.get("start", 0)),
+                int(event.get("end", 0)),
+                ranking_for_event(event, eval_args),
+            )
+        )
+
+    for k in k_values:
+        strict_hits = []
+        recall_values = []
+        first_strict = None
+        first_any = None
+        for t in range(start, end):
+            best_ranking = None
+            best_overlap = -1
+            for pred_start, pred_end, ranking in event_rankings:
+                if pred_start <= t < pred_end:
+                    event_overlap = overlap(pred_start, pred_end, start, end)
+                    if event_overlap > best_overlap:
+                        best_overlap = event_overlap
+                        best_ranking = ranking
+            if best_ranking is None:
+                strict_hit = 0.0
+                recall = 0.0
+            else:
+                topk = set(best_ranking[:k])
+                hits = sum(1 for root in roots if root in topk)
+                strict_hit = 1.0 if roots and hits == len(roots) else 0.0
+                recall = hits / max(len(roots), 1)
+            if strict_hit > 0.0 and first_strict is None:
+                first_strict = t
+            if recall > 0.0 and first_any is None:
+                first_any = t
+            strict_hits.append(strict_hit)
+            recall_values.append(recall)
+
+        strict_early = (
+            0.0
+            if first_strict is None
+            else max(0.0, 1.0 - ((first_strict - start) / length))
+        )
+        recall_early = (
+            0.0
+            if first_any is None
+            else max(0.0, 1.0 - ((first_any - start) / length))
+        )
+        strict_persistence = sum(strict_hits) / length
+        recall_persistence = sum(recall_values) / length
+        row[f"TemporalE@{k}"] = strict_early
+        row[f"TemporalA@{k}"] = strict_persistence
+        row[f"TemporalHM@{k}"] = _temporal_hm(strict_early, strict_persistence, beta)
+        row[f"TemporalRecallE@{k}"] = recall_early
+        row[f"TemporalRecallA@{k}"] = recall_persistence
+        row[f"TemporalHMRecall@{k}"] = _temporal_hm(
+            recall_early,
+            recall_persistence,
+            beta,
+        )
+    return row
+
+
 def mean_metric_row(rows: list[dict]) -> dict:
     keys = rows[0].keys()
     return {key: sum(row[key] for row in rows) / len(rows) for key in keys}
@@ -344,6 +661,9 @@ def mean_metric_row(rows: list[dict]) -> dict:
 def ranking_for_event(pred_event: dict | None, args: argparse.Namespace) -> list[str]:
     if not pred_event:
         return []
+    if args.score_mode == "responsibility":
+        ranking, _ = responsibility_ranking_and_q(pred_event, args.scope, args)
+        return ranking
     if args.score_mode == "components":
         return component_ranking_names(
             pred_event,
@@ -364,6 +684,26 @@ def ranking_for_event(pred_event: dict | None, args: argparse.Namespace) -> list
             args.component_normalize,
         )
     return ranking_names(pred_event, args.scope)
+
+
+def cw_metrics_for_event(
+    pred_event: dict | None,
+    ranking: list[str],
+    roots: set[str],
+    args: argparse.Namespace,
+    candidate_count: int,
+) -> dict:
+    if args.score_mode == "responsibility":
+        _, q_by_name = responsibility_ranking_and_q(pred_event, args.scope, args)
+        return cw_rcs_from_q(ranking, q_by_name, roots, args.k)
+    return cw_rcs_row(
+        pred_event,
+        roots,
+        args.k,
+        args.scope,
+        score_key=args.cw_rcs_score_key,
+        expected_candidates=candidate_count,
+    )
 
 
 def evaluate_ranking(
@@ -390,6 +730,25 @@ def evaluate_ranking(
     return metric_values, top1
 
 
+def expected_candidate_count(meta: dict, rca: dict, scope: str) -> int:
+    if scope == "channel":
+        names = rca.get("feature_names", [])
+        return len(names) if names else 0
+    feature_names = rca.get("feature_names", [])
+    if feature_names:
+        return len({root_cause_group_name(name) for name in feature_names})
+    groups = meta.get("group_scope", [])
+    if groups:
+        return len(groups)
+    return len(
+        {
+            group
+            for event in meta.get("events", [])
+            for group in event.get("root_groups", [])
+        }
+    )
+
+
 def main() -> None:
     args = parse_args()
     rca = load_json(args.rca)
@@ -404,6 +763,7 @@ def main() -> None:
     args._meta = meta
 
     root_key = "root_groups" if args.scope == "group" else "root_variables"
+    candidate_count = expected_candidate_count(meta, rca, args.scope)
     rows = []
     if args.event_source == "predicted":
         pred_events_by_key = rca.get("predicted_events_by_key", {})
@@ -420,6 +780,19 @@ def main() -> None:
             pred_event, best_overlap = match_pred_event(meta_event, pred_events)
             exported_ranking = ranking_for_event(pred_event, args)
             metric_values, top1 = evaluate_ranking(pred_event, roots, exported_ranking, args)
+            if args.baseline == "none":
+                metric_values.update(cw_metrics_for_event(pred_event, exported_ranking, roots, args, candidate_count))
+                metric_values.update(
+                    temporal_hm_row(
+                        meta_event,
+                        pred_events,
+                        roots,
+                        args.k,
+                        args.scope,
+                        beta=args.temporal_hm_beta,
+                        eval_args=args,
+                    )
+                )
             delay = math.nan
             if pred_event and best_overlap > 0:
                 delay = max(0, int(pred_event.get("start", 0)) - int(meta_event.get("start", 0)))
@@ -454,6 +827,8 @@ def main() -> None:
                 continue
             exported_ranking = ranking_for_event(pred_event, args)
             metric_values, top1 = evaluate_ranking(pred_event, roots, exported_ranking, args)
+            if args.baseline == "none":
+                metric_values.update(cw_metrics_for_event(pred_event, exported_ranking, roots, args, candidate_count))
             row = {
                 "series_name": rca.get("series_name"),
                 "event_source": "true",
@@ -476,8 +851,11 @@ def main() -> None:
         for c in df.columns
         if c.startswith(("Hit@", "Precision@", "Recall@", "NDCG@", "RCA_Delay@"))
         or c.startswith(("PR@", "MAP@"))
+        or c.startswith(("TopKRecall@", "CW-RCS@", "Temporal"))
         or c in {
             "MRR",
+            "CW_RCS_DenomCoverage",
+            "CW_RCS_Truncated",
             "matched",
             "matched_coverage_10",
             "matched_iou_10",
