@@ -259,6 +259,7 @@ def main():
             "source-propagation-strict-cross-mechanism-rca",
             "source-propagation-residual-sps-rca",
             "source-propagation-bounded-sps-fusion-rca",
+            "source-propagation-bounded-sps-control-rca",
             "source-bottleneck-dual-expert-representation-fusion-rca",
             "source-bottleneck-source-expert-representation-rca",
             "source-bottleneck-stable-graph-evidence-learned-responsibility-rerank-rca",
@@ -3522,6 +3523,14 @@ def main():
         sps_separation_margin=0.10,
         debug_loss_breakdown=True,
         debug_loss_max_batches=1,
+    )
+    arch_profiles["source-propagation-bounded-sps-control-rca"] = dict(
+        arch_profiles["source-propagation-bounded-sps-fusion-rca"],
+        # Matched control: retain the established source-propagation path and
+        # training protocol, but remove the residual SPS treatment.
+        use_bounded_sps_fusion=False,
+        use_sps_residual_synthetic=False,
+        lambda_residual_sps=0.0,
     )
     arch_profiles["source-bottleneck-dual-expert-representation-fusion-rca"] = dict(
         arch_profiles["source-bottleneck-stable-graph-evidence-event-route-response-root-rerank-rca"],
