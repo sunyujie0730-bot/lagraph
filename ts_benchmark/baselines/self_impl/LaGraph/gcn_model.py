@@ -309,6 +309,142 @@ class LaggedCausalMechanism(nn.Module):
         return self._sparse_parent_weights().abs().mean()
 
 
+class StrictCrossLagMechanism(nn.Module):
+    """Separate self dynamics from delayed cross-channel explanations.
+
+    ``self_pred`` only reads a target channel's own history.  ``full_pred``
+    adds a sparse, strictly off-diagonal transfer term that reads other
+    channels at positive lags.  This separation makes the prediction gain a
+    meaningful response signal instead of another reconstruction residual.
+    """
+
+    def __init__(
+        self,
+        channel,
+        lags=(1, 3, 6, 12),
+        topk=5,
+        dropout=0.0,
+        use_static_prior=False,
+    ):
+        super().__init__()
+        self.channel = int(channel)
+        self.lags = tuple(int(lag) for lag in lags if int(lag) > 0) or (1,)
+        self.max_lag = max(self.lags)
+        self.topk = min(max(1, int(topk)), max(1, self.channel - 1))
+        self.use_static_prior = bool(use_static_prior)
+
+        n_lags = len(self.lags)
+        self.self_lag_logits = nn.Parameter(torch.zeros(self.channel, n_lags))
+        self.cross_edge_logits = nn.Parameter(
+            torch.randn(n_lags, self.channel, self.channel) * 0.01
+        )
+        # Signed transfer allows an upstream deviation to suppress or amplify
+        # a target channel while attention still selects only a few parents.
+        self.cross_transfer_raw = nn.Parameter(
+            torch.randn(n_lags, self.channel, self.channel) * 0.02
+        )
+        self.parent_activation_gain = nn.Parameter(torch.zeros(n_lags, self.channel))
+        self.parent_activation_bias = nn.Parameter(torch.zeros(n_lags, self.channel))
+        self.prior_strength_raw = nn.Parameter(torch.tensor(-4.0))
+        self.dropout = nn.Dropout(float(dropout))
+        self.register_buffer("static_prior", torch.empty(0), persistent=True)
+
+    def set_static_prior(self, prior):
+        prior = torch.as_tensor(prior, dtype=self.cross_edge_logits.dtype)
+        if prior.shape != (self.channel, self.channel):
+            raise ValueError(
+                "strict cross prior size mismatch: "
+                f"expected {(self.channel, self.channel)}, got {tuple(prior.shape)}"
+            )
+        prior = prior.clamp_min(0.0)
+        prior.fill_diagonal_(0.0)
+        self.static_prior = prior.detach().clone()
+
+    def _cross_attention(self):
+        logits = self.cross_edge_logits
+        if self.use_static_prior and self.static_prior.numel() > 0:
+            prior = self.static_prior.to(device=logits.device, dtype=logits.dtype)
+            prior_bias = torch.log(prior.clamp_min(1e-6)).unsqueeze(0)
+            logits = logits + torch.sigmoid(self.prior_strength_raw) * prior_bias
+
+        eye = torch.eye(self.channel, device=logits.device, dtype=torch.bool).unsqueeze(0)
+        logits = logits.masked_fill(eye, torch.finfo(logits.dtype).min)
+        attention = F.softmax(logits, dim=1)
+        if self.topk < self.channel - 1:
+            topk_idx = torch.topk(attention, k=self.topk, dim=1).indices
+            mask = torch.zeros_like(attention).scatter_(1, topk_idx, 1.0)
+            attention = attention * mask
+            attention = attention / attention.sum(dim=1, keepdim=True).clamp_min(1e-8)
+        return attention
+
+    def forward(self, x):
+        B, L, C = x.shape
+        if C != self.channel:
+            raise ValueError(f"strict cross mechanism expected {self.channel} channels, got {C}")
+
+        attention = self._cross_attention()
+        edge_weight = attention * torch.tanh(self.cross_transfer_raw)
+        if L <= self.max_lag:
+            return x, x, attention, edge_weight
+
+        current = x[:, self.max_lag:, :]
+        self_pred = current.new_zeros(current.shape)
+        cross_pred = current.new_zeros(current.shape)
+        self_lag_weights = F.softmax(self.self_lag_logits, dim=-1)
+
+        for lag_idx, lag in enumerate(self.lags):
+            start = self.max_lag - lag
+            past = x[:, start:L - lag, :]
+            self_pred = self_pred + past * self_lag_weights[:, lag_idx].view(1, 1, C)
+
+            # The activation is channel-local and only reads the parent's past.
+            activation = 1.0 + 0.5 * torch.tanh(
+                past.abs() * self.parent_activation_gain[lag_idx].view(1, 1, C)
+                + self.parent_activation_bias[lag_idx].view(1, 1, C)
+            )
+            cross_pred = cross_pred + torch.einsum(
+                "btc,co->bto",
+                past * activation,
+                edge_weight[lag_idx],
+            )
+
+        full_valid = self_pred + self.dropout(cross_pred)
+        full_pred = x.new_zeros(B, L, C)
+        full_pred[:, :self.max_lag, :] = x[:, :self.max_lag, :]
+        full_pred[:, self.max_lag:, :] = full_valid
+        self_pred_full = x.new_zeros(B, L, C)
+        self_pred_full[:, :self.max_lag, :] = x[:, :self.max_lag, :]
+        self_pred_full[:, self.max_lag:, :] = self_pred
+        return full_pred, self_pred_full, attention, edge_weight
+
+    def get_sparsity_loss(self):
+        attention = self._cross_attention().clamp_min(1e-8)
+        entropy = -(attention * attention.log()).sum(dim=1).mean()
+        transfer = torch.tanh(self.cross_transfer_raw).abs().mean()
+        return entropy + transfer
+
+
+class SPSRoleHead(nn.Module):
+    """Joint source-responsibility and response-role predictor for SPS."""
+
+    def __init__(self, feature_dim=4, hidden=16, dropout=0.1):
+        super().__init__()
+        hidden = max(8, min(int(hidden), 64))
+        self.trunk = nn.Sequential(
+            nn.Linear(feature_dim, hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+        )
+        self.source = nn.Linear(hidden, 1)
+        self.response = nn.Linear(hidden, 1)
+        nn.init.constant_(self.source.bias, -2.0)
+        nn.init.constant_(self.response.bias, -2.0)
+
+    def forward(self, features):
+        hidden = self.trunk(features)
+        return self.source(hidden).squeeze(-1), self.response(hidden).squeeze(-1)
+
+
 class StateAwareGraphFusion(nn.Module):
     """
     Operating-state-conditioned dual-graph fusion.
@@ -897,10 +1033,18 @@ class SparseGCN(nn.Module):
                  use_causal_score=False,
                  causal_score_weight=0.1,
                  causal_score_eps=1e-6,
-                 causal_score_mode="residual",
-                 causal_score_tail="upper",
-                 use_causal_response_evidence=False,
-                 use_temporal_graph_regularization=False,
+                  causal_score_mode="residual",
+                  causal_score_tail="upper",
+                  use_causal_response_evidence=False,
+                  use_strict_cross_mechanism=False,
+                  strict_cross_lags=(1, 3, 6, 12),
+                  strict_cross_topk=5,
+                  strict_cross_detach_backbone=True,
+                  strict_cross_use_channel_prior=False,
+                  use_sps_role_head=False,
+                  sps_role_hidden=16,
+                  sps_role_detach_features=False,
+                  use_temporal_graph_regularization=False,
                  use_score_channel_normalization=False,
                  score_channel_norm_mode="robust_z",
                  score_channel_norm_eps=1e-6,
@@ -1069,6 +1213,18 @@ class SparseGCN(nn.Module):
         self.causal_score_mode = causal_score_mode
         self.causal_score_tail = causal_score_tail
         self.use_causal_response_evidence = bool(use_causal_response_evidence)
+        self.use_strict_cross_mechanism = bool(use_strict_cross_mechanism)
+        if isinstance(strict_cross_lags, str):
+            strict_cross_lags = [
+                int(value.strip()) for value in strict_cross_lags.split(",") if value.strip()
+            ]
+        self.strict_cross_lags = tuple(int(lag) for lag in strict_cross_lags)
+        self.strict_cross_topk = int(strict_cross_topk)
+        self.strict_cross_detach_backbone = bool(strict_cross_detach_backbone)
+        self.strict_cross_use_channel_prior = bool(strict_cross_use_channel_prior)
+        self.use_sps_role_head = bool(use_sps_role_head)
+        self.sps_role_hidden = int(sps_role_hidden)
+        self.sps_role_detach_features = bool(sps_role_detach_features)
         self.use_temporal_graph_regularization = use_temporal_graph_regularization
         self.use_score_channel_normalization = use_score_channel_normalization
         self.score_channel_norm_mode = score_channel_norm_mode
@@ -1508,6 +1664,17 @@ class SparseGCN(nn.Module):
         else:
             self.lagged_causal_graph = None
 
+        if self.use_strict_cross_mechanism:
+            self.strict_cross_mechanism = StrictCrossLagMechanism(
+                channel=c_out,
+                lags=self.strict_cross_lags,
+                topk=self.strict_cross_topk,
+                dropout=dropout,
+                use_static_prior=self.strict_cross_use_channel_prior,
+            )
+        else:
+            self.strict_cross_mechanism = None
+
         if use_state_aware_fusion:
             self.state_aware_fusion = StateAwareGraphFusion(
                 channel=c_out,
@@ -1550,6 +1717,15 @@ class SparseGCN(nn.Module):
             )
         else:
             self.event_responsibility_head = None
+
+        if self.use_sps_role_head:
+            self.sps_role_head = SPSRoleHead(
+                feature_dim=4,
+                hidden=self.sps_role_hidden,
+                dropout=dropout,
+            )
+        else:
+            self.sps_role_head = None
 
         if self.use_event_route_head:
             self.event_route_head = EventRouteHead(
@@ -1618,6 +1794,7 @@ class SparseGCN(nn.Module):
             self.graph_fusion_residual_logit.requires_grad = self.use_parallel_graph_fusion
         self._set_trainable(self.state_aware_fusion, self.use_state_aware_fusion)
         self._set_trainable(self.lagged_causal_graph, self.use_lagged_causal_graph)
+        self._set_trainable(self.strict_cross_mechanism, self.use_strict_cross_mechanism)
         self._set_trainable(self.synthetic_anomaly_head, self.use_synthetic_anomaly_head)
         self._set_trainable(self.synthetic_rca_head, self.use_synthetic_rca_head)
         self._set_trainable(self.vq_bottleneck, self.use_vq_bypass)
@@ -1641,6 +1818,7 @@ class SparseGCN(nn.Module):
             self.event_responsibility_head,
             self.use_event_responsibility_head,
         )
+        self._set_trainable(self.sps_role_head, self.use_sps_role_head)
         self._set_trainable(self.event_route_head, self.use_event_route_head)
         self._set_trainable(
             self.response_suppressor_head,
@@ -1719,6 +1897,11 @@ class SparseGCN(nn.Module):
         if not self.use_channel_graph or not hasattr(self.channel_graph, "set_static_prior"):
             return
         self.channel_graph.set_static_prior(prior)
+
+    def set_strict_cross_static_prior(self, prior):
+        if self.strict_cross_mechanism is None:
+            return
+        self.strict_cross_mechanism.set_static_prior(prior)
 
     def set_score_channel_stats(self, center, scale):
         center = torch.as_tensor(center, dtype=self.score_channel_center.dtype)
@@ -2028,6 +2211,16 @@ class SparseGCN(nn.Module):
         causal_pred = None
         causal_channel_error = None
         causal_response_support = None
+        strict_cross_pred = None
+        strict_cross_self_pred = None
+        strict_cross_attention = None
+        strict_cross_edge_weight = None
+        strict_cross_full_error = None
+        strict_cross_self_error = None
+        strict_cross_response_gain = None
+        strict_cross_mechanism_loss = None
+        sps_root_logits = None
+        sps_response_logits = None
         channel_mechanism_score = None
         channel_mechanism_loss = None
         channel_mechanism_error = None
@@ -2103,6 +2296,34 @@ class SparseGCN(nn.Module):
                 causal_mechanism_loss = F.smooth_l1_loss(
                     causal_pred[:, valid_start:, :],
                     causal_input[:, valid_start:, :],
+                )
+
+        if self.use_strict_cross_mechanism and self.strict_cross_mechanism is not None:
+            strict_input = resid.detach() if self.strict_cross_detach_backbone else resid
+            (
+                strict_cross_pred,
+                strict_cross_self_pred,
+                strict_cross_attention,
+                strict_cross_edge_weight,
+            ) = self.strict_cross_mechanism(strict_input)
+            strict_start = self.strict_cross_mechanism.max_lag
+            strict_cross_full_error = F.smooth_l1_loss(
+                strict_cross_pred,
+                strict_input,
+                reduction="none",
+            )
+            strict_cross_self_error = F.smooth_l1_loss(
+                strict_cross_self_pred,
+                strict_input,
+                reduction="none",
+            )
+            strict_cross_response_gain = (
+                strict_cross_self_error - strict_cross_full_error
+            ).clamp_min(0.0)
+            if L > strict_start:
+                strict_cross_mechanism_loss = F.smooth_l1_loss(
+                    strict_cross_pred[:, strict_start:, :],
+                    strict_input[:, strict_start:, :],
                 )
 
         # 步骤 2: 自适应通道依赖图
@@ -2619,6 +2840,42 @@ class SparseGCN(nn.Module):
                 source_consistency_support,
             ) = self.source_consistency_head(consistency_features)
 
+        if (
+            self.use_sps_role_head
+            and self.sps_role_head is not None
+            and strict_cross_self_error is not None
+            and strict_cross_response_gain is not None
+        ):
+            if strict_cross_self_error.shape[1] > 1:
+                previous_innovation = torch.cat(
+                    [
+                        torch.zeros_like(strict_cross_self_error[:, :1, :]),
+                        strict_cross_self_error[:, :-1, :],
+                    ],
+                    dim=1,
+                )
+            else:
+                previous_innovation = torch.zeros_like(strict_cross_self_error)
+            strict_cross_onset = torch.relu(
+                strict_cross_self_error - previous_innovation
+            )
+            sps_features = torch.stack(
+                [
+                    torch.log1p(strict_cross_self_error),
+                    torch.log1p(strict_cross_response_gain),
+                    torch.log1p(strict_cross_onset),
+                    torch.log1p(resid.abs()),
+                ],
+                dim=-1,
+            )
+            if self.training and self.sps_role_detach_features:
+                sps_features = sps_features.detach()
+            sps_root_logits, sps_response_logits = self.sps_role_head(sps_features)
+            # Existing export code consumes event responsibility logits.  The
+            # value now comes from the jointly trained SPS role head instead
+            # of a post-hoc source-gate score.
+            event_responsibility_logits = sps_root_logits
+
         if self.use_event_responsibility_head:
             responsibility_mechanism_error = self._source_branch_mechanism_error(
                 resid, A_adaptive, channel_mechanism_error
@@ -3102,6 +3359,25 @@ class SparseGCN(nn.Module):
         if causal_mechanism_loss is not None:
             aux_losses['causal_mechanism_loss'] = causal_mechanism_loss
             aux_losses['causal_sparse_loss'] = self.lagged_causal_graph.get_sparsity_loss()
+        if strict_cross_full_error is not None:
+            aux_losses['strict_cross_full_error'] = strict_cross_full_error
+        if strict_cross_self_error is not None:
+            aux_losses['strict_cross_self_error'] = strict_cross_self_error
+        if strict_cross_response_gain is not None:
+            aux_losses['strict_cross_response_gain'] = strict_cross_response_gain
+        if strict_cross_mechanism_loss is not None:
+            aux_losses['strict_cross_mechanism_loss'] = strict_cross_mechanism_loss
+            aux_losses['strict_cross_sparse_loss'] = (
+                self.strict_cross_mechanism.get_sparsity_loss()
+            )
+        if strict_cross_attention is not None:
+            aux_losses['strict_cross_attention'] = strict_cross_attention
+        if strict_cross_edge_weight is not None:
+            aux_losses['strict_cross_edge_weight'] = strict_cross_edge_weight
+        if self.strict_cross_mechanism is not None:
+            aux_losses['strict_cross_prior_strength'] = torch.sigmoid(
+                self.strict_cross_mechanism.prior_strength_raw
+            )
         if channel_mechanism_score is not None:
             aux_losses['channel_mechanism_score'] = channel_mechanism_score
         if channel_mechanism_error is not None:
@@ -3184,6 +3460,10 @@ class SparseGCN(nn.Module):
         if event_responsibility_logits is not None:
             aux_losses['event_responsibility_logits'] = event_responsibility_logits
             aux_losses['event_responsibility_prob'] = torch.sigmoid(event_responsibility_logits)
+        if sps_root_logits is not None:
+            aux_losses['sps_root_logits'] = sps_root_logits
+        if sps_response_logits is not None:
+            aux_losses['sps_response_logits'] = sps_response_logits
         if event_route_logits is not None:
             aux_losses['event_route_logits'] = event_route_logits
             aux_losses['event_route_alpha'] = event_route_alpha

@@ -284,6 +284,28 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "use_causal_response_evidence": False,
     "lambda_causal_response": 0.0,
     "causal_response_margin": 0.10,
+    "use_strict_cross_mechanism": False,
+    "strict_cross_lags": [1, 3, 6, 12],
+    "strict_cross_topk": 5,
+    "strict_cross_detach_backbone": True,
+    "strict_cross_use_channel_prior": False,
+    "use_sps_role_head": False,
+    "sps_role_hidden": 16,
+    "sps_role_detach_features": False,
+    "lambda_strict_cross_mechanism": 0.0,
+    "lambda_strict_cross_sparse": 0.0,
+    "lambda_sps_source": 0.0,
+    "lambda_sps_response": 0.0,
+    "lambda_sps_separation": 0.0,
+    "sps_separation_margin": 0.10,
+    "use_sps_teacher": False,
+    "sps_teacher_lags": [1, 3, 6, 12],
+    "sps_teacher_topk": 3,
+    "sps_teacher_ridge": 0.10,
+    "sps_teacher_max_samples": 30000,
+    "sps_teacher_max_gain": 0.65,
+    "sps_teacher_response_ratio": 0.15,
+    "sps_teacher_clip": 8.0,
     "use_temporal_graph_regularization": False,
     "lambda_temporal_graph_smooth": 0.0,
     "lambda_temporal_graph_locality": 0.0,
@@ -1252,6 +1274,7 @@ class LaGraph:
         self._last_synthetic_rca_channel_scores = None
         self._last_channel_names = None
         self._channel_corr_prior = None
+        self._sps_teacher = None
 
         # ★ P0-2: POT 阈值估计器
         self._pot_estimator = POTThresholdEstimator(
@@ -2380,6 +2403,200 @@ class LaGraph:
                 ).clip(min=1e-8)
         return corr.astype(np.float32)
 
+    def _fit_sps_teacher(self, train_df: pd.DataFrame):
+        """Fit a frozen sparse lagged teacher on normal training data only."""
+        self._sps_teacher = None
+        if not bool(getattr(self.config, "use_sps_teacher", False)):
+            return
+        if train_df is None or len(train_df) < 4:
+            return
+
+        values = np.asarray(train_df.values, dtype=np.float64)
+        values = np.nan_to_num(values, nan=0.0, posinf=0.0, neginf=0.0)
+        n_steps, n_channels = values.shape
+        lags = tuple(
+            sorted(
+                {
+                    int(lag)
+                    for lag in getattr(self.config, "sps_teacher_lags", [1, 3, 6, 12])
+                    if int(lag) > 0
+                }
+            )
+        ) or (1,)
+        max_lag = max(lags)
+        if n_steps <= max_lag + 4:
+            print("  [SPS] skipped frozen propagation teacher: insufficient normal samples")
+            return
+
+        max_samples = max(100, int(getattr(self.config, "sps_teacher_max_samples", 30000)))
+        indices = np.arange(max_lag, n_steps)
+        if indices.size > max_samples:
+            stride = int(np.ceil(indices.size / max_samples))
+            indices = indices[::stride]
+
+        design_dim = n_channels * len(lags)
+        xtx = np.zeros((design_dim, design_dim), dtype=np.float64)
+        xty = np.zeros((design_dim, n_channels), dtype=np.float64)
+        chunk_size = 2048
+        for start in range(0, indices.size, chunk_size):
+            idx = indices[start:start + chunk_size]
+            design = np.concatenate([values[idx - lag] for lag in lags], axis=1)
+            target = values[idx]
+            xtx += design.T @ design
+            xty += design.T @ target
+
+        ridge = max(float(getattr(self.config, "sps_teacher_ridge", 0.10)), 1e-8)
+        try:
+            coef = np.linalg.solve(xtx + ridge * np.eye(design_dim), xty)
+        except np.linalg.LinAlgError:
+            coef = np.linalg.pinv(xtx + ridge * np.eye(design_dim)) @ xty
+        weights = coef.reshape(len(lags), n_channels, n_channels)
+        for lag_idx in range(len(lags)):
+            np.fill_diagonal(weights[lag_idx], 0.0)
+
+        topk = min(
+            max(1, int(getattr(self.config, "sps_teacher_topk", 3))),
+            max(1, n_channels - 1),
+        )
+        aggregate = np.abs(weights).sum(axis=0)
+        keep = np.zeros_like(aggregate, dtype=bool)
+        top_idx = np.argpartition(-aggregate, kth=topk - 1, axis=0)[:topk, :]
+        keep[top_idx, np.arange(n_channels)[None, :]] = True
+        weights *= keep[None, :, :]
+
+        max_gain = max(float(getattr(self.config, "sps_teacher_max_gain", 0.65)), 1e-6)
+        outgoing_gain = np.abs(weights).sum(axis=(0, 2))
+        scale = np.minimum(1.0, max_gain / np.maximum(outgoing_gain, 1e-8))
+        weights *= scale[None, :, None]
+
+        edge_sets = []
+        for lag_idx, lag in enumerate(lags):
+            source_idx, target_idx = np.nonzero(np.abs(weights[lag_idx]) > 1e-10)
+            edge_sets.append(
+                {
+                    "lag": int(lag),
+                    "source": source_idx.astype(np.int64),
+                    "target": target_idx.astype(np.int64),
+                    "weight": weights[lag_idx, source_idx, target_idx].astype(np.float32),
+                }
+            )
+        edge_count = sum(item["weight"].size for item in edge_sets)
+        self._sps_teacher = {"lags": lags, "edges": edge_sets}
+        print(
+            f"  [SPS] frozen sparse lag teacher fitted "
+            f"(samples={indices.size}, lags={list(lags)}, edges={edge_count})"
+        )
+
+
+    def _make_teacher_source_effect_synthetic_batch(self, input_data: torch.Tensor):
+        """Generate labelled source-response events from the frozen SPS teacher."""
+        teacher = self._sps_teacher
+        if teacher is None:
+            return self._make_source_effect_synthetic_batch(input_data)
+
+        B, L, C = input_data.shape
+        device = input_data.device
+        dtype = input_data.dtype
+        source_delta = torch.zeros_like(input_data)
+        source_channel_mask = torch.zeros(B, C, device=device, dtype=dtype)
+        source_onset_mask = torch.zeros(B, L, device=device, dtype=dtype)
+
+        min_len = min(max(2, int(getattr(self.config, "source_effect_min_len", 8))), L)
+        max_len = min(
+            max(min_len, int(getattr(self.config, "source_effect_max_len", 30))),
+            L,
+        )
+        min_roots = min(max(1, int(getattr(self.config, "source_effect_min_roots", 1))), C)
+        max_roots = min(
+            max(min_roots, int(getattr(self.config, "source_effect_max_roots", 2))), C
+        )
+
+        for batch_idx in range(B):
+            n_roots = int(
+                torch.randint(min_roots, max_roots + 1, (1,), device=device).item()
+            )
+            roots = torch.randperm(C, device=device)[:n_roots]
+            seg_len = int(
+                torch.randint(min_len, max_len + 1, (1,), device=device).item()
+            )
+            start = int(torch.randint(0, max(1, L - seg_len + 1), (1,), device=device).item())
+            end = min(L, start + seg_len)
+            scale = input_data[batch_idx, :, roots].std(dim=0).clamp_min(0.2)
+            sign = torch.where(
+                torch.rand(n_roots, device=device) < 0.5,
+                -torch.ones(n_roots, device=device, dtype=dtype),
+                torch.ones(n_roots, device=device, dtype=dtype),
+            )
+            amplitude = sign * scale * torch.empty(
+                n_roots, device=device, dtype=dtype
+            ).uniform_(1.5, 3.5)
+            shape = int(torch.randint(0, 3, (1,), device=device).item())
+            if shape == 0:
+                source_delta[batch_idx, start:end, roots] = amplitude
+            elif shape == 1:
+                ramp = torch.linspace(0.0, 1.0, end - start, device=device, dtype=dtype)
+                source_delta[batch_idx, start:end, roots] = ramp.unsqueeze(-1) * amplitude
+            else:
+                pulse_count = max(1, min(end - start, seg_len // 4))
+                pulse_idx = torch.randperm(end - start, device=device)[:pulse_count] + start
+                source_delta[batch_idx, pulse_idx[:, None], roots] = amplitude
+            source_channel_mask[batch_idx, roots] = 1.0
+            onset_end = min(end, start + max(1, (end - start) // 3))
+            source_onset_mask[batch_idx, start:onset_end] = 1.0
+
+        total_delta = source_delta.clone()
+        for time_idx in range(L):
+            propagated_at_t = torch.zeros(B, C, device=device, dtype=dtype)
+            for edge_set in teacher["edges"]:
+                lag = edge_set["lag"]
+                if time_idx < lag or edge_set["weight"].size == 0:
+                    continue
+                source_idx = torch.as_tensor(edge_set["source"], device=device, dtype=torch.long)
+                target_idx = torch.as_tensor(edge_set["target"], device=device, dtype=torch.long)
+                weight = torch.as_tensor(edge_set["weight"], device=device, dtype=dtype)
+                messages = total_delta[:, time_idx - lag, :].index_select(1, source_idx)
+                messages = messages * weight.unsqueeze(0)
+                propagated_at_t.scatter_add_(
+                    1,
+                    target_idx.unsqueeze(0).expand(B, -1),
+                    messages,
+                )
+            total_delta[:, time_idx, :] = total_delta[:, time_idx, :] + propagated_at_t
+
+        clip = max(float(getattr(self.config, "sps_teacher_clip", 8.0)), 1.0)
+        total_delta = total_delta.clamp(-clip, clip)
+        propagated_delta = total_delta - source_delta
+        root_amplitude = source_delta.abs().amax(dim=(1, 2)).clamp_min(0.2)
+        response_ratio = max(
+            float(getattr(self.config, "sps_teacher_response_ratio", 0.15)), 1e-4
+        )
+        response_threshold = root_amplitude * response_ratio
+        propagated_peak = propagated_delta.abs().amax(dim=1)
+        effect_channel_mask = (
+            propagated_peak > response_threshold.unsqueeze(-1)
+        ).to(dtype=dtype) * (1.0 - source_channel_mask)
+        effect_energy = (
+            propagated_delta.abs() * effect_channel_mask.unsqueeze(1)
+        ).sum(dim=-1)
+        effect_time_mask = (
+            effect_energy > response_threshold.unsqueeze(-1)
+        ).to(dtype=dtype)
+        event_mask = torch.maximum(
+            (source_delta.abs().sum(dim=-1) > 0).to(dtype=dtype),
+            effect_time_mask,
+        )
+        propagated_event_mask = (effect_channel_mask.sum(dim=-1) > 0).to(dtype=dtype)
+
+        return (
+            input_data.detach() + total_delta,
+            event_mask,
+            source_channel_mask,
+            effect_channel_mask,
+            source_onset_mask,
+            effect_time_mask,
+            propagated_event_mask,
+        )
+
 
     def _add_temporal_graph_regularization(self, loss, aux_losses):
         if not aux_losses:
@@ -2402,6 +2619,12 @@ class LaGraph:
             loss = loss + lambda_causal * aux_losses['causal_mechanism_loss']
         if lambda_causal_sparse > 0 and 'causal_sparse_loss' in aux_losses:
             loss = loss + lambda_causal_sparse * aux_losses['causal_sparse_loss']
+        lambda_strict_cross = getattr(self.config, "lambda_strict_cross_mechanism", 0.0)
+        lambda_strict_cross_sparse = getattr(self.config, "lambda_strict_cross_sparse", 0.0)
+        if lambda_strict_cross > 0 and 'strict_cross_mechanism_loss' in aux_losses:
+            loss = loss + lambda_strict_cross * aux_losses['strict_cross_mechanism_loss']
+        if lambda_strict_cross_sparse > 0 and 'strict_cross_sparse_loss' in aux_losses:
+            loss = loss + lambda_strict_cross_sparse * aux_losses['strict_cross_sparse_loss']
         lambda_source_gate_sparse = getattr(self.config, "lambda_source_gate_sparse", 0.0)
         if lambda_source_gate_sparse > 0 and 'source_gate_sparse_loss' in aux_losses:
             loss = loss + lambda_source_gate_sparse * aux_losses['source_gate_sparse_loss']
@@ -3223,6 +3446,11 @@ class LaGraph:
         if lambda_source_effect <= 0:
             return input_data.new_tensor(0.0)
 
+        make_sps_batch = (
+            self._make_teacher_source_effect_synthetic_batch
+            if bool(getattr(self.config, "use_sps_teacher", False))
+            else self._make_source_effect_synthetic_batch
+        )
         (
             synth_data,
             event_mask,
@@ -3231,7 +3459,7 @@ class LaGraph:
             source_onset_mask,
             effect_time_mask,
             propagated_event_mask,
-        ) = self._make_source_effect_synthetic_batch(input_data)
+        ) = make_sps_batch(input_data)
         synth_rec, _, _, _, _, synth_aux, _ = self.model(
             synth_data,
             return_root_score=(
@@ -3270,6 +3498,9 @@ class LaGraph:
         source_consistency_logits = synth_aux.get("source_consistency_logits")
         causal_innovation = synth_aux.get("causal_channel_error")
         causal_response_support = synth_aux.get("causal_response_support")
+        strict_cross_gain = synth_aux.get("strict_cross_response_gain")
+        sps_root_logits = synth_aux.get("sps_root_logits")
+        sps_response_logits = synth_aux.get("sps_response_logits")
         gate_channel_scores = None
         if gate_prob is not None:
             gate_channel_scores = (gate_prob * event_mask.unsqueeze(-1)).sum(dim=1) / mask_sum
@@ -3341,6 +3572,75 @@ class LaGraph:
         )
 
         total = input_data.new_tensor(0.0)
+        sps_source_weight = float(
+            getattr(self.config, "lambda_sps_source", 0.0) or 0.0
+        )
+        sps_response_weight = float(
+            getattr(self.config, "lambda_sps_response", 0.0) or 0.0
+        )
+        sps_separation_weight = float(
+            getattr(self.config, "lambda_sps_separation", 0.0) or 0.0
+        )
+        if sps_root_logits is not None and sps_source_weight > 0:
+            event_root_logits = (
+                sps_root_logits
+                * source_onset_mask.unsqueeze(-1).to(dtype=sps_root_logits.dtype)
+            ).sum(dim=1) / onset_sum.to(dtype=sps_root_logits.dtype)
+            source_target = source_mask.to(dtype=sps_root_logits.dtype)
+            source_target = source_target / source_target.sum(dim=-1, keepdim=True).clamp_min(1.0)
+            source_loss = -(
+                source_target * F.log_softmax(event_root_logits, dim=-1)
+            ).sum(dim=-1).mean()
+            source_rank = self._synthetic_rca_ranking_loss(
+                event_root_logits,
+                source_mask,
+            )
+            source_total = source_loss + source_rank
+            total = total + sps_source_weight * source_total
+            self._record_loss_debug("sps_source_ce", source_loss)
+            self._record_loss_debug("sps_source_rank", source_rank)
+            self._record_loss_debug(
+                "sps_source_weighted", sps_source_weight * source_total
+            )
+
+        if sps_response_logits is not None and sps_response_weight > 0:
+            event_response_logits = (
+                sps_response_logits
+                * effect_time_mask.unsqueeze(-1).to(dtype=sps_response_logits.dtype)
+            ).sum(dim=1) / effect_time_sum.to(dtype=sps_response_logits.dtype)
+            response_loss = self._weighted_channel_bce(
+                torch.sigmoid(event_response_logits),
+                effect_mask,
+            )
+            total = total + sps_response_weight * response_loss
+            self._record_loss_debug("sps_response_bce", response_loss)
+            self._record_loss_debug(
+                "sps_response_weighted", sps_response_weight * response_loss
+            )
+
+        if strict_cross_gain is not None and sps_separation_weight > 0:
+            effect_gain = (
+                strict_cross_gain
+                * effect_time_mask.unsqueeze(-1).to(dtype=strict_cross_gain.dtype)
+            ).sum(dim=1) / effect_time_sum.to(dtype=strict_cross_gain.dtype)
+            source_gain = (
+                strict_cross_gain
+                * source_onset_mask.unsqueeze(-1).to(dtype=strict_cross_gain.dtype)
+            ).sum(dim=1) / onset_sum.to(dtype=strict_cross_gain.dtype)
+            separation_loss = self._effect_over_source_margin_loss(
+                effect_gain,
+                source_gain,
+                source_mask,
+                effect_mask,
+                getattr(self.config, "sps_separation_margin", 0.10),
+            )
+            total = total + sps_separation_weight * separation_loss
+            self._record_loss_debug("sps_gain_separation", separation_loss)
+            self._record_loss_debug(
+                "sps_gain_separation_weighted",
+                sps_separation_weight * separation_loss,
+            )
+
         causal_response_weight = float(
             getattr(self.config, "lambda_causal_response", 0.0) or 0.0
         )
@@ -4916,6 +5216,7 @@ class LaGraph:
 
         train_scaled = self._transform_input_frame(train_data_value)
         valid_scaled = self._transform_input_frame(valid_data)
+        self._fit_sps_teacher(train_scaled)
 
         if self.multi_gpu_requested:
             print(
@@ -5086,6 +5387,24 @@ class LaGraph:
             causal_score_tail=getattr(self.config, "causal_score_tail", "upper"),
             use_causal_response_evidence=getattr(
                 self.config, "use_causal_response_evidence", False
+            ),
+            use_strict_cross_mechanism=getattr(
+                self.config, "use_strict_cross_mechanism", False
+            ),
+            strict_cross_lags=getattr(
+                self.config, "strict_cross_lags", [1, 3, 6, 12]
+            ),
+            strict_cross_topk=getattr(self.config, "strict_cross_topk", 5),
+            strict_cross_detach_backbone=getattr(
+                self.config, "strict_cross_detach_backbone", True
+            ),
+            strict_cross_use_channel_prior=getattr(
+                self.config, "strict_cross_use_channel_prior", False
+            ),
+            use_sps_role_head=getattr(self.config, "use_sps_role_head", False),
+            sps_role_hidden=getattr(self.config, "sps_role_hidden", 16),
+            sps_role_detach_features=getattr(
+                self.config, "sps_role_detach_features", False
             ),
             use_temporal_graph_regularization=getattr(self.config, "use_temporal_graph_regularization", False),
             use_score_channel_normalization=getattr(self.config, "use_score_channel_normalization", False),
@@ -5335,7 +5654,11 @@ class LaGraph:
             getattr(self.config, "use_source_effect_synthetic", False)
             and getattr(self.config, "source_effect_use_channel_prior", False)
         )
-        if use_model_channel_prior or use_source_effect_prior:
+        use_strict_cross_prior = bool(
+            getattr(self.config, "use_strict_cross_mechanism", False)
+            and getattr(self.config, "strict_cross_use_channel_prior", False)
+        )
+        if use_model_channel_prior or use_source_effect_prior or use_strict_cross_prior:
             prior_topk = getattr(self.config, "channel_corr_prior_topk", 5)
             if use_source_effect_prior and not use_model_channel_prior:
                 prior_topk = getattr(self.config, "source_effect_prior_topk", prior_topk)
@@ -5354,6 +5677,17 @@ class LaGraph:
                     f"weight={getattr(self.config, 'channel_corr_prior_weight', 0.0)}, "
                     f"axis={getattr(self.config, 'channel_corr_prior_selection_axis', 'source')}, "
                     f"bias={getattr(self.config, 'channel_corr_prior_bias', 0.0)})"
+                )
+            if use_strict_cross_prior:
+                strict_prior = self._build_channel_corr_prior(
+                    train_df,
+                    topk=getattr(self.config, "channel_corr_prior_topk", 5),
+                    selection_axis="target",
+                )
+                self.model.set_strict_cross_static_prior(strict_prior)
+                print(
+                    f"  [StrictCrossPrior] normal correlation prior set "
+                    f"(topk={getattr(self.config, 'channel_corr_prior_topk', 5)})"
                 )
             if use_source_effect_prior:
                 source_prior = self._build_channel_corr_prior(
@@ -5698,6 +6032,24 @@ class LaGraph:
             causal_score_tail=getattr(self.config, "causal_score_tail", "upper"),
             use_causal_response_evidence=getattr(
                 self.config, "use_causal_response_evidence", False
+            ),
+            use_strict_cross_mechanism=getattr(
+                self.config, "use_strict_cross_mechanism", False
+            ),
+            strict_cross_lags=getattr(
+                self.config, "strict_cross_lags", [1, 3, 6, 12]
+            ),
+            strict_cross_topk=getattr(self.config, "strict_cross_topk", 5),
+            strict_cross_detach_backbone=getattr(
+                self.config, "strict_cross_detach_backbone", True
+            ),
+            strict_cross_use_channel_prior=getattr(
+                self.config, "strict_cross_use_channel_prior", False
+            ),
+            use_sps_role_head=getattr(self.config, "use_sps_role_head", False),
+            sps_role_hidden=getattr(self.config, "sps_role_hidden", 16),
+            sps_role_detach_features=getattr(
+                self.config, "sps_role_detach_features", False
             ),
             use_temporal_graph_regularization=getattr(self.config, "use_temporal_graph_regularization", False),
             use_score_channel_normalization=getattr(self.config, "use_score_channel_normalization", False),
