@@ -1882,6 +1882,13 @@ class SparseGCN(nn.Module):
         )
         return torch.tanh(delta / scale)
 
+    @staticmethod
+    def _relative_channel_feature(feature):
+        """Normalize time-wise evidence across variables within each window."""
+        center = feature.mean(dim=-1, keepdim=True)
+        scale = feature.std(dim=-1, keepdim=True, unbiased=False).clamp_min(1e-6)
+        return (feature - center) / scale
+
     def get_sparse_loss(self):
         """通道图 L1 稀疏正则化损失"""
         if not self.use_channel_graph:
@@ -2861,10 +2868,16 @@ class SparseGCN(nn.Module):
             )
             sps_features = torch.stack(
                 [
-                    torch.log1p(strict_cross_self_error),
-                    torch.log1p(strict_cross_response_gain),
-                    torch.log1p(strict_cross_onset),
-                    torch.log1p(resid.abs()),
+                    self._relative_channel_feature(
+                        torch.log1p(strict_cross_self_error)
+                    ),
+                    self._relative_channel_feature(
+                        torch.log1p(strict_cross_response_gain)
+                    ),
+                    self._relative_channel_feature(
+                        torch.log1p(strict_cross_onset)
+                    ),
+                    self._relative_channel_feature(torch.log1p(resid.abs())),
                 ],
                 dim=-1,
             )

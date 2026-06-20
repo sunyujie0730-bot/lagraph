@@ -81,6 +81,12 @@ def aggregate(values, mask):
     return (values * mask.unsqueeze(-1)).sum(dim=1) / mask.sum(dim=1, keepdim=True).clamp_min(1.0)
 
 
+def relative_channel_feature(values):
+    center = values.mean(dim=-1, keepdim=True)
+    scale = values.std(dim=-1, keepdim=True, unbiased=False).clamp_min(1e-6)
+    return (values - center) / scale
+
+
 def source_metrics(scores, source_mask):
     order = torch.argsort(scores, dim=-1, descending=True)
     roots = source_mask.argmax(dim=-1)
@@ -118,7 +124,12 @@ def main():
         prev_error = torch.cat([torch.zeros_like(self_error[:, :1]), self_error[:, :-1]], dim=1)
         onset = (self_error - prev_error).clamp_min(0.0)
         features = torch.stack(
-            [torch.log1p(self_error), torch.log1p(gain), torch.log1p(onset), torch.log1p(x.abs())],
+            [
+                relative_channel_feature(torch.log1p(self_error)),
+                relative_channel_feature(torch.log1p(gain)),
+                relative_channel_feature(torch.log1p(onset)),
+                relative_channel_feature(torch.log1p(x.abs())),
+            ],
             dim=-1,
         )
         root_logits, response_logits = role_head(features)
@@ -149,7 +160,12 @@ def main():
         prev_error = torch.cat([torch.zeros_like(self_error[:, :1]), self_error[:, :-1]], dim=1)
         onset = (self_error - prev_error).clamp_min(0.0)
         features = torch.stack(
-            [torch.log1p(self_error), torch.log1p(gain), torch.log1p(onset), torch.log1p(x.abs())],
+            [
+                relative_channel_feature(torch.log1p(self_error)),
+                relative_channel_feature(torch.log1p(gain)),
+                relative_channel_feature(torch.log1p(onset)),
+                relative_channel_feature(torch.log1p(x.abs())),
+            ],
             dim=-1,
         )
         root_logits, _ = role_head(features)

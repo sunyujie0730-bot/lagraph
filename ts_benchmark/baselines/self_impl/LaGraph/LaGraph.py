@@ -292,6 +292,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "use_sps_role_head": False,
     "sps_role_hidden": 16,
     "sps_role_detach_features": False,
+    "sps_lr_scale": 10.0,
     "lambda_strict_cross_mechanism": 0.0,
     "lambda_strict_cross_sparse": 0.0,
     "lambda_sps_source": 0.0,
@@ -306,6 +307,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "sps_teacher_max_gain": 0.65,
     "sps_teacher_response_ratio": 0.15,
     "sps_teacher_clip": 8.0,
+    "sps_teacher_onset_len": 2,
     "use_temporal_graph_regularization": False,
     "lambda_temporal_graph_smooth": 0.0,
     "lambda_temporal_graph_locality": 0.0,
@@ -2534,14 +2536,15 @@ class LaGraph:
             if shape == 0:
                 source_delta[batch_idx, start:end, roots] = amplitude
             elif shape == 1:
-                ramp = torch.linspace(0.0, 1.0, end - start, device=device, dtype=dtype)
+                ramp = torch.linspace(0.5, 1.0, end - start, device=device, dtype=dtype)
                 source_delta[batch_idx, start:end, roots] = ramp.unsqueeze(-1) * amplitude
             else:
                 pulse_count = max(1, min(end - start, seg_len // 4))
                 pulse_idx = torch.randperm(end - start, device=device)[:pulse_count] + start
                 source_delta[batch_idx, pulse_idx[:, None], roots] = amplitude
             source_channel_mask[batch_idx, roots] = 1.0
-            onset_end = min(end, start + max(1, (end - start) // 3))
+            onset_len = max(1, int(getattr(self.config, "sps_teacher_onset_len", 2)))
+            onset_end = min(end, start + onset_len)
             source_onset_mask[batch_idx, start:onset_end] = 1.0
 
         total_delta = source_delta.clone()
@@ -3536,11 +3539,17 @@ class LaGraph:
             time_channel_scores * effect_time_mask.unsqueeze(-1)
         ).sum(dim=1) / effect_time_sum
 
-        bce_weight = float(getattr(self.config, "source_effect_bce_weight", 1.0) or 1.0)
-        rank_weight = float(getattr(self.config, "source_effect_rank_weight", 1.0) or 1.0)
-        effect_rank_weight = float(getattr(self.config, "source_effect_effect_rank_weight", 0.5) or 0.5)
-        onset_rank_weight = float(getattr(self.config, "source_effect_onset_rank_weight", 0.0) or 0.0)
-        specificity_weight = float(getattr(self.config, "source_effect_specificity_weight", 0.0) or 0.0)
+        def _configured_weight(name, default):
+            value = getattr(self.config, name, default)
+            return float(default if value is None else value)
+
+        # A weight of zero is meaningful for the SPS-only profile.  Do not use
+        # ``value or default`` here because it silently reactivates old losses.
+        bce_weight = _configured_weight("source_effect_bce_weight", 1.0)
+        rank_weight = _configured_weight("source_effect_rank_weight", 1.0)
+        effect_rank_weight = _configured_weight("source_effect_effect_rank_weight", 0.5)
+        onset_rank_weight = _configured_weight("source_effect_onset_rank_weight", 0.0)
+        specificity_weight = _configured_weight("source_effect_specificity_weight", 0.0)
         rca_head_weight = float(getattr(self.config, "lambda_source_effect_rca_head", 0.0) or 0.0)
         root_score_weight = float(getattr(self.config, "lambda_source_effect_root_score", 0.0) or 0.0)
         pairwise_root_response_weight = float(
@@ -3599,6 +3608,41 @@ class LaGraph:
             total = total + sps_source_weight * source_total
             self._record_loss_debug("sps_source_ce", source_loss)
             self._record_loss_debug("sps_source_rank", source_rank)
+            source_prob = torch.softmax(event_root_logits, dim=-1)
+            self._record_loss_debug(
+                "sps_source_logit_std", event_root_logits.detach().std(dim=-1).mean()
+            )
+            self._record_loss_debug(
+                "sps_source_max_probability", source_prob.detach().amax(dim=-1).mean()
+            )
+            if strict_cross_gain is not None:
+                strict_self_error = synth_aux.get("strict_cross_self_error")
+                if strict_self_error is not None:
+                    primitive_innovation = (
+                        strict_self_error
+                        * source_onset_mask.unsqueeze(-1).to(dtype=strict_self_error.dtype)
+                    ).sum(dim=1) / onset_sum.to(dtype=strict_self_error.dtype)
+                    self._record_loss_debug(
+                        "sps_input_innovation_rank",
+                        self._synthetic_rca_ranking_loss(primitive_innovation, source_mask),
+                    )
+                    if strict_self_error.shape[1] > 1:
+                        primitive_previous = torch.cat(
+                            [
+                                torch.zeros_like(strict_self_error[:, :1, :]),
+                                strict_self_error[:, :-1, :],
+                            ],
+                            dim=1,
+                        )
+                        primitive_onset = (strict_self_error - primitive_previous).clamp_min(0.0)
+                        primitive_onset = (
+                            primitive_onset
+                            * source_onset_mask.unsqueeze(-1).to(dtype=strict_self_error.dtype)
+                        ).sum(dim=1) / onset_sum.to(dtype=strict_self_error.dtype)
+                        self._record_loss_debug(
+                            "sps_input_onset_rank",
+                            self._synthetic_rca_ranking_loss(primitive_onset, source_mask),
+                        )
             self._record_loss_debug(
                 "sps_source_weighted", sps_source_weight * source_total
             )
@@ -5722,9 +5766,12 @@ class LaGraph:
 
         channel_graph_params = []
         temporal_graph_params = []
+        sps_params = []
         other_params = []
         for name, param in self.model.named_parameters():
-            if 'channel_graph' in name:
+            if name.startswith("strict_cross_mechanism") or name.startswith("sps_role_head"):
+                sps_params.append(param)
+            elif 'channel_graph' in name:
                 channel_graph_params.append(param)
             elif 'temporal_graph' in name:
                 temporal_graph_params.append(param)
@@ -5734,6 +5781,7 @@ class LaGraph:
         weight_decay_v10 = getattr(self.config, 'weight_decay', 1e-4)
         channel_lr_scale = getattr(self.config, 'channel_graph_lr_scale', 0.1)
         temporal_lr_scale = getattr(self.config, 'temporal_graph_lr_scale', 0.1)
+        sps_lr_scale = max(float(getattr(self.config, 'sps_lr_scale', 10.0)), 1.0)
 
         param_groups = [
             {'params': other_params, 'lr': self.config.lr, 'param_names': ['other']},
@@ -5749,6 +5797,12 @@ class LaGraph:
                 'params': temporal_graph_params,
                 'lr': self.config.lr * temporal_lr_scale,
                 'param_names': ['temporal_graph'],
+            })
+        if sps_params:
+            param_groups.append({
+                'params': sps_params,
+                'lr': self.config.lr * sps_lr_scale,
+                'param_names': ['strict_cross_sps'],
             })
         self.optimizer = optim.Adam(
             param_groups, lr=self.config.lr, weight_decay=weight_decay_v10,
