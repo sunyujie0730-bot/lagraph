@@ -87,11 +87,14 @@ def main():
         strict_cross_topk=2,
         strict_cross_use_channel_prior=True,
         use_sps_role_head=True,
+        use_event_responsibility_head=True,
+        use_bounded_sps_fusion=True,
     )
     model.set_strict_cross_static_prior(prior)
     rec, _, _, _, _, aux, _ = model(x)
     assert aux["strict_cross_response_gain"].shape == x.shape
     assert aux["sps_root_logits"].shape == x.shape
+    assert torch.allclose(aux["sps_fusion_scale"], torch.zeros_like(aux["sps_fusion_scale"]))
     loss = (rec - x).abs().mean() + aux["strict_cross_mechanism_loss"]
     loss = loss + aux["sps_root_logits"].square().mean()
     loss.backward()
@@ -111,10 +114,16 @@ def main():
         source_effect_min_len=5,
         source_effect_max_len=8,
         use_source_effect_synthetic=True,
+        use_sps_residual_synthetic=True,
+        lambda_residual_sps=1.0,
         lambda_source_effect=1.0,
+        source_effect_bce_weight=0.0,
+        source_effect_rank_weight=0.0,
+        source_effect_effect_rank_weight=0.0,
         lambda_sps_source=1.0,
         lambda_sps_response=0.5,
         lambda_sps_separation=0.5,
+        lambda_event_responsibility=0.1,
     )
     trainer._fit_sps_teacher(pd.DataFrame(normal))
     generated = trainer._make_teacher_source_effect_synthetic_batch(
@@ -131,11 +140,23 @@ def main():
     trainer.model = model
     model.zero_grad(set_to_none=True)
     model.train()
+    normal_batch = torch.as_tensor(normal[:12]).unsqueeze(0).repeat(3, 1, 1)
+    _, _, _, _, _, normal_aux, _ = model(normal_batch)
     sps_loss = trainer._source_effect_synthetic_loss(
-        torch.as_tensor(normal[:12]).unsqueeze(0).repeat(3, 1, 1)
+        normal_batch,
+        base_aux=normal_aux,
     )
     assert torch.isfinite(sps_loss)
     sps_loss.backward()
+    assert model.sps_fusion_scale_raw.grad is not None
+    model.zero_grad(set_to_none=True)
+    residual_sps_loss = trainer._residual_sps_auxiliary_loss(
+        normal_batch,
+        normal_aux,
+    )
+    assert torch.isfinite(residual_sps_loss)
+    residual_sps_loss.backward()
+    assert model.strict_cross_mechanism.cross_transfer_raw.grad is not None
     assert model.sps_role_head.response.weight.grad is not None
     print("Strict cross SPS invariants passed.")
 

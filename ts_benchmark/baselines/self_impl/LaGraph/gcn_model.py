@@ -1044,6 +1044,8 @@ class SparseGCN(nn.Module):
                   use_sps_role_head=False,
                   sps_role_hidden=16,
                   sps_role_detach_features=False,
+                  use_bounded_sps_fusion=False,
+                  bounded_sps_max_correction=0.25,
                   use_temporal_graph_regularization=False,
                  use_score_channel_normalization=False,
                  score_channel_norm_mode="robust_z",
@@ -1225,6 +1227,11 @@ class SparseGCN(nn.Module):
         self.use_sps_role_head = bool(use_sps_role_head)
         self.sps_role_hidden = int(sps_role_hidden)
         self.sps_role_detach_features = bool(sps_role_detach_features)
+        self.use_bounded_sps_fusion = bool(use_bounded_sps_fusion)
+        self.bounded_sps_max_correction = max(
+            0.0,
+            float(bounded_sps_max_correction),
+        )
         self.use_temporal_graph_regularization = use_temporal_graph_regularization
         self.use_score_channel_normalization = use_score_channel_normalization
         self.score_channel_norm_mode = score_channel_norm_mode
@@ -1665,13 +1672,17 @@ class SparseGCN(nn.Module):
             self.lagged_causal_graph = None
 
         if self.use_strict_cross_mechanism:
-            self.strict_cross_mechanism = StrictCrossLagMechanism(
-                channel=c_out,
-                lags=self.strict_cross_lags,
-                topk=self.strict_cross_topk,
-                dropout=dropout,
-                use_static_prior=self.strict_cross_use_channel_prior,
-            )
+            # Keep optional SPS modules from changing the initialization of the
+            # established detector and RCA heads.
+            with torch.random.fork_rng(devices=[]):
+                torch.manual_seed(1729)
+                self.strict_cross_mechanism = StrictCrossLagMechanism(
+                    channel=c_out,
+                    lags=self.strict_cross_lags,
+                    topk=self.strict_cross_topk,
+                    dropout=dropout,
+                    use_static_prior=self.strict_cross_use_channel_prior,
+                )
         else:
             self.strict_cross_mechanism = None
 
@@ -1719,13 +1730,19 @@ class SparseGCN(nn.Module):
             self.event_responsibility_head = None
 
         if self.use_sps_role_head:
-            self.sps_role_head = SPSRoleHead(
-                feature_dim=4,
-                hidden=self.sps_role_hidden,
-                dropout=dropout,
-            )
+            with torch.random.fork_rng(devices=[]):
+                torch.manual_seed(1733)
+                self.sps_role_head = SPSRoleHead(
+                    feature_dim=4,
+                    hidden=self.sps_role_hidden,
+                    dropout=dropout,
+                )
         else:
             self.sps_role_head = None
+        self.sps_fusion_scale_raw = nn.Parameter(
+            torch.tensor(0.0),
+            requires_grad=self.use_bounded_sps_fusion,
+        )
 
         if self.use_event_route_head:
             self.event_route_head = EventRouteHead(
@@ -1888,6 +1905,83 @@ class SparseGCN(nn.Module):
         center = feature.mean(dim=-1, keepdim=True)
         scale = feature.std(dim=-1, keepdim=True, unbiased=False).clamp_min(1e-6)
         return (feature - center) / scale
+
+    def _strict_cross_evidence(self, mechanism_input):
+        """Evaluate the self-only and cross-variable mechanism on residuals."""
+        if not self.use_strict_cross_mechanism or self.strict_cross_mechanism is None:
+            return {}
+        full_pred, self_pred, attention, edge_weight = self.strict_cross_mechanism(
+            mechanism_input
+        )
+        full_error = F.smooth_l1_loss(full_pred, mechanism_input, reduction="none")
+        self_error = F.smooth_l1_loss(self_pred, mechanism_input, reduction="none")
+        response_gain = (self_error - full_error).clamp_min(0.0)
+        mechanism_loss = None
+        if mechanism_input.shape[1] > self.strict_cross_mechanism.max_lag:
+            mechanism_loss = F.smooth_l1_loss(
+                full_pred[:, self.strict_cross_mechanism.max_lag :, :],
+                mechanism_input[:, self.strict_cross_mechanism.max_lag :, :],
+            )
+        return {
+            "strict_cross_pred": full_pred,
+            "strict_cross_self_pred": self_pred,
+            "strict_cross_attention": attention,
+            "strict_cross_edge_weight": edge_weight,
+            "strict_cross_full_error": full_error,
+            "strict_cross_self_error": self_error,
+            "strict_cross_response_gain": response_gain,
+            "strict_cross_mechanism_loss": mechanism_loss,
+        }
+
+    def _sps_role_logits_from_evidence(self, mechanism_input, evidence):
+        if (
+            not self.use_sps_role_head
+            or self.sps_role_head is None
+            or not evidence
+        ):
+            return None, None
+        self_error = evidence["strict_cross_self_error"]
+        response_gain = evidence["strict_cross_response_gain"]
+        if self_error.shape[1] > 1:
+            previous_innovation = torch.cat(
+                [torch.zeros_like(self_error[:, :1, :]), self_error[:, :-1, :]],
+                dim=1,
+            )
+        else:
+            previous_innovation = torch.zeros_like(self_error)
+        onset = torch.relu(self_error - previous_innovation)
+        features = torch.stack(
+            [
+                self._relative_channel_feature(torch.log1p(self_error)),
+                self._relative_channel_feature(torch.log1p(response_gain)),
+                self._relative_channel_feature(torch.log1p(onset)),
+                self._relative_channel_feature(torch.log1p(mechanism_input.abs())),
+            ],
+            dim=-1,
+        )
+        if self.training and self.sps_role_detach_features:
+            features = features.detach()
+        return self.sps_role_head(features)
+
+    def forward_sps_roles_from_residual(self, residual):
+        """Run the strict mechanism and SPS heads directly in residual space.
+
+        The source-propagation supervision uses this path so the injected event
+        is represented in exactly the space where cross-variable explanation is
+        learned, rather than being altered by the reconstruction backbone.
+        """
+        mechanism_input = (
+            residual.detach() if self.strict_cross_detach_backbone else residual
+        )
+        evidence = self._strict_cross_evidence(mechanism_input)
+        root_logits, response_logits = self._sps_role_logits_from_evidence(
+            mechanism_input,
+            evidence,
+        )
+        evidence["strict_cross_input"] = mechanism_input
+        evidence["sps_root_logits"] = root_logits
+        evidence["sps_response_logits"] = response_logits
+        return evidence
 
     def get_sparse_loss(self):
         """通道图 L1 稀疏正则化损失"""
@@ -2218,6 +2312,7 @@ class SparseGCN(nn.Module):
         causal_pred = None
         causal_channel_error = None
         causal_response_support = None
+        strict_input = None
         strict_cross_pred = None
         strict_cross_self_pred = None
         strict_cross_attention = None
@@ -2307,31 +2402,15 @@ class SparseGCN(nn.Module):
 
         if self.use_strict_cross_mechanism and self.strict_cross_mechanism is not None:
             strict_input = resid.detach() if self.strict_cross_detach_backbone else resid
-            (
-                strict_cross_pred,
-                strict_cross_self_pred,
-                strict_cross_attention,
-                strict_cross_edge_weight,
-            ) = self.strict_cross_mechanism(strict_input)
-            strict_start = self.strict_cross_mechanism.max_lag
-            strict_cross_full_error = F.smooth_l1_loss(
-                strict_cross_pred,
-                strict_input,
-                reduction="none",
-            )
-            strict_cross_self_error = F.smooth_l1_loss(
-                strict_cross_self_pred,
-                strict_input,
-                reduction="none",
-            )
-            strict_cross_response_gain = (
-                strict_cross_self_error - strict_cross_full_error
-            ).clamp_min(0.0)
-            if L > strict_start:
-                strict_cross_mechanism_loss = F.smooth_l1_loss(
-                    strict_cross_pred[:, strict_start:, :],
-                    strict_input[:, strict_start:, :],
-                )
+            strict_evidence = self._strict_cross_evidence(strict_input)
+            strict_cross_pred = strict_evidence["strict_cross_pred"]
+            strict_cross_self_pred = strict_evidence["strict_cross_self_pred"]
+            strict_cross_attention = strict_evidence["strict_cross_attention"]
+            strict_cross_edge_weight = strict_evidence["strict_cross_edge_weight"]
+            strict_cross_full_error = strict_evidence["strict_cross_full_error"]
+            strict_cross_self_error = strict_evidence["strict_cross_self_error"]
+            strict_cross_response_gain = strict_evidence["strict_cross_response_gain"]
+            strict_cross_mechanism_loss = strict_evidence["strict_cross_mechanism_loss"]
 
         # 步骤 2: 自适应通道依赖图
         if self.use_channel_graph:
@@ -2853,37 +2932,10 @@ class SparseGCN(nn.Module):
             and strict_cross_self_error is not None
             and strict_cross_response_gain is not None
         ):
-            if strict_cross_self_error.shape[1] > 1:
-                previous_innovation = torch.cat(
-                    [
-                        torch.zeros_like(strict_cross_self_error[:, :1, :]),
-                        strict_cross_self_error[:, :-1, :],
-                    ],
-                    dim=1,
-                )
-            else:
-                previous_innovation = torch.zeros_like(strict_cross_self_error)
-            strict_cross_onset = torch.relu(
-                strict_cross_self_error - previous_innovation
+            sps_root_logits, sps_response_logits = self._sps_role_logits_from_evidence(
+                strict_input,
+                strict_evidence,
             )
-            sps_features = torch.stack(
-                [
-                    self._relative_channel_feature(
-                        torch.log1p(strict_cross_self_error)
-                    ),
-                    self._relative_channel_feature(
-                        torch.log1p(strict_cross_response_gain)
-                    ),
-                    self._relative_channel_feature(
-                        torch.log1p(strict_cross_onset)
-                    ),
-                    self._relative_channel_feature(torch.log1p(resid.abs())),
-                ],
-                dim=-1,
-            )
-            if self.training and self.sps_role_detach_features:
-                sps_features = sps_features.detach()
-            sps_root_logits, sps_response_logits = self.sps_role_head(sps_features)
             # Existing export code consumes event responsibility logits.  The
             # value now comes from the jointly trained SPS role head instead
             # of a post-hoc source-gate score.
@@ -2934,6 +2986,21 @@ class SparseGCN(nn.Module):
                 responsibility_features = responsibility_features.detach()
             event_responsibility_logits = self.event_responsibility_head(
                 responsibility_features,
+            )
+
+        if (
+            self.use_bounded_sps_fusion
+            and self.use_event_responsibility_head
+            and event_responsibility_logits is not None
+            and sps_root_logits is not None
+            and sps_response_logits is not None
+        ):
+            fusion_scale = self.bounded_sps_max_correction * torch.tanh(
+                self.sps_fusion_scale_raw
+            )
+            role_correction = torch.tanh(sps_root_logits - sps_response_logits)
+            event_responsibility_logits = (
+                event_responsibility_logits + fusion_scale * role_correction
             )
 
         if self.use_response_suppressor_head and return_root_score:
@@ -3374,6 +3441,8 @@ class SparseGCN(nn.Module):
             aux_losses['causal_sparse_loss'] = self.lagged_causal_graph.get_sparsity_loss()
         if strict_cross_full_error is not None:
             aux_losses['strict_cross_full_error'] = strict_cross_full_error
+        if strict_input is not None:
+            aux_losses['strict_cross_input'] = strict_input
         if strict_cross_self_error is not None:
             aux_losses['strict_cross_self_error'] = strict_cross_self_error
         if strict_cross_response_gain is not None:
@@ -3477,6 +3546,11 @@ class SparseGCN(nn.Module):
             aux_losses['sps_root_logits'] = sps_root_logits
         if sps_response_logits is not None:
             aux_losses['sps_response_logits'] = sps_response_logits
+        if self.use_bounded_sps_fusion:
+            aux_losses['sps_fusion_scale'] = (
+                self.bounded_sps_max_correction
+                * torch.tanh(self.sps_fusion_scale_raw)
+            )
         if event_route_logits is not None:
             aux_losses['event_route_logits'] = event_route_logits
             aux_losses['event_route_alpha'] = event_route_alpha

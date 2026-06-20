@@ -139,6 +139,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "use_source_effect_synthetic": False,
     "lambda_source_effect": 0.0,
     "source_effect_interval": 4,
+    "source_effect_aux_batch_size": 0,
     "source_effect_min_len": 8,
     "source_effect_max_len": 30,
     "source_effect_min_roots": 1,
@@ -254,6 +255,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "use_channel_masked_modeling": False,
     "lambda_channel_masked": 0.0,
     "channel_mask_interval": 8,
+    "channel_mask_aux_batch_size": 0,
     "channel_mask_ratio": 0.15,
     "channel_mask_min_channels": 1,
     "channel_mask_value": "zero",
@@ -292,6 +294,8 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "use_sps_role_head": False,
     "sps_role_hidden": 16,
     "sps_role_detach_features": False,
+    "use_bounded_sps_fusion": False,
+    "bounded_sps_max_correction": 0.25,
     "sps_lr_scale": 10.0,
     "lambda_strict_cross_mechanism": 0.0,
     "lambda_strict_cross_sparse": 0.0,
@@ -300,6 +304,12 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "lambda_sps_separation": 0.0,
     "sps_separation_margin": 0.10,
     "use_sps_teacher": False,
+    "use_sps_residual_synthetic": False,
+    "lambda_residual_sps": 0.0,
+    "residual_sps_aux_batch_size": 0,
+    "residual_sps_source_weight": 1.0,
+    "residual_sps_response_weight": 0.5,
+    "residual_sps_separation_weight": 0.5,
     "sps_teacher_lags": [1, 3, 6, 12],
     "sps_teacher_topk": 3,
     "sps_teacher_ridge": 0.10,
@@ -3339,6 +3349,11 @@ class LaGraph:
         interval = int(getattr(self.config, "channel_mask_interval", 8) or 8)
         if batch_idx is not None and interval > 1 and batch_idx % interval != 0:
             return input_data.new_tensor(0.0)
+        aux_batch_size = int(
+            getattr(self.config, "channel_mask_aux_batch_size", 0) or 0
+        )
+        if 0 < aux_batch_size < input_data.shape[0]:
+            input_data = input_data[:aux_batch_size]
 
         B, L, C = input_data.shape
         ratio = float(getattr(self.config, "channel_mask_ratio", 0.15) or 0.15)
@@ -3439,12 +3454,17 @@ class LaGraph:
 
         return total_loss
 
-    def _source_effect_synthetic_loss(self, input_data, batch_idx=None):
+    def _source_effect_synthetic_loss(self, input_data, batch_idx=None, base_aux=None):
         if not bool(getattr(self.config, "use_source_effect_synthetic", False)):
             return input_data.new_tensor(0.0)
         interval = int(getattr(self.config, "source_effect_interval", 4) or 4)
         if batch_idx is not None and interval > 1 and batch_idx % interval != 0:
             return input_data.new_tensor(0.0)
+        aux_batch_size = int(
+            getattr(self.config, "source_effect_aux_batch_size", 0) or 0
+        )
+        if 0 < aux_batch_size < input_data.shape[0]:
+            input_data = input_data[:aux_batch_size]
         lambda_source_effect = float(getattr(self.config, "lambda_source_effect", 0.0) or 0.0)
         if lambda_source_effect <= 0:
             return input_data.new_tensor(0.0)
@@ -4821,6 +4841,122 @@ class LaGraph:
         self._record_loss_debug("source_effect_total_scaled", scaled_total)
         return scaled_total
 
+    def _residual_sps_auxiliary_loss(self, input_data, base_aux, batch_idx=None):
+        """Train source/response roles in residual space without replacing SPS."""
+        if not bool(getattr(self.config, "use_sps_residual_synthetic", False)):
+            return input_data.new_tensor(0.0)
+        loss_weight = float(getattr(self.config, "lambda_residual_sps", 0.0) or 0.0)
+        if loss_weight <= 0:
+            return input_data.new_tensor(0.0)
+        interval = int(getattr(self.config, "source_effect_interval", 4) or 4)
+        if batch_idx is not None and interval > 1 and batch_idx % interval != 0:
+            return input_data.new_tensor(0.0)
+        residual = (base_aux or {}).get("strict_cross_input")
+        if residual is None:
+            return input_data.new_tensor(0.0)
+        aux_batch_size = int(
+            getattr(self.config, "residual_sps_aux_batch_size", 0) or 0
+        )
+        if 0 < aux_batch_size < residual.shape[0]:
+            residual = residual[:aux_batch_size]
+
+        make_batch = (
+            self._make_teacher_source_effect_synthetic_batch
+            if bool(getattr(self.config, "use_sps_teacher", False))
+            else self._make_source_effect_synthetic_batch
+        )
+        (
+            synth_residual,
+            _,
+            source_mask,
+            effect_mask,
+            source_onset_mask,
+            effect_time_mask,
+            _,
+        ) = make_batch(residual)
+        role_aux = self._get_raw_model().forward_sps_roles_from_residual(
+            synth_residual
+        )
+        root_logits = role_aux.get("sps_root_logits")
+        response_logits = role_aux.get("sps_response_logits")
+        response_gain = role_aux.get("strict_cross_response_gain")
+        if root_logits is None or response_logits is None:
+            return input_data.new_tensor(0.0)
+
+        onset_sum = source_onset_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
+        effect_sum = effect_time_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
+        event_root_logits = (
+            root_logits
+            * source_onset_mask.unsqueeze(-1).to(dtype=root_logits.dtype)
+        ).sum(dim=1) / onset_sum.to(dtype=root_logits.dtype)
+        source_target = source_mask.to(dtype=root_logits.dtype)
+        source_target = source_target / source_target.sum(
+            dim=-1,
+            keepdim=True,
+        ).clamp_min(1.0)
+        source_ce = -(
+            source_target * F.log_softmax(event_root_logits, dim=-1)
+        ).sum(dim=-1).mean()
+        source_rank = self._synthetic_rca_ranking_loss(
+            event_root_logits,
+            source_mask,
+        )
+        source_weight = float(
+            getattr(self.config, "residual_sps_source_weight", 1.0) or 0.0
+        )
+        total = source_weight * (source_ce + source_rank)
+
+        event_response_logits = (
+            response_logits
+            * effect_time_mask.unsqueeze(-1).to(dtype=response_logits.dtype)
+        ).sum(dim=1) / effect_sum.to(dtype=response_logits.dtype)
+        response_loss = self._weighted_channel_bce(
+            torch.sigmoid(event_response_logits),
+            effect_mask,
+        )
+        response_weight = float(
+            getattr(self.config, "residual_sps_response_weight", 0.5) or 0.0
+        )
+        total = total + response_weight * response_loss
+
+        separation_loss = input_data.new_tensor(0.0)
+        separation_weight = float(
+            getattr(self.config, "residual_sps_separation_weight", 0.5) or 0.0
+        )
+        if response_gain is not None and separation_weight > 0:
+            effect_gain = (
+                response_gain
+                * effect_time_mask.unsqueeze(-1).to(dtype=response_gain.dtype)
+            ).sum(dim=1) / effect_sum.to(dtype=response_gain.dtype)
+            source_gain = (
+                response_gain
+                * source_onset_mask.unsqueeze(-1).to(dtype=response_gain.dtype)
+            ).sum(dim=1) / onset_sum.to(dtype=response_gain.dtype)
+            separation_loss = self._effect_over_source_margin_loss(
+                effect_gain,
+                source_gain,
+                source_mask,
+                effect_mask,
+                getattr(self.config, "sps_separation_margin", 0.10),
+            )
+            total = total + separation_weight * separation_loss
+
+        scaled = loss_weight * total
+        self._record_loss_debug("residual_sps_source_ce", source_ce)
+        self._record_loss_debug("residual_sps_source_rank", source_rank)
+        self._record_loss_debug("residual_sps_response_bce", response_loss)
+        self._record_loss_debug("residual_sps_gain_separation", separation_loss)
+        self._record_loss_debug("residual_sps_total_scaled", scaled)
+        source_prob = torch.softmax(event_root_logits, dim=-1)
+        self._record_loss_debug(
+            "residual_sps_max_probability",
+            source_prob.detach().amax(dim=-1).mean(),
+        )
+        fusion_scale = (base_aux or {}).get("sps_fusion_scale")
+        if fusion_scale is not None:
+            self._record_loss_debug("residual_sps_fusion_scale", fusion_scale)
+        return scaled
+
     def _synthetic_rca_ranking_loss(self, channel_scores, channel_mask):
         margin = float(getattr(self.config, "synthetic_rca_margin", 0.2) or 0.2)
         hard_topk = int(getattr(self.config, "synthetic_rca_topk", 5) or 5)
@@ -5450,6 +5586,12 @@ class LaGraph:
             sps_role_detach_features=getattr(
                 self.config, "sps_role_detach_features", False
             ),
+            use_bounded_sps_fusion=getattr(
+                self.config, "use_bounded_sps_fusion", False
+            ),
+            bounded_sps_max_correction=getattr(
+                self.config, "bounded_sps_max_correction", 0.25
+            ),
             use_temporal_graph_regularization=getattr(self.config, "use_temporal_graph_regularization", False),
             use_score_channel_normalization=getattr(self.config, "use_score_channel_normalization", False),
             score_channel_norm_mode=getattr(self.config, "score_channel_norm_mode", "robust_z"),
@@ -5769,7 +5911,11 @@ class LaGraph:
         sps_params = []
         other_params = []
         for name, param in self.model.named_parameters():
-            if name.startswith("strict_cross_mechanism") or name.startswith("sps_role_head"):
+            if (
+                name.startswith("strict_cross_mechanism")
+                or name.startswith("sps_role_head")
+                or name.startswith("sps_fusion_scale_raw")
+            ):
                 sps_params.append(param)
             elif 'channel_graph' in name:
                 channel_graph_params.append(param)
@@ -5880,7 +6026,16 @@ class LaGraph:
                         loss = loss + lambda_vq * aux_losses['vq_loss']
                         self._record_loss_debug("vq_loss_scaled", lambda_vq * aux_losses['vq_loss'])
                     loss = loss + self._synthetic_anomaly_aux_loss(input_data, aux_losses, batch_idx=i)
-                    loss = loss + self._source_effect_synthetic_loss(input_data, batch_idx=i)
+                    loss = loss + self._source_effect_synthetic_loss(
+                        input_data,
+                        batch_idx=i,
+                        base_aux=aux_losses,
+                    )
+                    loss = loss + self._residual_sps_auxiliary_loss(
+                        input_data,
+                        aux_losses,
+                        batch_idx=i,
+                    )
                     loss = loss + self._channel_masked_modeling_loss(input_data, batch_idx=i)
 
                 self._record_loss_debug("total_train_loss", loss)
@@ -6104,6 +6259,12 @@ class LaGraph:
             sps_role_hidden=getattr(self.config, "sps_role_hidden", 16),
             sps_role_detach_features=getattr(
                 self.config, "sps_role_detach_features", False
+            ),
+            use_bounded_sps_fusion=getattr(
+                self.config, "use_bounded_sps_fusion", False
+            ),
+            bounded_sps_max_correction=getattr(
+                self.config, "bounded_sps_max_correction", 0.25
             ),
             use_temporal_graph_regularization=getattr(self.config, "use_temporal_graph_regularization", False),
             use_score_channel_normalization=getattr(self.config, "use_score_channel_normalization", False),
@@ -6436,7 +6597,16 @@ class LaGraph:
                 if aux_losses and 'sparse_loss' in aux_losses:
                     loss = loss + self.config.lambda_locality_l1 * aux_losses['sparse_loss']
                 loss = self._add_temporal_graph_regularization(loss, aux_losses)
-                loss = loss + self._source_effect_synthetic_loss(input_data, batch_idx=i)
+                loss = loss + self._source_effect_synthetic_loss(
+                    input_data,
+                    batch_idx=i,
+                    base_aux=aux_losses,
+                )
+                loss = loss + self._residual_sps_auxiliary_loss(
+                    input_data,
+                    aux_losses,
+                    batch_idx=i,
+                )
                 loss = loss + self._channel_masked_modeling_loss(input_data, batch_idx=i)
 
                 self._record_loss_debug("total_train_loss", loss)

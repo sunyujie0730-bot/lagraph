@@ -257,6 +257,8 @@ def main():
             "source-bottleneck-stable-graph-evidence-event-route-response-root-rerank-rca",
             "source-bottleneck-causal-innovation-response-rca",
             "source-propagation-strict-cross-mechanism-rca",
+            "source-propagation-residual-sps-rca",
+            "source-propagation-bounded-sps-fusion-rca",
             "source-bottleneck-dual-expert-representation-fusion-rca",
             "source-bottleneck-source-expert-representation-rca",
             "source-bottleneck-stable-graph-evidence-learned-responsibility-rerank-rca",
@@ -3470,6 +3472,54 @@ def main():
         rca_event_specificity_secondary_onset_weight=0.0,
         rca_event_specificity_secondary_source_gate_weight=0.0,
         rca_event_specificity_secondary_mechanism_residual_weight=0.0,
+        debug_loss_breakdown=True,
+        debug_loss_max_batches=1,
+    )
+    arch_profiles["source-propagation-residual-sps-rca"] = dict(
+        arch_profiles["source-propagation-strict-cross-mechanism-rca"],
+        # Generate source-response supervision in the residual mechanism
+        # domain and export the learned role head directly.
+        use_sps_residual_synthetic=True,
+        rca_event_base_weight=0.0,
+    )
+    arch_profiles["source-propagation-bounded-sps-fusion-rca"] = dict(
+        arch_profiles["source-bottleneck-stable-graph-evidence-reliable-score-rca"],
+        # Preserve the validated source-propagation path.  SPS supplies only a
+        # zero-initialized bounded correction to its learned responsibility
+        # logits and cannot replace the established ranking.
+        use_strict_cross_mechanism=True,
+        strict_cross_lags=[1, 3, 6, 12],
+        strict_cross_topk=5,
+        strict_cross_detach_backbone=True,
+        strict_cross_use_channel_prior=True,
+        lambda_strict_cross_mechanism=0.05,
+        lambda_strict_cross_sparse=0.001,
+        use_sps_role_head=True,
+        sps_role_hidden=16,
+        sps_role_detach_features=False,
+        sps_lr_scale=10.0,
+        use_bounded_sps_fusion=True,
+        bounded_sps_max_correction=0.25,
+        use_sps_teacher=True,
+        use_sps_residual_synthetic=True,
+        sps_teacher_lags=[1, 3, 6, 12],
+        sps_teacher_topk=3,
+        sps_teacher_ridge=0.10,
+        sps_teacher_max_samples=30000,
+        sps_teacher_max_gain=0.65,
+        sps_teacher_response_ratio=0.15,
+        sps_teacher_onset_len=2,
+        lambda_sps_source=0.0,
+        lambda_sps_response=0.0,
+        lambda_sps_separation=0.0,
+        lambda_residual_sps=0.05,
+        source_effect_aux_batch_size=64,
+        channel_mask_aux_batch_size=64,
+        residual_sps_aux_batch_size=64,
+        residual_sps_source_weight=1.0,
+        residual_sps_response_weight=0.50,
+        residual_sps_separation_weight=0.50,
+        sps_separation_margin=0.10,
         debug_loss_breakdown=True,
         debug_loss_max_batches=1,
     )
