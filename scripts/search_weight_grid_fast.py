@@ -64,11 +64,28 @@ def extract_dataset(rca_path: Path, prediction_key: str) -> list[dict]:
             "source_gate": [float(item.get("source_gate_score", 0.0) or 0.0) for item in items],
             "onset": [float(item.get("onset_score", 0.0) or 0.0) for item in items],
             "mech": [float(item.get("mechanism_residual_score", 0.0) or 0.0) for item in items],
+            "root": [float(item.get("root_score", 0.0) or 0.0) for item in items],
+            "event": [float(item.get("event_responsibility_score", 0.0) or 0.0) for item in items],
+            "evidence_fusion": [float(item.get("evidence_fusion_score", 0.0) or 0.0) for item in items],
+            "source_interaction_head": [float(item.get("source_interaction_head_score", 0.0) or 0.0) for item in items],
+            "source_consistency": [float(item.get("source_consistency_head_score", 0.0) or 0.0) for item in items],
+            "graph": [float(item.get("graph_score", 0.0) or 0.0) for item in items],
+            "response_suppressor": [float(item.get("response_suppressor_score", 0.0) or 0.0) for item in items],
         }
         components["interaction"] = [
             components["base"][idx]
             * max(components["source_gate"][idx], components["onset"][idx], components["mech"][idx])
             for idx in range(len(items))
+        ]
+        components["learned_interaction"] = [
+            components["source_interaction_head"][idx]
+            if abs(components["source_interaction_head"][idx]) > 1e-12
+            else components["base"][idx] * max(components["onset"][idx], components["mech"][idx])
+            for idx in range(len(items))
+        ]
+        components["graph_low"] = [-value for value in components["graph"]]
+        components["response_suppressor_low"] = [
+            -value for value in components["response_suppressor"]
         ]
         normalized = {key: normalize(value) for key, value in components.items()}
         extracted.append({"roots": roots, "names": names, "components": normalized})
@@ -103,7 +120,51 @@ def recipe_grid() -> list[tuple[str, dict[str, float]]]:
         ("exported", {"score": 1.0}),
         ("old", {"original": 1.0, "base": 0.45, "onset": 0.20}),
         ("new", {"base": 0.45, "onset": 0.25, "source_gate": 1.0, "mech": 0.25, "interaction": 0.25}),
+        (
+            "learned_no_source_gate",
+            {"base": 0.35, "onset": 0.25, "root": 0.25, "event": 0.20, "evidence_fusion": 0.20},
+        ),
+        (
+            "learned_with_light_source",
+            {
+                "base": 0.35,
+                "onset": 0.25,
+                "source_gate": 0.20,
+                "root": 0.25,
+                "event": 0.20,
+                "evidence_fusion": 0.20,
+            },
+        ),
+        (
+            "learned_graph_penalized",
+            {
+                "base": 0.35,
+                "onset": 0.25,
+                "root": 0.25,
+                "event": 0.20,
+                "evidence_fusion": 0.20,
+                "graph_low": 0.05,
+            },
+        ),
     ]
+    for root in [0.0, 0.15, 0.25, 0.40]:
+        for event in [0.0, 0.10, 0.20, 0.35]:
+            for fusion in [0.0, 0.10, 0.20, 0.35]:
+                for source_gate in [0.0, 0.10, 0.20, 0.35]:
+                    weights = {
+                        "base": 0.35,
+                        "onset": 0.25,
+                        "source_gate": source_gate,
+                        "root": root,
+                        "event": event,
+                        "evidence_fusion": fusion,
+                    }
+                    recipes.append(
+                        (
+                            f"learned_r{root:g}_e{event:g}_f{fusion:g}_sg{source_gate:g}",
+                            weights,
+                        )
+                    )
     for original in [0.0, 0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0]:
         for source_gate in [0.0, 0.1, 0.2, 0.35, 0.5, 0.75, 1.0]:
             for mech in [0.0, 0.1, 0.25]:

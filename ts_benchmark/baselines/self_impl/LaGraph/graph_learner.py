@@ -242,6 +242,243 @@ class ChannelAdaptiveGraph(nn.Module):
         return x_out, A
 
 
+class DirectedSparseChannelGraph(nn.Module):
+    """Event-conditioned sparse graph with explicit parent-to-target semantics.
+
+    ``A[:, parent, target]`` is normalized over candidate parents for every
+    target. The returned feature is the parent explanation itself; the caller
+    decides how much local evidence to preserve.
+    """
+
+    def __init__(
+        self,
+        num_nodes,
+        embedding_dim=8,
+        parent_topk=5,
+        dropout=0.1,
+        use_static_prior=False,
+        static_prior_weight=0.0,
+        static_prior_bias=0.0,
+        use_signed_transfer=False,
+        transfer_mode="low_rank",
+        transfer_rank=8,
+        transfer_scale=2.0,
+    ):
+        super().__init__()
+        self.num_nodes = int(num_nodes)
+        self.embedding_dim = max(4, int(embedding_dim))
+        self.parent_topk = min(
+            max(1, int(parent_topk)),
+            max(1, self.num_nodes - 1),
+        )
+        self.use_static_prior = bool(use_static_prior)
+        self.static_prior_weight = float(static_prior_weight)
+        self.static_prior_bias = float(static_prior_bias)
+        self.use_signed_transfer = bool(use_signed_transfer)
+        self.transfer_mode = str(transfer_mode or "low_rank").lower()
+        if self.transfer_mode not in {"low_rank", "full"}:
+            raise ValueError(f"Unsupported transfer_mode={self.transfer_mode!r}")
+        self.transfer_rank = max(2, int(transfer_rank))
+        self.transfer_scale = float(transfer_scale)
+
+        self.source_embedding = nn.Parameter(
+            torch.randn(self.num_nodes, self.embedding_dim) * 0.05
+        )
+        self.target_embedding = nn.Parameter(
+            torch.randn(self.num_nodes, self.embedding_dim) * 0.05
+        )
+        if self.use_signed_transfer:
+            transfer_generator = torch.Generator(device="cpu")
+            transfer_generator.manual_seed(1729)
+            if self.transfer_mode == "full":
+                self.transfer_matrix_raw = nn.Parameter(
+                    torch.randn(
+                        self.num_nodes,
+                        self.num_nodes,
+                        generator=transfer_generator,
+                    ) * 0.01
+                )
+                self.register_parameter("transfer_source_embedding", None)
+                self.register_parameter("transfer_target_embedding", None)
+            else:
+                self.transfer_source_embedding = nn.Parameter(
+                    torch.randn(
+                        self.num_nodes,
+                        self.transfer_rank,
+                        generator=transfer_generator,
+                    ) * 0.05
+                )
+                self.transfer_target_embedding = nn.Parameter(
+                    torch.randn(
+                        self.num_nodes,
+                        self.transfer_rank,
+                        generator=transfer_generator,
+                    ) * 0.05
+                )
+                self.register_parameter("transfer_matrix_raw", None)
+        else:
+            self.register_parameter("transfer_source_embedding", None)
+            self.register_parameter("transfer_target_embedding", None)
+            self.register_parameter("transfer_matrix_raw", None)
+        hidden = max(8, self.embedding_dim)
+        self.state_encoder = nn.Sequential(
+            nn.Linear(4, hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden, self.embedding_dim * 2),
+        )
+        self.temperature_raw = nn.Parameter(
+            torch.tensor(float(math.log(math.expm1(1.0))))
+        )
+
+        self.register_buffer(
+            "static_prior",
+            torch.zeros(self.num_nodes, self.num_nodes, dtype=torch.float32),
+            persistent=False,
+        )
+        self._sparse_penalty = torch.tensor(0.0)
+        self._prior_align_loss = torch.tensor(0.0)
+        self._last_dense_weights = None
+        self._warmup_alpha = 0.0
+
+    def set_warmup_progress(self, alpha: float):
+        self._warmup_alpha = float(alpha)
+
+    def get_l1_penalty(self) -> torch.Tensor:
+        return self._sparse_penalty * self._warmup_alpha
+
+    def set_static_prior(self, prior):
+        prior = torch.as_tensor(prior, dtype=self.static_prior.dtype)
+        if prior.shape != self.static_prior.shape:
+            raise ValueError(
+                f"static prior shape mismatch: {prior.shape} != {self.static_prior.shape}"
+            )
+        prior = prior.clamp_min(0.0)
+        prior.fill_diagonal_(0.0)
+        prior = prior / prior.sum(dim=0, keepdim=True).clamp_min(1e-8)
+        self.static_prior.copy_(prior.to(self.static_prior.device))
+
+    def get_prior_align_loss(self) -> torch.Tensor:
+        return self._prior_align_loss
+
+    def get_dense_adjacency(self):
+        return self._last_dense_weights
+
+    def get_transfer_matrix(self):
+        if not self.use_signed_transfer:
+            return None
+        if self.transfer_mode == "full":
+            transfer_logits = self.transfer_matrix_raw
+        else:
+            transfer_logits = torch.matmul(
+                self.transfer_source_embedding,
+                self.transfer_target_embedding.transpose(0, 1),
+            ) / math.sqrt(float(self.transfer_rank))
+        transfer = self.transfer_scale * torch.tanh(transfer_logits)
+        eye = torch.eye(
+            self.num_nodes,
+            device=transfer.device,
+            dtype=transfer.dtype,
+        )
+        return transfer * (1.0 - eye)
+
+    def predict_context(self, x, adjacency):
+        if not self.use_signed_transfer:
+            return torch.einsum("blp,bpt->blt", x, adjacency)
+        target_center = x.mean(dim=1, keepdim=True)
+        centered = x - target_center
+        transfer = self.get_transfer_matrix().to(device=x.device, dtype=x.dtype)
+        response_weights = adjacency * transfer.unsqueeze(0)
+        dynamic_response = torch.einsum(
+            "blp,bpt->blt",
+            centered,
+            response_weights,
+        )
+        return target_center + dynamic_response
+
+    def propagate_evidence(self, evidence, adjacency):
+        response_weights = adjacency
+        if self.use_signed_transfer:
+            transfer = self.get_transfer_matrix().to(
+                device=evidence.device,
+                dtype=evidence.dtype,
+            )
+            response_weights = response_weights * transfer.abs().unsqueeze(0)
+        return torch.einsum("blp,bpt->blt", evidence, response_weights)
+
+    def _node_statistics(self, x):
+        mean = x.mean(dim=1)
+        std = x.std(dim=1, unbiased=False)
+        delta = x[:, -1, :] - x[:, 0, :]
+        abs_mean = x.abs().mean(dim=1)
+        return torch.stack([mean, std, delta, abs_mean], dim=-1)
+
+    def forward(self, x):
+        B, _, C = x.shape
+        if C != self.num_nodes:
+            raise ValueError(
+                f"DirectedSparseChannelGraph: input C={C} != num_nodes={self.num_nodes}"
+            )
+        if C == 1:
+            A = x.new_ones(B, 1, 1)
+            self._sparse_penalty = x.new_tensor(0.0)
+            self._prior_align_loss = x.new_tensor(0.0)
+            return x, A
+
+        state = self.state_encoder(self._node_statistics(x))
+        source_delta, target_delta = state.chunk(2, dim=-1)
+        source = self.source_embedding.unsqueeze(0) + source_delta
+        target = self.target_embedding.unsqueeze(0) + target_delta
+        temperature = F.softplus(self.temperature_raw).clamp_min(0.1)
+        logits = torch.einsum("bpd,btd->bpt", source, target)
+        logits = logits / (math.sqrt(float(self.embedding_dim)) * temperature)
+
+        eye = torch.eye(C, device=x.device, dtype=torch.bool).unsqueeze(0)
+        logits = logits.masked_fill(eye, -1e4)
+        prior = None
+        if self.use_static_prior:
+            prior = self.static_prior.to(device=x.device, dtype=x.dtype)
+            prior = prior.unsqueeze(0).expand(B, -1, -1)
+            if self.static_prior_bias > 0:
+                logits = logits + self.static_prior_bias * (prior > 0).to(logits.dtype)
+
+        dense_weights = torch.softmax(logits, dim=1)
+        dense_weights = torch.nan_to_num(
+            dense_weights,
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+        self._last_dense_weights = dense_weights
+        entropy = -(
+            dense_weights.clamp_min(1e-8) * dense_weights.clamp_min(1e-8).log()
+        ).sum(dim=1).mean()
+        self._sparse_penalty = entropy / max(math.log(float(C)), 1e-8)
+
+        if prior is not None:
+            self._prior_align_loss = F.mse_loss(dense_weights, prior)
+            prior_weight = min(max(self.static_prior_weight, 0.0), 1.0)
+            if prior_weight > 0:
+                dense_weights = (
+                    (1.0 - prior_weight) * dense_weights + prior_weight * prior
+                )
+                dense_weights = dense_weights / dense_weights.sum(
+                    dim=1, keepdim=True
+                ).clamp_min(1e-8)
+        else:
+            self._prior_align_loss = x.new_tensor(0.0)
+
+        topk = min(self.parent_topk, C - 1)
+        topk_idx = torch.topk(dense_weights, k=topk, dim=1).indices
+        mask = torch.zeros_like(dense_weights).scatter_(1, topk_idx, 1.0)
+        A = dense_weights * mask
+        A = A.masked_fill(eye, 0.0)
+        A = A / A.sum(dim=1, keepdim=True).clamp_min(1e-8)
+
+        parent_explanation = self.predict_context(x, A)
+        return parent_explanation, A
+
+
 # ══════════════════════════════════════════════════════════════════
 #  SimplifiedTemporalGraph: §3.1.4 简化时序模块（v11.3 邻近性调制）
 # ══════════════════════════════════════════════════════════════════

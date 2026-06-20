@@ -346,11 +346,17 @@ RESPONSIBILITY_COMPONENT_KEYS = {
     "root": "root_score",
     "event_resp": "event_responsibility_score",
     "event_responsibility": "event_responsibility_score",
+    "response_suppressor": "response_suppressor_score",
+    "response_suppressor_penalty": "response_suppressor_penalty_score",
+    "evidence_fusion": "evidence_fusion_score",
     "onset": "onset_score",
     "mech_resid": "mechanism_residual_score",
     "mechanism_residual": "mechanism_residual_score",
     "graph": "graph_score",
+    "propagation": "propagation_score",
     "source": "source_score",
+    "source_interaction_head": "source_interaction_head_score",
+    "source_consistency_head": "source_consistency_head_score",
 }
 
 
@@ -375,6 +381,13 @@ def responsibility_component_values(items: list[dict]) -> dict[str, list[float]]
         for name, key in RESPONSIBILITY_COMPONENT_KEYS.items()
     }
     values["graph_low"] = [-value for value in values["graph"]]
+    values["propagation_low"] = [-value for value in values["propagation"]]
+    values["response_suppressor_low"] = [
+        -value for value in values["response_suppressor"]
+    ]
+    values["response_suppressor_penalty_low"] = [
+        -value for value in values["response_suppressor_penalty"]
+    ]
     values["response_penalty"] = values["graph"]
     values["source_interaction"] = [
         values["base"][idx] * max(values["onset"][idx], values["mech_resid"][idx])

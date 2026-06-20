@@ -83,6 +83,21 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     # --- v11 VQ Bottleneck 参数 ---
     # --- architecture switches for controlled ablation ---
     "use_channel_graph": True,
+    "channel_graph_evidence_only": False,
+    "channel_graph_type": "adaptive_symmetric",
+    "directed_graph_parent_topk": 5,
+    "directed_graph_embedding_dim": 8,
+    "directed_graph_use_signed_transfer": False,
+    "directed_graph_transfer_mode": "low_rank",
+    "directed_graph_transfer_rank": 8,
+    "directed_graph_transfer_scale": 2.0,
+    "use_channel_graph_reliability": False,
+    "channel_graph_role": "shared",
+    "use_multilag_graph_propagation": False,
+    "graph_propagation_lags": [0, 1, 2, 4, 8],
+    "graph_propagation_lag_mode": "static",
+    "graph_propagation_alignment_temperature": 0.2,
+    "channel_corr_prior_selection_axis": "source",
     "use_temporal_graph": True,
     "use_dynamic_temporal_graph": False,
     "dynamic_temporal_residual_init": 0.1,
@@ -137,6 +152,8 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "source_effect_rank_weight": 1.0,
     "source_effect_effect_rank_weight": 0.5,
     "source_effect_onset_rank_weight": 0.0,
+    "source_effect_graph_alignment_weight": 0.0,
+    "source_effect_graph_reverse_weight": 0.5,
     "source_effect_margin": 0.2,
     "source_effect_onset_margin": 0.2,
     "source_effect_specificity_weight": 0.0,
@@ -179,9 +196,29 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "event_responsibility_rank_weight": 0.5,
     "event_responsibility_effect_suppress_weight": 0.25,
     "event_responsibility_entropy_weight": 0.0,
+    "use_event_route_head": False,
+    "event_route_hidden": 16,
+    "event_route_init": 0.55,
+    "event_route_detach_inputs": True,
+    "event_route_response_penalty": 0.0,
+    "lambda_event_route": 0.0,
+    "event_route_rank_weight": 1.0,
+    "event_route_effect_suppress_weight": 0.25,
+    "event_route_pairwise_effect_weight": 0.50,
+    "event_route_pairwise_effect_margin": 0.15,
+    "event_route_alpha_weight": 0.25,
+    "rca_event_route_weight": 0.0,
+    "use_response_suppressor_head": False,
+    "response_suppressor_hidden": 16,
+    "response_suppressor_detach_inputs": True,
+    "lambda_response_suppressor": 0.0,
+    "response_suppressor_bce_weight": 1.0,
+    "response_suppressor_rank_weight": 0.5,
+    "response_suppressor_source_leak_weight": 0.5,
     "use_evidence_fusion_head": False,
     "evidence_fusion_hidden": 16,
     "evidence_fusion_detach_inputs": False,
+    "evidence_fusion_use_graph_response": False,
     "evidence_fusion_loss_mode": "bce",
     "evidence_fusion_export_mode": "sigmoid",
     "lambda_evidence_fusion": 0.0,
@@ -199,10 +236,20 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "source_interaction_head_effect_suppress_weight": 0.25,
     "source_interaction_head_pairwise_effect_weight": 0.5,
     "source_interaction_head_pairwise_effect_margin": 0.15,
+    "use_source_consistency_head": False,
+    "source_consistency_detach_inputs": True,
+    "lambda_source_consistency_head": 0.0,
+    "source_consistency_head_bce_weight": 0.75,
+    "source_consistency_head_rank_weight": 1.0,
+    "source_consistency_head_effect_suppress_weight": 0.25,
+    "source_consistency_head_pairwise_effect_weight": 0.50,
+    "source_consistency_head_pairwise_effect_margin": 0.15,
     "lambda_source_bottleneck": 0.0,
     "source_bottleneck_bce_weight": 1.0,
     "source_bottleneck_rank_weight": 0.5,
     "source_bottleneck_effect_suppress_weight": 0.5,
+    "source_bottleneck_effect_margin_weight": 0.0,
+    "source_bottleneck_effect_margin": 0.10,
     "source_bottleneck_specificity_weight": 0.0,
     "use_channel_masked_modeling": False,
     "lambda_channel_masked": 0.0,
@@ -234,6 +281,9 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "causal_score_eps": 1e-6,
     "causal_score_mode": "residual",
     "causal_score_tail": "upper",
+    "use_causal_response_evidence": False,
+    "lambda_causal_response": 0.0,
+    "causal_response_margin": 0.10,
     "use_temporal_graph_regularization": False,
     "lambda_temporal_graph_smooth": 0.0,
     "lambda_temporal_graph_locality": 0.0,
@@ -276,6 +326,30 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "mechanism_predictive_blend_init": 0.30,
     "use_source_gate": False,
     "source_gate_init": 0.20,
+    "use_onset_aware_source_gate": False,
+    "source_gate_onset_window": 8,
+    "source_gate_onset_weight": 0.5,
+    "use_dual_expert_fusion": False,
+    "dual_expert_hidden": 16,
+    "dual_expert_graph_init": 0.5,
+    "dual_expert_detach_inputs": True,
+    "lambda_dual_expert_selection": 0.0,
+    "dual_expert_selection_temperature": 0.25,
+    "dual_expert_balance_weight": 0.0,
+    "dual_expert_min_usage": 0.10,
+    "dual_expert_propagated_event_prob": 1.0,
+    "dual_expert_mode_target_weight": 0.0,
+    "use_source_expert_branch": False,
+    "source_expert_hidden": 16,
+    "source_expert_graph_init": 0.5,
+    "source_expert_detach_gate_inputs": True,
+    "source_expert_gradient_checkpoint": False,
+    "source_expert_gate_scope": "time",
+    "lambda_source_expert": 0.0,
+    "lambda_source_expert_gate": 0.0,
+    "source_expert_effect_suppress_weight": 0.25,
+    "source_expert_pairwise_effect_weight": 0.50,
+    "source_expert_pairwise_effect_margin": 0.15,
     "use_channel_temporal_corefinement": False,
     "corefinement_init": 0.10,
     "corefinement_detach_first_pass": True,
@@ -328,6 +402,8 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_causal_weight": 0.0,
     "rca_synthetic_weight": 0.0,
     "rca_source_gate_weight": 0.0,
+    "rca_source_gate_evidence_guard_weight": 0.0,
+    "rca_source_gate_evidence_guard_floor": 0.0,
     "rca_root_score_weight": 0.0,
     "rca_event_responsibility_weight": 0.0,
     "rca_root_score_signal": "prob",
@@ -349,6 +425,11 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_source_interaction_head_ratio": 0.30,
     "rca_source_interaction_head_points": 30,
     "rca_source_interaction_head_top_quantile": 0.80,
+    "rca_source_consistency_head_weight": 0.0,
+    "rca_source_consistency_head_pooling": "head_mean",
+    "rca_source_consistency_head_ratio": 0.30,
+    "rca_source_consistency_head_points": 30,
+    "rca_source_consistency_head_top_quantile": 0.80,
     "rca_source_interaction_weight": 0.0,
     "rca_source_innovation_weight": 0.0,
     "rca_source_innovation_mode": "series",
@@ -380,7 +461,29 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_mechanism_residual_window": 0,
     "rca_mechanism_residual_weight": 0.0,
     "rca_event_component_normalize": False,
+    "rca_event_base_weight": 1.0,
+    "rca_export_score_distribution": "raw",
+    "rca_export_score_distribution_top_m": 0,
+    "rca_export_score_distribution_power": 2.0,
+    "rca_export_score_distribution_tau": 1.0,
+    "rca_export_responsibility_score": False,
+    "rca_export_responsibility_ranking_weight": 0.0,
+    "rca_export_responsibility_pre_weight": 0.0,
+    "rca_export_responsibility_base_weight": 0.0,
+    "rca_export_responsibility_source_gate_weight": 0.0,
+    "rca_export_responsibility_onset_weight": 0.0,
+    "rca_export_responsibility_mechanism_residual_weight": 0.0,
+    "rca_export_responsibility_root_weight": 0.0,
+    "rca_export_responsibility_event_weight": 0.0,
+    "rca_export_responsibility_evidence_fusion_weight": 0.0,
+    "rca_export_responsibility_source_interaction_weight": 0.0,
+    "rca_export_responsibility_graph_low_weight": 0.0,
+    "rca_export_responsibility_response_suppressor_low_weight": 0.0,
+    "rca_responsibility_rerank": False,
     "rca_graph_penalty_weight": 0.0,
+    "rca_response_suppressor_weight": 0.0,
+    "rca_response_suppressor_source_guard_mode": "source_onset",
+    "rca_response_suppressor_source_guard_floor": 0.0,
     "rca_event_head_ratio": 1.0,
     "rca_event_head_points": 0,
     "rca_onset_weight": 0.0,
@@ -409,6 +512,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_event_specificity_secondary_source_gate_weight": 0.0,
     "rca_event_specificity_secondary_mechanism_residual_weight": 0.0,
     "rca_event_specificity_secondary_source_interaction_weight": 0.0,
+    "rca_event_specificity_secondary_source_consistency_head_weight": 0.0,
     "rca_event_specificity_secondary_evidence_fusion_weight": 0.0,
     "rca_adaptive_evidence_rerank": False,
     "rca_adaptive_evidence_top_k": 20,
@@ -425,6 +529,14 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_adaptive_evidence_fallback_original_weight": 1.0,
     "rca_adaptive_evidence_fallback_base_weight": 0.45,
     "rca_adaptive_evidence_fallback_onset_weight": 0.20,
+    "rca_adaptive_evidence_fallback_mechanism_residual_weight": 0.0,
+    "rca_adaptive_evidence_fallback_root_weight": 0.0,
+    "rca_adaptive_evidence_fallback_event_weight": 0.0,
+    "rca_adaptive_evidence_fallback_evidence_fusion_weight": 0.0,
+    "rca_adaptive_evidence_fallback_source_interaction_weight": 0.0,
+    "rca_adaptive_evidence_fallback_source_consistency_weight": 0.0,
+    "rca_adaptive_evidence_fallback_graph_low_weight": 0.0,
+    "rca_adaptive_evidence_fallback_response_suppressor_low_weight": 0.0,
     "rca_topk_rerank": False,
     "rca_topk_rerank_k": 5,
     "rca_topk_rerank_original_weight": 1.0,
@@ -434,6 +546,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_topk_rerank_source_gate_weight": 0.0,
     "rca_topk_rerank_mechanism_residual_weight": 0.0,
     "rca_topk_rerank_source_interaction_weight": 0.0,
+    "rca_topk_rerank_source_consistency_head_weight": 0.0,
     "rca_topk_rerank_graph_penalty_weight": 0.0,
     "rca_topk_rerank_component_scope": "candidate",
     "rca_topk_rerank_keep_primary_top_k": 0,
@@ -445,6 +558,7 @@ DEFAULT_TRANSFORMER_BASED_HYPER_PARAMS = {
     "rca_topk_rerank_secondary_source_gate_weight": 0.0,
     "rca_topk_rerank_secondary_mechanism_residual_weight": 0.0,
     "rca_topk_rerank_secondary_source_interaction_weight": 0.0,
+    "rca_topk_rerank_secondary_source_consistency_head_weight": 0.0,
     "rca_topk_rerank_secondary_graph_penalty_weight": 0.0,
     # --- v11.4 P0-2: POT 阈值参数 ---
     "pot_risk": 1e-4,            # POT EVT 风险水平
@@ -1130,8 +1244,11 @@ class LaGraph:
         self._last_source_gate_channel_scores = None
         self._last_root_score_channel_scores = None
         self._last_event_responsibility_channel_scores = None
+        self._last_event_route_channel_scores = None
+        self._last_response_suppressor_channel_scores = None
         self._last_evidence_fusion_channel_scores = None
         self._last_source_interaction_head_channel_scores = None
+        self._last_source_consistency_head_channel_scores = None
         self._last_synthetic_rca_channel_scores = None
         self._last_channel_names = None
         self._channel_corr_prior = None
@@ -1400,6 +1517,12 @@ class LaGraph:
                 "source_effect_onset_rank_weight": getattr(
                     self.config, "source_effect_onset_rank_weight", None
                 ),
+                "source_effect_graph_alignment_weight": getattr(
+                    self.config, "source_effect_graph_alignment_weight", None
+                ),
+                "source_effect_graph_reverse_weight": getattr(
+                    self.config, "source_effect_graph_reverse_weight", None
+                ),
                 "source_effect_consistency_weight": getattr(
                     self.config, "source_effect_consistency_weight", None
                 ),
@@ -1506,8 +1629,20 @@ class LaGraph:
                 "event_responsibility_effect_suppress_weight": getattr(
                     self.config, "event_responsibility_effect_suppress_weight", None
                 ),
+                "use_response_suppressor_head": getattr(
+                    self.config, "use_response_suppressor_head", None
+                ),
+                "lambda_response_suppressor": getattr(
+                    self.config, "lambda_response_suppressor", None
+                ),
+                "response_suppressor_detach_inputs": getattr(
+                    self.config, "response_suppressor_detach_inputs", None
+                ),
                 "use_evidence_fusion_head": getattr(
                     self.config, "use_evidence_fusion_head", None
+                ),
+                "evidence_fusion_use_graph_response": getattr(
+                    self.config, "evidence_fusion_use_graph_response", None
                 ),
                 "lambda_evidence_fusion": getattr(
                     self.config, "lambda_evidence_fusion", None
@@ -1586,6 +1721,51 @@ class LaGraph:
                 ),
                 "rca_source_interaction_head_top_quantile": getattr(
                     self.config, "rca_source_interaction_head_top_quantile", None
+                ),
+                "use_source_consistency_head": getattr(
+                    self.config, "use_source_consistency_head", None
+                ),
+                "source_consistency_detach_inputs": getattr(
+                    self.config, "source_consistency_detach_inputs", None
+                ),
+                "lambda_source_consistency_head": getattr(
+                    self.config, "lambda_source_consistency_head", None
+                ),
+                "source_consistency_head_bce_weight": getattr(
+                    self.config, "source_consistency_head_bce_weight", None
+                ),
+                "source_consistency_head_rank_weight": getattr(
+                    self.config, "source_consistency_head_rank_weight", None
+                ),
+                "source_consistency_head_effect_suppress_weight": getattr(
+                    self.config,
+                    "source_consistency_head_effect_suppress_weight",
+                    None,
+                ),
+                "source_consistency_head_pairwise_effect_weight": getattr(
+                    self.config,
+                    "source_consistency_head_pairwise_effect_weight",
+                    None,
+                ),
+                "source_consistency_head_pairwise_effect_margin": getattr(
+                    self.config,
+                    "source_consistency_head_pairwise_effect_margin",
+                    None,
+                ),
+                "rca_source_consistency_head_weight": getattr(
+                    self.config, "rca_source_consistency_head_weight", None
+                ),
+                "rca_source_consistency_head_pooling": getattr(
+                    self.config, "rca_source_consistency_head_pooling", None
+                ),
+                "rca_source_consistency_head_ratio": getattr(
+                    self.config, "rca_source_consistency_head_ratio", None
+                ),
+                "rca_source_consistency_head_points": getattr(
+                    self.config, "rca_source_consistency_head_points", None
+                ),
+                "rca_source_consistency_head_top_quantile": getattr(
+                    self.config, "rca_source_consistency_head_top_quantile", None
                 ),
                 "rca_event_responsibility_weight": getattr(
                     self.config, "rca_event_responsibility_weight", None
@@ -1739,6 +1919,11 @@ class LaGraph:
                     "rca_event_specificity_secondary_source_interaction_weight",
                     None,
                 ),
+                "rca_event_specificity_secondary_source_consistency_head_weight": getattr(
+                    self.config,
+                    "rca_event_specificity_secondary_source_consistency_head_weight",
+                    None,
+                ),
                 "rca_event_specificity_secondary_evidence_fusion_weight": getattr(
                     self.config,
                     "rca_event_specificity_secondary_evidence_fusion_weight",
@@ -1799,6 +1984,42 @@ class LaGraph:
                 "rca_adaptive_evidence_fallback_onset_weight": getattr(
                     self.config, "rca_adaptive_evidence_fallback_onset_weight", None
                 ),
+                "rca_adaptive_evidence_fallback_mechanism_residual_weight": getattr(
+                    self.config,
+                    "rca_adaptive_evidence_fallback_mechanism_residual_weight",
+                    None,
+                ),
+                "rca_adaptive_evidence_fallback_root_weight": getattr(
+                    self.config, "rca_adaptive_evidence_fallback_root_weight", None
+                ),
+                "rca_adaptive_evidence_fallback_event_weight": getattr(
+                    self.config, "rca_adaptive_evidence_fallback_event_weight", None
+                ),
+                "rca_adaptive_evidence_fallback_evidence_fusion_weight": getattr(
+                    self.config,
+                    "rca_adaptive_evidence_fallback_evidence_fusion_weight",
+                    None,
+                ),
+                "rca_adaptive_evidence_fallback_source_interaction_weight": getattr(
+                    self.config,
+                    "rca_adaptive_evidence_fallback_source_interaction_weight",
+                    None,
+                ),
+                "rca_adaptive_evidence_fallback_source_consistency_weight": getattr(
+                    self.config,
+                    "rca_adaptive_evidence_fallback_source_consistency_weight",
+                    None,
+                ),
+                "rca_adaptive_evidence_fallback_graph_low_weight": getattr(
+                    self.config,
+                    "rca_adaptive_evidence_fallback_graph_low_weight",
+                    None,
+                ),
+                "rca_adaptive_evidence_fallback_response_suppressor_low_weight": getattr(
+                    self.config,
+                    "rca_adaptive_evidence_fallback_response_suppressor_low_weight",
+                    None,
+                ),
                 "rca_topk_rerank": getattr(self.config, "rca_topk_rerank", None),
                 "rca_topk_rerank_k": getattr(self.config, "rca_topk_rerank_k", None),
                 "rca_topk_rerank_original_weight": getattr(
@@ -1821,6 +2042,11 @@ class LaGraph:
                 ),
                 "rca_topk_rerank_source_interaction_weight": getattr(
                     self.config, "rca_topk_rerank_source_interaction_weight", None
+                ),
+                "rca_topk_rerank_source_consistency_head_weight": getattr(
+                    self.config,
+                    "rca_topk_rerank_source_consistency_head_weight",
+                    None,
                 ),
                 "rca_topk_rerank_graph_penalty_weight": getattr(
                     self.config, "rca_topk_rerank_graph_penalty_weight", None
@@ -1855,6 +2081,11 @@ class LaGraph:
                 "rca_topk_rerank_secondary_source_interaction_weight": getattr(
                     self.config, "rca_topk_rerank_secondary_source_interaction_weight", None
                 ),
+                "rca_topk_rerank_secondary_source_consistency_head_weight": getattr(
+                    self.config,
+                    "rca_topk_rerank_secondary_source_consistency_head_weight",
+                    None,
+                ),
                 "rca_topk_rerank_secondary_graph_penalty_weight": getattr(
                     self.config, "rca_topk_rerank_secondary_graph_penalty_weight", None
                 ),
@@ -1868,6 +2099,41 @@ class LaGraph:
                 "dynamic_temporal_residual_init": getattr(self.config, "dynamic_temporal_residual_init", None),
                 "dynamic_temporal_topk": getattr(self.config, "dynamic_temporal_topk", None),
                 "dynamic_temporal_gate_mode": getattr(self.config, "dynamic_temporal_gate_mode", None),
+                "channel_graph_evidence_only": getattr(
+                    self.config, "channel_graph_evidence_only", None
+                ),
+                "channel_graph_type": getattr(self.config, "channel_graph_type", None),
+                "directed_graph_parent_topk": getattr(
+                    self.config, "directed_graph_parent_topk", None
+                ),
+                "directed_graph_embedding_dim": getattr(
+                    self.config, "directed_graph_embedding_dim", None
+                ),
+                "directed_graph_use_signed_transfer": getattr(
+                    self.config, "directed_graph_use_signed_transfer", None
+                ),
+                "directed_graph_transfer_mode": getattr(
+                    self.config, "directed_graph_transfer_mode", None
+                ),
+                "directed_graph_transfer_rank": getattr(
+                    self.config, "directed_graph_transfer_rank", None
+                ),
+                "directed_graph_transfer_scale": getattr(
+                    self.config, "directed_graph_transfer_scale", None
+                ),
+                "use_channel_graph_reliability": getattr(
+                    self.config, "use_channel_graph_reliability", None
+                ),
+                "channel_graph_role": getattr(self.config, "channel_graph_role", None),
+                "use_multilag_graph_propagation": getattr(
+                    self.config, "use_multilag_graph_propagation", None
+                ),
+                "graph_propagation_lags": getattr(
+                    self.config, "graph_propagation_lags", None
+                ),
+                "graph_propagation_lag_mode": getattr(
+                    self.config, "graph_propagation_lag_mode", None
+                ),
                 "channel_graph_lr_scale": getattr(self.config, "channel_graph_lr_scale", None),
                 "temporal_graph_lr_scale": getattr(self.config, "temporal_graph_lr_scale", None),
                 "score_smoothing_window": getattr(self.config, "score_smoothing_window", None),
@@ -1947,6 +2213,7 @@ class LaGraph:
                         _effect_mask,
                         source_onset_mask,
                         _effect_time_mask,
+                        _propagated_event_mask,
                     ) = self._make_source_effect_synthetic_batch(input_data)
                     synth_rec, _, _, _, _, synth_aux, _ = self.model(synth_data)
                     source_score = None
@@ -2072,27 +2339,45 @@ class LaGraph:
         return loss + weight * F.mse_loss(rec_diff, target_diff)
 
     @staticmethod
-    def _build_channel_corr_prior(train_df: pd.DataFrame, topk: int = 5) -> np.ndarray:
+    def _build_channel_corr_prior(
+        train_df: pd.DataFrame,
+        topk: int = 5,
+        selection_axis: str = "source",
+    ) -> np.ndarray:
         values = np.asarray(train_df.values, dtype=np.float32)
         corr = np.corrcoef(values, rowvar=False)
         corr = np.nan_to_num(np.abs(corr), nan=0.0, posinf=0.0, neginf=0.0)
         np.fill_diagonal(corr, 0.0)
         n_channels = corr.shape[0]
         topk = int(topk or 0)
+        selection_axis = str(selection_axis or "source").lower()
+        if selection_axis not in {"source", "target"}:
+            raise ValueError(
+                f"Unsupported channel correlation selection_axis={selection_axis!r}"
+            )
         if topk > 0 and topk < n_channels:
             keep = np.zeros_like(corr, dtype=bool)
-            idx = np.argpartition(-corr, kth=topk - 1, axis=1)[:, :topk]
-            rows = np.arange(n_channels)[:, None]
-            keep[rows, idx] = True
+            if selection_axis == "target":
+                idx = np.argpartition(-corr, kth=topk - 1, axis=0)[:topk, :]
+                cols = np.arange(n_channels)[None, :]
+                keep[idx, cols] = True
+            else:
+                idx = np.argpartition(-corr, kth=topk - 1, axis=1)[:, :topk]
+                rows = np.arange(n_channels)[:, None]
+                keep[rows, idx] = True
             corr = np.where(keep, corr, 0.0)
-        row_sum = corr.sum(axis=1, keepdims=True)
-        empty = row_sum.squeeze(-1) <= 1e-8
-        corr = np.divide(corr, row_sum, out=np.zeros_like(corr), where=row_sum > 1e-8)
-        if np.any(empty):
-            corr[empty, :] = 1.0 / max(1, n_channels - 1)
-            empty_rows = np.where(empty)[0]
-            corr[empty_rows, empty_rows] = 0.0
-            corr[empty, :] = corr[empty, :] / corr[empty, :].sum(axis=1, keepdims=True).clip(min=1e-8)
+        norm_axis = 0 if selection_axis == "target" else 1
+        sums = corr.sum(axis=norm_axis, keepdims=True)
+        corr = np.divide(corr, sums, out=np.zeros_like(corr), where=sums > 1e-8)
+        if selection_axis == "source":
+            empty = sums.squeeze(-1) <= 1e-8
+            if np.any(empty):
+                corr[empty, :] = 1.0 / max(1, n_channels - 1)
+                empty_rows = np.where(empty)[0]
+                corr[empty_rows, empty_rows] = 0.0
+                corr[empty, :] = corr[empty, :] / corr[empty, :].sum(
+                    axis=1, keepdims=True
+                ).clip(min=1e-8)
         return corr.astype(np.float32)
 
 
@@ -2209,6 +2494,7 @@ class LaGraph:
         effect_channel_mask = torch.zeros(B, C, device=device, dtype=torch.float32)
         source_onset_mask = torch.zeros(B, L, device=device, dtype=torch.float32)
         effect_time_mask = torch.zeros(B, L, device=device, dtype=torch.float32)
+        propagated_event_mask = torch.zeros(B, device=device, dtype=torch.float32)
 
         min_len = int(getattr(self.config, "source_effect_min_len", 8) or 8)
         max_len = int(getattr(self.config, "source_effect_max_len", 30) or 30)
@@ -2221,6 +2507,16 @@ class LaGraph:
         neighbor_topk = min(max(0, int(getattr(self.config, "source_effect_neighbor_topk", 3) or 0)), C)
         effect_strength = float(getattr(self.config, "source_effect_strength", 0.35) or 0.35)
         delay_max = max(0, int(getattr(self.config, "source_effect_delay_max", 6) or 0))
+        propagated_event_prob = min(
+            max(
+                float(
+                    getattr(self.config, "dual_expert_propagated_event_prob", 1.0)
+                    or 0.0
+                ),
+                0.0,
+            ),
+            1.0,
+        )
         prior = getattr(self, "_channel_corr_prior", None)
         if prior is not None:
             prior = np.asarray(prior, dtype=np.float32)
@@ -2260,12 +2556,15 @@ class LaGraph:
 
             neighbors = []
             source_onset_end = end
-            if prior is not None and neighbor_topk > 0:
+            use_propagated_event = bool(
+                torch.rand((), device=device).item() < propagated_event_prob
+            )
+            if use_propagated_event and prior is not None and neighbor_topk > 0:
                 scores = prior[roots_cpu].max(axis=0)
                 scores[roots_cpu] = 0.0
                 top_idx = np.argsort(-scores)[:neighbor_topk]
                 neighbors = [int(idx) for idx in top_idx if scores[idx] > 0]
-            if not neighbors and neighbor_topk > 0:
+            if use_propagated_event and not neighbors and neighbor_topk > 0:
                 candidates = [idx for idx in range(C) if idx not in set(roots_cpu)]
                 if candidates:
                     perm = torch.randperm(len(candidates), device=device)[:neighbor_topk].detach().cpu().tolist()
@@ -2290,13 +2589,22 @@ class LaGraph:
                     x[b, eff_start:end, effects] = x[b, eff_start:end, effects] + eff_ramp * eff_amp
                     effect_channel_mask[b, effects] = 1.0
                     effect_time_mask[b, eff_start:end] = 1.0
+                    propagated_event_mask[b] = 1.0
 
             event_mask[b, start:end] = 1.0
             source_onset_mask[b, start:max(start + 1, source_onset_end)] = 1.0
             source_channel_mask[b, roots] = 1.0
             effect_channel_mask[b, roots] = 0.0
 
-        return x, event_mask, source_channel_mask, effect_channel_mask, source_onset_mask, effect_time_mask
+        return (
+            x,
+            event_mask,
+            source_channel_mask,
+            effect_channel_mask,
+            source_onset_mask,
+            effect_time_mask,
+            propagated_event_mask,
+        )
 
     def _synthetic_anomaly_aux_loss(self, input_data, normal_aux_losses, batch_idx=None):
         use_aux = bool(getattr(self.config, "use_synthetic_anomaly_aux", False))
@@ -2454,6 +2762,34 @@ class LaGraph:
             return source_scores.new_tensor(0.0)
         return torch.stack(losses).mean()
 
+    def _effect_over_source_margin_loss(
+        self,
+        effect_scores,
+        source_scores,
+        source_mask,
+        effect_mask,
+        margin,
+    ):
+        """Require delayed effect variables to gain more cross-channel support."""
+        margin = max(float(margin), 0.0)
+        losses = []
+        for b in range(effect_scores.shape[0]):
+            roots = source_mask[b] > 0.5
+            effects = (effect_mask[b] > 0.5) & (~roots)
+            if roots.sum() == 0 or effects.sum() == 0:
+                continue
+            source_support = source_scores[b, roots].mean()
+            effect_support = torch.topk(
+                effect_scores[b, effects],
+                k=min(3, int(effects.sum().item())),
+            ).values.mean()
+            losses.append(
+                F.relu(effect_scores.new_tensor(margin) + source_support - effect_support)
+            )
+        if not losses:
+            return effect_scores.new_tensor(0.0)
+        return torch.stack(losses).mean()
+
     def _weighted_channel_bce(self, probs, target):
         probs = probs.clamp(1e-5, 1.0 - 1e-5)
         pos = target.sum().clamp_min(1.0)
@@ -2544,6 +2880,13 @@ class LaGraph:
         effect_suppress_weight = float(
             getattr(self.config, "source_bottleneck_effect_suppress_weight", 0.5) or 0.5
         )
+        effect_margin_weight = float(
+            getattr(self.config, "source_bottleneck_effect_margin_weight", 0.0)
+            or 0.0
+        )
+        effect_margin = float(
+            getattr(self.config, "source_bottleneck_effect_margin", 0.10) or 0.10
+        )
         specificity_weight = float(
             getattr(self.config, "source_bottleneck_specificity_weight", 0.0) or 0.0
         )
@@ -2571,7 +2914,7 @@ class LaGraph:
             self._record_loss_debug("source_bottleneck_bce_inner_weighted", bce_weight * bce)
 
         onset_gate_scores = None
-        if rank_weight > 0 or specificity_weight > 0:
+        if rank_weight > 0 or specificity_weight > 0 or effect_margin_weight > 0:
             onset_sum = source_onset_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
             onset_gate_scores = (
                 gate_prob * source_onset_mask.unsqueeze(-1).to(dtype=gate_prob.dtype)
@@ -2598,11 +2941,17 @@ class LaGraph:
                 specificity_weight * specificity_loss,
             )
 
-        if effect_suppress_weight > 0 and effect_mask.sum() > 0 and effect_time_mask.sum() > 0:
+        effect_gate_scores = None
+        if (
+            (effect_suppress_weight > 0 or effect_margin_weight > 0)
+            and effect_mask.sum() > 0
+            and effect_time_mask.sum() > 0
+        ):
             effect_sum = effect_time_mask.sum(dim=1, keepdim=True).clamp_min(1.0)
             effect_gate_scores = (
                 gate_prob * effect_time_mask.unsqueeze(-1).to(dtype=gate_prob.dtype)
             ).sum(dim=1) / effect_sum
+        if effect_suppress_weight > 0 and effect_gate_scores is not None:
             suppress = (
                 effect_gate_scores * effect_mask.to(dtype=gate_prob.dtype)
             ).sum() / effect_mask.sum().clamp_min(1.0)
@@ -2612,6 +2961,30 @@ class LaGraph:
                 "source_bottleneck_effect_suppress_inner_weighted",
                 effect_suppress_weight * suppress,
             )
+        if (
+            effect_margin_weight > 0
+            and onset_gate_scores is not None
+            and effect_gate_scores is not None
+        ):
+            source_mask_float = source_mask.to(dtype=gate_prob.dtype)
+            effect_mask_bool = effect_mask.to(dtype=torch.bool)
+            valid = (source_mask.sum(dim=1) > 0) & (effect_mask.sum(dim=1) > 0)
+            if valid.any():
+                source_count = source_mask_float.sum(dim=1).clamp_min(1.0)
+                source_mean = (onset_gate_scores * source_mask_float).sum(dim=1) / source_count
+                masked_effect = effect_gate_scores.masked_fill(~effect_mask_bool, -1.0)
+                effect_top = masked_effect.max(dim=1).values
+                margin_loss = F.relu(effect_top - source_mean + effect_margin)
+                margin_loss = margin_loss[valid].mean()
+                total = total + effect_margin_weight * margin_loss
+                self._record_loss_debug(
+                    "source_bottleneck_effect_margin_raw",
+                    margin_loss,
+                )
+                self._record_loss_debug(
+                    "source_bottleneck_effect_margin_inner_weighted",
+                    effect_margin_weight * margin_loss,
+                )
 
         scaled = weight * total
         self._record_loss_debug("source_bottleneck_total_inner", total)
@@ -2857,13 +3230,17 @@ class LaGraph:
             effect_mask,
             source_onset_mask,
             effect_time_mask,
+            propagated_event_mask,
         ) = self._make_source_effect_synthetic_batch(input_data)
         synth_rec, _, _, _, _, synth_aux, _ = self.model(
             synth_data,
             return_root_score=(
                 bool(getattr(self.config, "use_root_score_head", False))
                 or bool(getattr(self.config, "use_evidence_fusion_head", False))
+                or bool(getattr(self.config, "use_response_suppressor_head", False))
                 or bool(getattr(self.config, "use_source_interaction_head", False))
+                or bool(getattr(self.config, "use_source_consistency_head", False))
+                or bool(getattr(self.config, "use_event_route_head", False))
             ),
         )
         if not synth_aux:
@@ -2879,9 +3256,20 @@ class LaGraph:
         root_response_response_evidence = synth_aux.get("root_response_response_evidence")
         root_response_pairwise_relation = synth_aux.get("root_response_pairwise_relation")
         event_responsibility_logits = synth_aux.get("event_responsibility_logits")
+        event_route_score = synth_aux.get("event_route_score")
+        event_route_alpha = synth_aux.get("event_route_alpha")
+        dual_expert_graph_gate = synth_aux.get("dual_expert_graph_gate")
+        dual_expert_independent_evidence = synth_aux.get(
+            "dual_expert_independent_evidence"
+        )
+        dual_expert_graph_evidence = synth_aux.get("dual_expert_graph_evidence")
+        response_suppressor_logits = synth_aux.get("response_suppressor_logits")
         evidence_fusion_logits = synth_aux.get("evidence_fusion_logits")
         evidence_fusion_weights = synth_aux.get("evidence_fusion_weights")
         source_interaction_logits = synth_aux.get("source_interaction_logits")
+        source_consistency_logits = synth_aux.get("source_consistency_logits")
+        causal_innovation = synth_aux.get("causal_channel_error")
+        causal_response_support = synth_aux.get("causal_response_support")
         gate_channel_scores = None
         if gate_prob is not None:
             gate_channel_scores = (gate_prob * event_mask.unsqueeze(-1)).sum(dim=1) / mask_sum
@@ -2930,14 +3318,377 @@ class LaGraph:
         event_responsibility_weight = float(
             getattr(self.config, "lambda_event_responsibility", 0.0) or 0.0
         )
+        response_suppressor_weight = float(
+            getattr(self.config, "lambda_response_suppressor", 0.0) or 0.0
+        )
         evidence_fusion_weight = float(
             getattr(self.config, "lambda_evidence_fusion", 0.0) or 0.0
         )
         source_interaction_head_weight = float(
             getattr(self.config, "lambda_source_interaction_head", 0.0) or 0.0
         )
+        source_consistency_head_weight = float(
+            getattr(self.config, "lambda_source_consistency_head", 0.0) or 0.0
+        )
+        event_route_weight = float(
+            getattr(self.config, "lambda_event_route", 0.0) or 0.0
+        )
+        graph_alignment_weight = float(
+            getattr(self.config, "source_effect_graph_alignment_weight", 0.0) or 0.0
+        )
+        graph_reverse_weight = float(
+            getattr(self.config, "source_effect_graph_reverse_weight", 0.5) or 0.0
+        )
 
         total = input_data.new_tensor(0.0)
+        causal_response_weight = float(
+            getattr(self.config, "lambda_causal_response", 0.0) or 0.0
+        )
+        if (
+            causal_response_weight > 0
+            and causal_innovation is not None
+            and causal_response_support is not None
+        ):
+            source_innovation = (
+                causal_innovation
+                * source_onset_mask.unsqueeze(-1).to(dtype=causal_innovation.dtype)
+            ).sum(dim=1) / onset_sum.to(dtype=causal_innovation.dtype)
+            effect_support = (
+                causal_response_support
+                * effect_time_mask.unsqueeze(-1).to(dtype=causal_response_support.dtype)
+            ).sum(dim=1) / effect_time_sum.to(dtype=causal_response_support.dtype)
+            source_support = (
+                causal_response_support
+                * source_onset_mask.unsqueeze(-1).to(dtype=causal_response_support.dtype)
+            ).sum(dim=1) / onset_sum.to(dtype=causal_response_support.dtype)
+            innovation_rank = self._synthetic_rca_ranking_loss(
+                source_innovation,
+                source_mask,
+            )
+            response_rank = self._effect_over_source_margin_loss(
+                effect_support,
+                source_support,
+                source_mask,
+                effect_mask,
+                getattr(self.config, "causal_response_margin", 0.10),
+            )
+            causal_response_loss = innovation_rank + response_rank
+            total = total + causal_response_weight * causal_response_loss
+            self._record_loss_debug("causal_response_innovation_rank", innovation_rank)
+            self._record_loss_debug("causal_response_effect_rank", response_rank)
+            self._record_loss_debug(
+                "causal_response_inner_weighted",
+                causal_response_weight * causal_response_loss,
+            )
+        dual_expert_selection_weight = float(
+            getattr(self.config, "lambda_dual_expert_selection", 0.0) or 0.0
+        )
+        if (
+            dual_expert_selection_weight > 0
+            and dual_expert_graph_gate is not None
+            and dual_expert_independent_evidence is not None
+            and dual_expert_graph_evidence is not None
+        ):
+            def _expert_source_effect_quality(evidence):
+                source_scores = (
+                    evidence
+                    * source_onset_mask.unsqueeze(-1).to(dtype=evidence.dtype)
+                ).sum(dim=1) / onset_sum.to(dtype=evidence.dtype)
+                effect_scores = (
+                    evidence
+                    * effect_time_mask.unsqueeze(-1).to(dtype=evidence.dtype)
+                ).sum(dim=1) / effect_time_sum.to(dtype=evidence.dtype)
+                joined = torch.cat([source_scores, effect_scores], dim=-1)
+                center = joined.mean(dim=-1, keepdim=True)
+                scale = joined.std(dim=-1, keepdim=True, unbiased=False).clamp_min(1e-6)
+                source_scores = (source_scores - center) / scale
+                effect_scores = (effect_scores - center) / scale
+                quality = []
+                margin = 0.15
+                for b in range(source_scores.shape[0]):
+                    roots = source_mask[b] > 0.5
+                    non_roots = ~roots
+                    if roots.sum() == 0 or non_roots.sum() == 0:
+                        quality.append(source_scores.new_tensor(0.0))
+                        continue
+                    root_score = source_scores[b, roots].mean()
+                    hard_non_root = torch.topk(
+                        source_scores[b, non_roots],
+                        k=min(5, int(non_roots.sum().item())),
+                    ).values.mean()
+                    source_rank = F.relu(
+                        source_scores.new_tensor(margin) + hard_non_root - root_score
+                    )
+                    effects = (effect_mask[b] > 0.5) & non_roots
+                    if effects.sum() > 0:
+                        hard_effect = torch.topk(
+                            effect_scores[b, effects],
+                            k=min(3, int(effects.sum().item())),
+                        ).values.mean()
+                        response_rank = F.relu(
+                            source_scores.new_tensor(margin) + hard_effect - root_score
+                        )
+                    else:
+                        response_rank = source_scores.new_tensor(0.0)
+                    quality.append(source_rank + 0.5 * response_rank)
+                return torch.stack(quality)
+
+            independent_quality = _expert_source_effect_quality(
+                dual_expert_independent_evidence
+            )
+            graph_quality = _expert_source_effect_quality(dual_expert_graph_evidence)
+            temperature = max(
+                float(
+                    getattr(
+                        self.config,
+                        "dual_expert_selection_temperature",
+                        0.25,
+                    )
+                    or 0.25
+                ),
+                1e-3,
+            )
+            quality_graph_target = torch.softmax(
+                torch.stack([-independent_quality, -graph_quality], dim=-1)
+                / temperature,
+                dim=-1,
+            )[:, 1].detach()
+            mode_target_weight = min(
+                max(
+                    float(
+                        getattr(
+                            self.config,
+                            "dual_expert_mode_target_weight",
+                            0.0,
+                        )
+                        or 0.0
+                    ),
+                    0.0,
+                ),
+                1.0,
+            )
+            graph_target = (
+                mode_target_weight
+                * propagated_event_mask.to(dtype=quality_graph_target.dtype)
+                + (1.0 - mode_target_weight) * quality_graph_target
+            ).detach()
+            graph_gate_source = (
+                dual_expert_graph_gate.squeeze(-1)
+                * source_onset_mask.to(dtype=dual_expert_graph_gate.dtype)
+            ).sum(dim=1) / onset_sum.to(dtype=dual_expert_graph_gate.dtype).squeeze(-1)
+            selection_loss = F.binary_cross_entropy(
+                graph_gate_source.clamp(1e-5, 1.0 - 1e-5),
+                graph_target.to(dtype=graph_gate_source.dtype),
+            )
+            total = total + dual_expert_selection_weight * selection_loss
+            self._record_loss_debug(
+                "dual_expert_selection_raw",
+                selection_loss,
+            )
+            self._record_loss_debug(
+                "dual_expert_selection_inner_weighted",
+                dual_expert_selection_weight * selection_loss,
+            )
+            self._record_loss_debug(
+                "dual_expert_graph_target_mean",
+                graph_target.mean(),
+            )
+            self._record_loss_debug(
+                "dual_expert_quality_graph_target_mean",
+                quality_graph_target.mean(),
+            )
+            self._record_loss_debug(
+                "dual_expert_propagated_event_mean",
+                propagated_event_mask.mean(),
+            )
+            self._record_loss_debug(
+                "dual_expert_independent_quality_mean",
+                independent_quality.detach().mean(),
+            )
+            self._record_loss_debug(
+                "dual_expert_graph_quality_mean",
+                graph_quality.detach().mean(),
+            )
+
+            balance_weight = float(
+                getattr(self.config, "dual_expert_balance_weight", 0.0) or 0.0
+            )
+            if balance_weight > 0:
+                min_usage = min(
+                    max(
+                        float(
+                            getattr(self.config, "dual_expert_min_usage", 0.10)
+                            or 0.10
+                        ),
+                        0.0,
+                    ),
+                    0.5,
+                )
+                usage = dual_expert_graph_gate.mean()
+                balance_loss = (
+                    F.relu(usage.new_tensor(min_usage) - usage).pow(2)
+                    + F.relu(usage - usage.new_tensor(1.0 - min_usage)).pow(2)
+                )
+                total = total + balance_weight * balance_loss
+                self._record_loss_debug("dual_expert_balance_raw", balance_loss)
+                self._record_loss_debug(
+                    "dual_expert_balance_inner_weighted",
+                    balance_weight * balance_loss,
+                )
+        source_expert_logits = synth_aux.get("source_expert_logits")
+        source_expert_graph_gate = synth_aux.get("source_expert_graph_gate")
+        source_expert_weight = float(
+            getattr(self.config, "lambda_source_expert", 0.0) or 0.0
+        )
+        if source_expert_logits is not None and source_expert_weight > 0:
+            source_expert_prob = torch.sigmoid(source_expert_logits)
+            source_expert_scores = (
+                source_expert_prob
+                * source_onset_mask.unsqueeze(-1).to(dtype=source_expert_prob.dtype)
+            ).sum(dim=1) / onset_sum.to(dtype=source_expert_prob.dtype)
+            source_expert_bce = self._weighted_channel_bce(
+                source_expert_scores,
+                source_mask,
+            )
+            source_expert_rank = self._synthetic_rca_ranking_loss(
+                source_expert_scores,
+                source_mask,
+            )
+            source_expert_total = source_expert_bce + source_expert_rank
+            effect_scores = None
+            if effect_mask.sum() > 0 and effect_time_mask.sum() > 0:
+                effect_scores = (
+                    source_expert_prob
+                    * effect_time_mask.unsqueeze(-1).to(dtype=source_expert_prob.dtype)
+                ).sum(dim=1) / effect_time_sum.to(dtype=source_expert_prob.dtype)
+                suppress_weight = float(
+                    getattr(
+                        self.config,
+                        "source_expert_effect_suppress_weight",
+                        0.25,
+                    )
+                    or 0.0
+                )
+                if suppress_weight > 0:
+                    source_expert_suppress = (
+                        effect_scores * effect_mask.to(dtype=effect_scores.dtype)
+                    ).sum() / effect_mask.sum().clamp_min(1.0)
+                    source_expert_total = (
+                        source_expert_total
+                        + suppress_weight * source_expert_suppress
+                    )
+                    self._record_loss_debug(
+                        "source_expert_effect_suppress_raw",
+                        source_expert_suppress,
+                    )
+                pairwise_weight = float(
+                    getattr(
+                        self.config,
+                        "source_expert_pairwise_effect_weight",
+                        0.50,
+                    )
+                    or 0.0
+                )
+                if pairwise_weight > 0:
+                    source_expert_pairwise = self._source_effect_pairwise_margin_loss(
+                        source_expert_scores,
+                        effect_scores,
+                        source_mask,
+                        effect_mask,
+                        float(
+                            getattr(
+                                self.config,
+                                "source_expert_pairwise_effect_margin",
+                                0.15,
+                            )
+                            or 0.15
+                        ),
+                    )
+                    source_expert_total = (
+                        source_expert_total
+                        + pairwise_weight * source_expert_pairwise
+                    )
+                    self._record_loss_debug(
+                        "source_expert_pairwise_effect_raw",
+                        source_expert_pairwise,
+                    )
+            total = total + source_expert_weight * source_expert_total
+            self._record_loss_debug("source_expert_bce_raw", source_expert_bce)
+            self._record_loss_debug("source_expert_rank_raw", source_expert_rank)
+            self._record_loss_debug(
+                "source_expert_inner_weighted",
+                source_expert_weight * source_expert_total,
+            )
+
+        source_expert_gate_weight = float(
+            getattr(self.config, "lambda_source_expert_gate", 0.0) or 0.0
+        )
+        if source_expert_graph_gate is not None and source_expert_gate_weight > 0:
+            gate_scope = str(
+                getattr(self.config, "source_expert_gate_scope", "time") or "time"
+            ).lower()
+            if gate_scope == "event":
+                source_expert_gate_onset = source_expert_graph_gate.reshape(
+                    source_expert_graph_gate.shape[0],
+                    -1,
+                ).mean(dim=1)
+            else:
+                source_expert_gate_onset = (
+                    source_expert_graph_gate.squeeze(-1)
+                    * source_onset_mask.to(dtype=source_expert_graph_gate.dtype)
+                ).sum(dim=1) / onset_sum.to(dtype=source_expert_graph_gate.dtype).squeeze(-1)
+            source_expert_gate_loss = F.binary_cross_entropy(
+                source_expert_gate_onset.clamp(1e-5, 1.0 - 1e-5),
+                propagated_event_mask.to(dtype=source_expert_gate_onset.dtype),
+            )
+            total = total + source_expert_gate_weight * source_expert_gate_loss
+            self._record_loss_debug(
+                "source_expert_gate_raw",
+                source_expert_gate_loss,
+            )
+            self._record_loss_debug(
+                "source_expert_gate_inner_weighted",
+                source_expert_gate_weight * source_expert_gate_loss,
+            )
+            self._record_loss_debug(
+                "source_expert_gate_mean",
+                source_expert_gate_onset.detach().mean(),
+            )
+            self._record_loss_debug(
+                "source_expert_gate_target_mean",
+                propagated_event_mask.mean(),
+            )
+        dense_graph = synth_aux.get("channel_graph_dense")
+        if (
+            graph_alignment_weight > 0
+            and dense_graph is not None
+            and effect_mask.sum() > 0
+        ):
+            source_parent = source_mask.to(dtype=dense_graph.dtype).unsqueeze(-1)
+            effect_target = effect_mask.to(dtype=dense_graph.dtype)
+            source_to_target = (dense_graph * source_parent).sum(dim=1)
+            forward_loss = -(
+                effect_target * torch.log(source_to_target.clamp_min(1e-6))
+            ).sum() / effect_target.sum().clamp_min(1.0)
+            graph_alignment = forward_loss
+            self._record_loss_debug("source_effect_graph_forward_raw", forward_loss)
+
+            if graph_reverse_weight > 0:
+                effect_parent = effect_mask.to(dtype=dense_graph.dtype).unsqueeze(-1)
+                source_target = source_mask.to(dtype=dense_graph.dtype)
+                reverse_to_source = (dense_graph * effect_parent).sum(dim=1)
+                reverse_loss = -(
+                    source_target
+                    * torch.log((1.0 - reverse_to_source).clamp_min(1e-6))
+                ).sum() / source_target.sum().clamp_min(1.0)
+                graph_alignment = graph_alignment + graph_reverse_weight * reverse_loss
+                self._record_loss_debug("source_effect_graph_reverse_raw", reverse_loss)
+
+            total = total + graph_alignment_weight * graph_alignment
+            self._record_loss_debug(
+                "source_effect_graph_inner_weighted",
+                graph_alignment_weight * graph_alignment,
+            )
         if gate_channel_scores is not None:
             gate_bce = self._weighted_channel_bce(gate_channel_scores, source_mask)
             total = total + bce_weight * gate_bce
@@ -3156,6 +3907,61 @@ class LaGraph:
             self._record_loss_debug(
                 "event_responsibility_inner_weighted",
                 event_responsibility_weight * resp_total,
+            )
+        if response_suppressor_logits is not None and response_suppressor_weight > 0:
+            response_focus = effect_time_mask
+            response_focus_sum = effect_time_sum
+            if response_focus.sum() <= 0:
+                response_focus = event_mask
+                response_focus_sum = mask_sum
+            response_logits = (
+                response_suppressor_logits
+                * response_focus.unsqueeze(-1).to(dtype=response_suppressor_logits.dtype)
+            ).sum(dim=1) / response_focus_sum.to(dtype=response_suppressor_logits.dtype)
+            response_target = effect_mask.to(dtype=response_logits.dtype)
+            pos = response_target.sum().clamp_min(1.0)
+            neg = (response_target.numel() - response_target.sum()).clamp_min(1.0)
+            pos_weight = (neg / pos).clamp(1.0, 20.0)
+            response_bce = F.binary_cross_entropy_with_logits(
+                response_logits,
+                response_target,
+                pos_weight=pos_weight,
+            )
+            response_prob = torch.sigmoid(response_logits)
+            response_rank = self._synthetic_rca_ranking_loss(
+                response_prob,
+                effect_mask,
+            )
+            response_total = (
+                float(getattr(self.config, "response_suppressor_bce_weight", 1.0) or 1.0)
+                * response_bce
+                + float(getattr(self.config, "response_suppressor_rank_weight", 0.5) or 0.0)
+                * response_rank
+            )
+            leak_weight = float(
+                getattr(self.config, "response_suppressor_source_leak_weight", 0.5)
+                or 0.0
+            )
+            if leak_weight > 0 and source_mask.sum() > 0 and source_onset_mask.sum() > 0:
+                leak_prob_time = torch.sigmoid(response_suppressor_logits)
+                source_leak_scores = (
+                    leak_prob_time
+                    * source_onset_mask.unsqueeze(-1).to(dtype=leak_prob_time.dtype)
+                ).sum(dim=1) / onset_sum.to(dtype=leak_prob_time.dtype)
+                source_leak = (
+                    source_leak_scores * source_mask.to(dtype=leak_prob_time.dtype)
+                ).sum() / source_mask.sum().clamp_min(1.0)
+                response_total = response_total + leak_weight * source_leak
+                self._record_loss_debug(
+                    "response_suppressor_source_leak_raw",
+                    source_leak,
+                )
+            total = total + response_suppressor_weight * response_total
+            self._record_loss_debug("response_suppressor_bce_raw", response_bce)
+            self._record_loss_debug("response_suppressor_rank_raw", response_rank)
+            self._record_loss_debug(
+                "response_suppressor_inner_weighted",
+                response_suppressor_weight * response_total,
             )
         if evidence_fusion_logits is not None and evidence_fusion_weight > 0:
             focus_mask = source_onset_mask
@@ -3380,6 +4186,192 @@ class LaGraph:
             self._record_loss_debug(
                 "source_interaction_head_inner_weighted",
                 source_interaction_head_weight * interaction_total,
+            )
+        if source_consistency_logits is not None and source_consistency_head_weight > 0:
+            consistency_target = (
+                source_onset_mask.unsqueeze(-1).to(dtype=source_consistency_logits.dtype)
+                * source_mask.unsqueeze(1).to(dtype=source_consistency_logits.dtype)
+            )
+            consistency_focus = event_mask.unsqueeze(-1).to(
+                dtype=source_consistency_logits.dtype
+            ).expand_as(source_consistency_logits)
+            pos = (consistency_target * consistency_focus).sum().clamp_min(1.0)
+            neg = ((1.0 - consistency_target) * consistency_focus).sum().clamp_min(1.0)
+            pos_weight = (neg / pos).clamp(1.0, 20.0)
+            consistency_bce = F.binary_cross_entropy_with_logits(
+                source_consistency_logits,
+                consistency_target,
+                pos_weight=pos_weight,
+                reduction="none",
+            )
+            consistency_bce = (
+                consistency_bce * consistency_focus
+            ).sum() / consistency_focus.sum().clamp_min(1.0)
+            consistency_prob = torch.sigmoid(source_consistency_logits)
+            consistency_onset_scores = (
+                consistency_prob
+                * source_onset_mask.unsqueeze(-1).to(dtype=consistency_prob.dtype)
+            ).sum(dim=1) / onset_sum
+            consistency_rank = self._synthetic_rca_ranking_loss(
+                consistency_onset_scores,
+                source_mask,
+            )
+            consistency_total = (
+                float(getattr(self.config, "source_consistency_head_bce_weight", 0.75) or 0.0)
+                * consistency_bce
+                + float(getattr(self.config, "source_consistency_head_rank_weight", 1.0) or 0.0)
+                * consistency_rank
+            )
+            suppress_weight = float(
+                getattr(self.config, "source_consistency_head_effect_suppress_weight", 0.25)
+                or 0.0
+            )
+            if suppress_weight > 0 and effect_mask.sum() > 0 and effect_time_mask.sum() > 0:
+                consistency_effect_scores = (
+                    consistency_prob
+                    * effect_time_mask.unsqueeze(-1).to(dtype=consistency_prob.dtype)
+                ).sum(dim=1) / effect_time_sum
+                consistency_effect_suppress = (
+                    consistency_effect_scores * effect_mask.to(dtype=consistency_prob.dtype)
+                ).sum() / effect_mask.sum().clamp_min(1.0)
+                consistency_total = (
+                    consistency_total + suppress_weight * consistency_effect_suppress
+                )
+                self._record_loss_debug(
+                    "source_consistency_head_effect_suppress_raw",
+                    consistency_effect_suppress,
+                )
+            pairwise_effect_weight = float(
+                getattr(self.config, "source_consistency_head_pairwise_effect_weight", 0.50)
+                or 0.0
+            )
+            if pairwise_effect_weight > 0 and effect_mask.sum() > 0 and effect_time_mask.sum() > 0:
+                source_time = source_onset_mask.to(dtype=source_consistency_logits.dtype)
+                effect_time = effect_time_mask.to(dtype=source_consistency_logits.dtype)
+                consistency_source_scores = torch.einsum(
+                    "blc,bl->bc",
+                    source_consistency_logits,
+                    source_time,
+                ) / onset_sum.to(dtype=source_consistency_logits.dtype)
+                consistency_effect_scores = torch.einsum(
+                    "blc,bl->bc",
+                    source_consistency_logits,
+                    effect_time,
+                ) / effect_time_sum.to(dtype=source_consistency_logits.dtype)
+                consistency_pairwise = self._source_effect_pairwise_margin_loss(
+                    consistency_source_scores,
+                    consistency_effect_scores,
+                    source_mask,
+                    effect_mask,
+                    float(
+                        getattr(
+                            self.config,
+                            "source_consistency_head_pairwise_effect_margin",
+                            0.15,
+                        )
+                        or 0.15
+                    ),
+                )
+                consistency_total = (
+                    consistency_total + pairwise_effect_weight * consistency_pairwise
+                )
+                self._record_loss_debug(
+                    "source_consistency_head_pairwise_effect_raw",
+                    consistency_pairwise,
+                )
+            total = total + source_consistency_head_weight * consistency_total
+            self._record_loss_debug("source_consistency_head_bce_raw", consistency_bce)
+            self._record_loss_debug("source_consistency_head_rank_raw", consistency_rank)
+            self._record_loss_debug(
+                "source_consistency_head_inner_weighted",
+                source_consistency_head_weight * consistency_total,
+            )
+        if event_route_score is not None and event_route_weight > 0:
+            route_source_scores = (
+                event_route_score
+                * source_onset_mask.unsqueeze(-1).to(dtype=event_route_score.dtype)
+            ).sum(dim=1) / onset_sum.to(dtype=event_route_score.dtype)
+            route_rank_weight = float(
+                getattr(self.config, "event_route_rank_weight", 1.0) or 0.0
+            )
+            route_total = route_source_scores.new_tensor(0.0)
+            route_rank = self._synthetic_rca_ranking_loss(
+                route_source_scores,
+                source_mask,
+            )
+            route_total = route_total + route_rank_weight * route_rank
+            self._record_loss_debug("event_route_rank_raw", route_rank)
+
+            route_effect_scores = None
+            if effect_mask.sum() > 0 and effect_time_mask.sum() > 0:
+                route_effect_scores = (
+                    event_route_score
+                    * effect_time_mask.unsqueeze(-1).to(dtype=event_route_score.dtype)
+                ).sum(dim=1) / effect_time_sum.to(dtype=event_route_score.dtype)
+                suppress_weight = float(
+                    getattr(self.config, "event_route_effect_suppress_weight", 0.25)
+                    or 0.0
+                )
+                if suppress_weight > 0:
+                    route_effect_suppress = (
+                        route_effect_scores
+                        * effect_mask.to(dtype=route_effect_scores.dtype)
+                    ).sum() / effect_mask.sum().clamp_min(1.0)
+                    route_total = route_total + suppress_weight * route_effect_suppress
+                    self._record_loss_debug(
+                        "event_route_effect_suppress_raw",
+                        route_effect_suppress,
+                    )
+                pairwise_weight = float(
+                    getattr(self.config, "event_route_pairwise_effect_weight", 0.50)
+                    or 0.0
+                )
+                if pairwise_weight > 0:
+                    route_pairwise = self._source_effect_pairwise_margin_loss(
+                        route_source_scores,
+                        route_effect_scores,
+                        source_mask,
+                        effect_mask,
+                        float(
+                            getattr(
+                                self.config,
+                                "event_route_pairwise_effect_margin",
+                                0.15,
+                            )
+                            or 0.15
+                        ),
+                    )
+                    route_total = route_total + pairwise_weight * route_pairwise
+                    self._record_loss_debug(
+                        "event_route_pairwise_effect_raw",
+                        route_pairwise,
+                    )
+
+            alpha_weight = float(
+                getattr(self.config, "event_route_alpha_weight", 0.25) or 0.0
+            )
+            if alpha_weight > 0 and event_route_alpha is not None:
+                alpha = event_route_alpha.view(-1).clamp(1e-5, 1.0 - 1e-5)
+                if dense_graph is not None:
+                    graph = dense_graph.detach().clamp_min(0.0)
+                    src = source_mask.to(dtype=graph.dtype)
+                    eff = effect_mask.to(dtype=graph.dtype)
+                    incoming = (graph * src.unsqueeze(-1)).sum(dim=1)
+                    effect_count = eff.sum(dim=1).clamp_min(1.0)
+                    alpha_target = (incoming * eff).sum(dim=1) / effect_count
+                    has_effect = (effect_mask.sum(dim=1) > 0).to(dtype=alpha_target.dtype)
+                    alpha_target = (alpha_target * has_effect).clamp(0.0, 1.0)
+                else:
+                    alpha_target = torch.zeros_like(alpha)
+                alpha_loss = F.binary_cross_entropy(alpha, alpha_target.to(dtype=alpha.dtype))
+                route_total = route_total + alpha_weight * alpha_loss
+                self._record_loss_debug("event_route_alpha_raw", alpha_loss)
+                self._record_loss_debug("event_route_alpha_mean", alpha.detach().mean())
+
+            total = total + event_route_weight * route_total
+            self._record_loss_debug(
+                "event_route_inner_weighted",
+                event_route_weight * route_total,
             )
         source_branch_weight = float(
             getattr(self.config, "root_response_source_branch_weight", 0.0) or 0.0
@@ -3782,6 +4774,60 @@ class LaGraph:
         )
 
     @torch.no_grad()
+    def _fit_channel_graph_reliability(self, train_data: pd.DataFrame):
+        if train_data is None or self.model is None:
+            return
+        raw_model = self._get_raw_model()
+        if not hasattr(raw_model, "set_channel_graph_reliability"):
+            return
+
+        print("\n  [ChannelGraph] Calibrating per-channel graph reliability on normal windows...")
+        if self._should_load_best_checkpoint():
+            raw_model.load_state_dict(self.early_stopping.check_point)
+        self.model.to(self.device)
+        self.model.eval()
+
+        scaled_data = self._transform_input_frame(train_data)
+        loader, _ = self._make_score_stats_loader(scaled_data, "ChannelGraphReliability")
+        squared_error_sum = None
+        target_variance_sum = None
+        window_count = 0
+        for input_data, _ in loader:
+            input_data = input_data.float().to(self.device)
+            _, _, _, _, _, aux_losses, _ = self.model(input_data)
+            if not aux_losses:
+                continue
+            mechanism_error = aux_losses.get("channel_mechanism_error")
+            target_variance = aux_losses.get("channel_graph_target_variance")
+            if mechanism_error is None or target_variance is None:
+                continue
+            batch_squared_error = mechanism_error.pow(2).mean(dim=1).sum(dim=0)
+            batch_target_variance = target_variance.sum(dim=0)
+            if squared_error_sum is None:
+                squared_error_sum = batch_squared_error.double()
+                target_variance_sum = batch_target_variance.double()
+            else:
+                squared_error_sum += batch_squared_error.double()
+                target_variance_sum += batch_target_variance.double()
+            window_count += int(input_data.shape[0])
+
+        if squared_error_sum is None or window_count <= 0:
+            print("  [ChannelGraph] Reliability calibration skipped: no mechanism evidence.")
+            return
+
+        eps = 1e-8
+        nmse = squared_error_sum / target_variance_sum.clamp_min(eps)
+        reliability = (1.0 - nmse).clamp(0.0, 1.0).float()
+        raw_model.set_channel_graph_reliability(reliability)
+        rel_cpu = reliability.detach().cpu().numpy()
+        print(
+            "  [ChannelGraph] reliability "
+            f"min={rel_cpu.min():.4f}, median={np.median(rel_cpu):.4f}, "
+            f"mean={rel_cpu.mean():.4f}, max={rel_cpu.max():.4f}, "
+            f">0.5={int((rel_cpu > 0.5).sum())}/{rel_cpu.size}, windows={window_count:,}"
+        )
+
+    @torch.no_grad()
     def _fit_synthetic_score_stats(self, train_data: pd.DataFrame):
         if train_data is None or self.model is None:
             return
@@ -3896,6 +4942,9 @@ class LaGraph:
         if getattr(self.config, "use_channel_mechanism_score", False):
             self._fit_channel_mechanism_score_stats(self._train_raw)
 
+        if getattr(self.config, "use_channel_graph_reliability", False):
+            self._fit_channel_graph_reliability(self._train_raw)
+
         if getattr(self.config, "use_synthetic_score", False):
             self._fit_synthetic_score_stats(self._train_raw)
 
@@ -3964,6 +5013,46 @@ class LaGraph:
             topk=self.config.topk,
             sparse_topk=self.config.sparse_topk,
             use_channel_graph=getattr(self.config, "use_channel_graph", True),
+            channel_graph_evidence_only=getattr(
+                self.config, "channel_graph_evidence_only", False
+            ),
+            channel_graph_type=getattr(
+                self.config, "channel_graph_type", "adaptive_symmetric"
+            ),
+            directed_graph_parent_topk=getattr(
+                self.config, "directed_graph_parent_topk", 5
+            ),
+            directed_graph_embedding_dim=getattr(
+                self.config, "directed_graph_embedding_dim", 8
+            ),
+            directed_graph_use_signed_transfer=getattr(
+                self.config, "directed_graph_use_signed_transfer", False
+            ),
+            directed_graph_transfer_mode=getattr(
+                self.config, "directed_graph_transfer_mode", "low_rank"
+            ),
+            directed_graph_transfer_rank=getattr(
+                self.config, "directed_graph_transfer_rank", 8
+            ),
+            directed_graph_transfer_scale=getattr(
+                self.config, "directed_graph_transfer_scale", 2.0
+            ),
+            use_channel_graph_reliability=getattr(
+                self.config, "use_channel_graph_reliability", False
+            ),
+            channel_graph_role=getattr(self.config, "channel_graph_role", "shared"),
+            use_multilag_graph_propagation=getattr(
+                self.config, "use_multilag_graph_propagation", False
+            ),
+            graph_propagation_lags=getattr(
+                self.config, "graph_propagation_lags", (0, 1, 2, 4, 8)
+            ),
+            graph_propagation_lag_mode=getattr(
+                self.config, "graph_propagation_lag_mode", "static"
+            ),
+            graph_propagation_alignment_temperature=getattr(
+                self.config, "graph_propagation_alignment_temperature", 0.2
+            ),
             use_temporal_graph=getattr(self.config, "use_temporal_graph", True),
             use_dynamic_temporal_graph=getattr(self.config, "use_dynamic_temporal_graph", False),
             dynamic_temporal_residual_init=getattr(self.config, "dynamic_temporal_residual_init", 0.1),
@@ -3995,6 +5084,9 @@ class LaGraph:
             causal_score_eps=getattr(self.config, "causal_score_eps", 1e-6),
             causal_score_mode=getattr(self.config, "causal_score_mode", "residual"),
             causal_score_tail=getattr(self.config, "causal_score_tail", "upper"),
+            use_causal_response_evidence=getattr(
+                self.config, "use_causal_response_evidence", False
+            ),
             use_temporal_graph_regularization=getattr(self.config, "use_temporal_graph_regularization", False),
             use_score_channel_normalization=getattr(self.config, "use_score_channel_normalization", False),
             score_channel_norm_mode=getattr(self.config, "score_channel_norm_mode", "robust_z"),
@@ -4027,6 +5119,63 @@ class LaGraph:
             mechanism_predictive_blend_init=getattr(self.config, "mechanism_predictive_blend_init", 0.30),
             use_source_gate=getattr(self.config, "use_source_gate", False),
             source_gate_init=getattr(self.config, "source_gate_init", 0.20),
+            use_onset_aware_source_gate=getattr(
+                self.config,
+                "use_onset_aware_source_gate",
+                False,
+            ),
+            source_gate_onset_window=getattr(
+                self.config,
+                "source_gate_onset_window",
+                8,
+            ),
+            source_gate_onset_weight=getattr(
+                self.config,
+                "source_gate_onset_weight",
+                0.5,
+            ),
+            use_dual_expert_fusion=getattr(
+                self.config,
+                "use_dual_expert_fusion",
+                False,
+            ),
+            dual_expert_hidden=getattr(self.config, "dual_expert_hidden", 16),
+            dual_expert_graph_init=getattr(
+                self.config,
+                "dual_expert_graph_init",
+                0.5,
+            ),
+            dual_expert_detach_inputs=getattr(
+                self.config,
+                "dual_expert_detach_inputs",
+                True,
+            ),
+            use_source_expert_branch=getattr(
+                self.config,
+                "use_source_expert_branch",
+                False,
+            ),
+            source_expert_hidden=getattr(self.config, "source_expert_hidden", 16),
+            source_expert_graph_init=getattr(
+                self.config,
+                "source_expert_graph_init",
+                0.5,
+            ),
+            source_expert_detach_gate_inputs=getattr(
+                self.config,
+                "source_expert_detach_gate_inputs",
+                True,
+            ),
+            source_expert_gradient_checkpoint=getattr(
+                self.config,
+                "source_expert_gradient_checkpoint",
+                False,
+            ),
+            source_expert_gate_scope=getattr(
+                self.config,
+                "source_expert_gate_scope",
+                "time",
+            ),
             use_root_score_head=getattr(self.config, "use_root_score_head", False),
             root_score_head_mode=getattr(self.config, "root_score_head_mode", "mlp"),
             root_score_detach_features=getattr(self.config, "root_score_detach_features", True),
@@ -4086,6 +5235,38 @@ class LaGraph:
                 "event_responsibility_detach_features",
                 False,
             ),
+            use_event_route_head=getattr(
+                self.config,
+                "use_event_route_head",
+                False,
+            ),
+            event_route_hidden=getattr(self.config, "event_route_hidden", 16),
+            event_route_init=getattr(self.config, "event_route_init", 0.55),
+            event_route_detach_inputs=getattr(
+                self.config,
+                "event_route_detach_inputs",
+                True,
+            ),
+            event_route_response_penalty=getattr(
+                self.config,
+                "event_route_response_penalty",
+                0.0,
+            ),
+            use_response_suppressor_head=getattr(
+                self.config,
+                "use_response_suppressor_head",
+                False,
+            ),
+            response_suppressor_hidden=getattr(
+                self.config,
+                "response_suppressor_hidden",
+                16,
+            ),
+            response_suppressor_detach_inputs=getattr(
+                self.config,
+                "response_suppressor_detach_inputs",
+                True,
+            ),
             use_evidence_fusion_head=getattr(
                 self.config,
                 "use_evidence_fusion_head",
@@ -4101,6 +5282,11 @@ class LaGraph:
                 "evidence_fusion_detach_inputs",
                 False,
             ),
+            evidence_fusion_use_graph_response=getattr(
+                self.config,
+                "evidence_fusion_use_graph_response",
+                False,
+            ),
             use_source_interaction_head=getattr(
                 self.config,
                 "use_source_interaction_head",
@@ -4109,6 +5295,16 @@ class LaGraph:
             source_interaction_detach_inputs=getattr(
                 self.config,
                 "source_interaction_detach_inputs",
+                True,
+            ),
+            use_source_consistency_head=getattr(
+                self.config,
+                "use_source_consistency_head",
+                False,
+            ),
+            source_consistency_detach_inputs=getattr(
+                self.config,
+                "source_consistency_detach_inputs",
                 True,
             ),
             use_channel_temporal_corefinement=getattr(
@@ -4143,20 +5339,29 @@ class LaGraph:
             prior_topk = getattr(self.config, "channel_corr_prior_topk", 5)
             if use_source_effect_prior and not use_model_channel_prior:
                 prior_topk = getattr(self.config, "source_effect_prior_topk", prior_topk)
-            prior = self._build_channel_corr_prior(
-                train_df,
-                topk=prior_topk,
-            )
-            self._channel_corr_prior = prior
             if use_model_channel_prior:
-                self.model.set_channel_static_prior(prior)
+                model_prior = self._build_channel_corr_prior(
+                    train_df,
+                    topk=getattr(self.config, "channel_corr_prior_topk", 5),
+                    selection_axis=getattr(
+                        self.config, "channel_corr_prior_selection_axis", "source"
+                    ),
+                )
+                self.model.set_channel_static_prior(model_prior)
                 print(
                     f"  [ChannelPrior] normal correlation prior set "
                     f"(topk={getattr(self.config, 'channel_corr_prior_topk', 5)}, "
                     f"weight={getattr(self.config, 'channel_corr_prior_weight', 0.0)}, "
+                    f"axis={getattr(self.config, 'channel_corr_prior_selection_axis', 'source')}, "
                     f"bias={getattr(self.config, 'channel_corr_prior_bias', 0.0)})"
                 )
-            else:
+            if use_source_effect_prior:
+                source_prior = self._build_channel_corr_prior(
+                    train_df,
+                    topk=getattr(self.config, "source_effect_prior_topk", prior_topk),
+                    selection_axis="source",
+                )
+                self._channel_corr_prior = source_prior
                 print(
                     f"  [SourceEffectPrior] normal correlation prior set for synthetic "
                     f"source-effect sampling only (topk={prior_topk})"
@@ -4420,6 +5625,46 @@ class LaGraph:
             topk=self.config.topk,
             sparse_topk=self.config.sparse_topk,
             use_channel_graph=getattr(self.config, "use_channel_graph", True),
+            channel_graph_evidence_only=getattr(
+                self.config, "channel_graph_evidence_only", False
+            ),
+            channel_graph_type=getattr(
+                self.config, "channel_graph_type", "adaptive_symmetric"
+            ),
+            directed_graph_parent_topk=getattr(
+                self.config, "directed_graph_parent_topk", 5
+            ),
+            directed_graph_embedding_dim=getattr(
+                self.config, "directed_graph_embedding_dim", 8
+            ),
+            directed_graph_use_signed_transfer=getattr(
+                self.config, "directed_graph_use_signed_transfer", False
+            ),
+            directed_graph_transfer_mode=getattr(
+                self.config, "directed_graph_transfer_mode", "low_rank"
+            ),
+            directed_graph_transfer_rank=getattr(
+                self.config, "directed_graph_transfer_rank", 8
+            ),
+            directed_graph_transfer_scale=getattr(
+                self.config, "directed_graph_transfer_scale", 2.0
+            ),
+            use_channel_graph_reliability=getattr(
+                self.config, "use_channel_graph_reliability", False
+            ),
+            channel_graph_role=getattr(self.config, "channel_graph_role", "shared"),
+            use_multilag_graph_propagation=getattr(
+                self.config, "use_multilag_graph_propagation", False
+            ),
+            graph_propagation_lags=getattr(
+                self.config, "graph_propagation_lags", (0, 1, 2, 4, 8)
+            ),
+            graph_propagation_lag_mode=getattr(
+                self.config, "graph_propagation_lag_mode", "static"
+            ),
+            graph_propagation_alignment_temperature=getattr(
+                self.config, "graph_propagation_alignment_temperature", 0.2
+            ),
             use_temporal_graph=getattr(self.config, "use_temporal_graph", True),
             use_dynamic_temporal_graph=getattr(self.config, "use_dynamic_temporal_graph", False),
             dynamic_temporal_residual_init=getattr(self.config, "dynamic_temporal_residual_init", 0.1),
@@ -4451,6 +5696,9 @@ class LaGraph:
             causal_score_eps=getattr(self.config, "causal_score_eps", 1e-6),
             causal_score_mode=getattr(self.config, "causal_score_mode", "residual"),
             causal_score_tail=getattr(self.config, "causal_score_tail", "upper"),
+            use_causal_response_evidence=getattr(
+                self.config, "use_causal_response_evidence", False
+            ),
             use_temporal_graph_regularization=getattr(self.config, "use_temporal_graph_regularization", False),
             use_score_channel_normalization=getattr(self.config, "use_score_channel_normalization", False),
             score_channel_norm_mode=getattr(self.config, "score_channel_norm_mode", "robust_z"),
@@ -4479,6 +5727,63 @@ class LaGraph:
             mechanism_predictive_blend_init=getattr(self.config, "mechanism_predictive_blend_init", 0.30),
             use_source_gate=getattr(self.config, "use_source_gate", False),
             source_gate_init=getattr(self.config, "source_gate_init", 0.20),
+            use_onset_aware_source_gate=getattr(
+                self.config,
+                "use_onset_aware_source_gate",
+                False,
+            ),
+            source_gate_onset_window=getattr(
+                self.config,
+                "source_gate_onset_window",
+                8,
+            ),
+            source_gate_onset_weight=getattr(
+                self.config,
+                "source_gate_onset_weight",
+                0.5,
+            ),
+            use_dual_expert_fusion=getattr(
+                self.config,
+                "use_dual_expert_fusion",
+                False,
+            ),
+            dual_expert_hidden=getattr(self.config, "dual_expert_hidden", 16),
+            dual_expert_graph_init=getattr(
+                self.config,
+                "dual_expert_graph_init",
+                0.5,
+            ),
+            dual_expert_detach_inputs=getattr(
+                self.config,
+                "dual_expert_detach_inputs",
+                True,
+            ),
+            use_source_expert_branch=getattr(
+                self.config,
+                "use_source_expert_branch",
+                False,
+            ),
+            source_expert_hidden=getattr(self.config, "source_expert_hidden", 16),
+            source_expert_graph_init=getattr(
+                self.config,
+                "source_expert_graph_init",
+                0.5,
+            ),
+            source_expert_detach_gate_inputs=getattr(
+                self.config,
+                "source_expert_detach_gate_inputs",
+                True,
+            ),
+            source_expert_gradient_checkpoint=getattr(
+                self.config,
+                "source_expert_gradient_checkpoint",
+                False,
+            ),
+            source_expert_gate_scope=getattr(
+                self.config,
+                "source_expert_gate_scope",
+                "time",
+            ),
             use_root_score_head=getattr(self.config, "use_root_score_head", False),
             root_score_head_mode=getattr(self.config, "root_score_head_mode", "mlp"),
             root_score_detach_features=getattr(self.config, "root_score_detach_features", True),
@@ -4538,6 +5843,38 @@ class LaGraph:
                 "event_responsibility_detach_features",
                 False,
             ),
+            use_event_route_head=getattr(
+                self.config,
+                "use_event_route_head",
+                False,
+            ),
+            event_route_hidden=getattr(self.config, "event_route_hidden", 16),
+            event_route_init=getattr(self.config, "event_route_init", 0.55),
+            event_route_detach_inputs=getattr(
+                self.config,
+                "event_route_detach_inputs",
+                True,
+            ),
+            event_route_response_penalty=getattr(
+                self.config,
+                "event_route_response_penalty",
+                0.0,
+            ),
+            use_response_suppressor_head=getattr(
+                self.config,
+                "use_response_suppressor_head",
+                False,
+            ),
+            response_suppressor_hidden=getattr(
+                self.config,
+                "response_suppressor_hidden",
+                16,
+            ),
+            response_suppressor_detach_inputs=getattr(
+                self.config,
+                "response_suppressor_detach_inputs",
+                True,
+            ),
             use_evidence_fusion_head=getattr(
                 self.config,
                 "use_evidence_fusion_head",
@@ -4553,6 +5890,11 @@ class LaGraph:
                 "evidence_fusion_detach_inputs",
                 False,
             ),
+            evidence_fusion_use_graph_response=getattr(
+                self.config,
+                "evidence_fusion_use_graph_response",
+                False,
+            ),
             use_source_interaction_head=getattr(
                 self.config,
                 "use_source_interaction_head",
@@ -4561,6 +5903,16 @@ class LaGraph:
             source_interaction_detach_inputs=getattr(
                 self.config,
                 "source_interaction_detach_inputs",
+                True,
+            ),
+            use_source_consistency_head=getattr(
+                self.config,
+                "use_source_consistency_head",
+                False,
+            ),
+            source_consistency_detach_inputs=getattr(
+                self.config,
+                "source_consistency_detach_inputs",
                 True,
             ),
             use_channel_temporal_corefinement=getattr(
@@ -4810,6 +6162,41 @@ class LaGraph:
                 "dataloader_num_workers": getattr(self.config, "dataloader_num_workers", None),
                 "dataloader_prefetch_factor": getattr(self.config, "dataloader_prefetch_factor", None),
                 "use_channel_graph": getattr(self.config, "use_channel_graph", None),
+                "channel_graph_evidence_only": getattr(
+                    self.config, "channel_graph_evidence_only", None
+                ),
+                "channel_graph_type": getattr(self.config, "channel_graph_type", None),
+                "directed_graph_parent_topk": getattr(
+                    self.config, "directed_graph_parent_topk", None
+                ),
+                "directed_graph_embedding_dim": getattr(
+                    self.config, "directed_graph_embedding_dim", None
+                ),
+                "directed_graph_use_signed_transfer": getattr(
+                    self.config, "directed_graph_use_signed_transfer", None
+                ),
+                "directed_graph_transfer_mode": getattr(
+                    self.config, "directed_graph_transfer_mode", None
+                ),
+                "directed_graph_transfer_rank": getattr(
+                    self.config, "directed_graph_transfer_rank", None
+                ),
+                "directed_graph_transfer_scale": getattr(
+                    self.config, "directed_graph_transfer_scale", None
+                ),
+                "use_channel_graph_reliability": getattr(
+                    self.config, "use_channel_graph_reliability", None
+                ),
+                "channel_graph_role": getattr(self.config, "channel_graph_role", None),
+                "use_multilag_graph_propagation": getattr(
+                    self.config, "use_multilag_graph_propagation", None
+                ),
+                "graph_propagation_lags": getattr(
+                    self.config, "graph_propagation_lags", None
+                ),
+                "graph_propagation_lag_mode": getattr(
+                    self.config, "graph_propagation_lag_mode", None
+                ),
                 "use_temporal_graph": getattr(self.config, "use_temporal_graph", None),
                 "use_dynamic_temporal_graph": getattr(self.config, "use_dynamic_temporal_graph", None),
                 "dynamic_temporal_residual_init": getattr(self.config, "dynamic_temporal_residual_init", None),
@@ -4954,6 +6341,11 @@ class LaGraph:
                 ),
                 "rca_topk_rerank_source_interaction_weight": getattr(
                     self.config, "rca_topk_rerank_source_interaction_weight", None
+                ),
+                "rca_topk_rerank_source_consistency_head_weight": getattr(
+                    self.config,
+                    "rca_topk_rerank_source_consistency_head_weight",
+                    None,
                 ),
                 "rca_topk_rerank_graph_penalty_weight": getattr(
                     self.config, "rca_topk_rerank_graph_penalty_weight", None
@@ -5203,7 +6595,10 @@ class LaGraph:
             return_root_score=(
                 bool(getattr(self.config, "use_root_score_head", False))
                 or bool(getattr(self.config, "use_evidence_fusion_head", False))
+                or bool(getattr(self.config, "use_response_suppressor_head", False))
                 or bool(getattr(self.config, "use_source_interaction_head", False))
+                or bool(getattr(self.config, "use_source_consistency_head", False))
+                or bool(getattr(self.config, "use_event_route_head", False))
             ),
         )
         channel_err = F.l1_loss(x_rec, input_data, reduction="none")
@@ -5263,6 +6658,20 @@ class LaGraph:
                 event_responsibility_err = torch.softmax(event_responsibility_logits, dim=-1)
         if event_responsibility_err is None:
             event_responsibility_err = torch.zeros_like(channel_err)
+        event_route_err = None
+        if aux_losses:
+            event_route_score = aux_losses.get("event_route_score")
+            if event_route_score is not None:
+                event_route_err = event_route_score
+        if event_route_err is None:
+            event_route_err = torch.zeros_like(channel_err)
+        response_suppressor_err = None
+        if aux_losses:
+            response_suppressor_logits = aux_losses.get("response_suppressor_logits")
+            if response_suppressor_logits is not None:
+                response_suppressor_err = torch.sigmoid(response_suppressor_logits)
+        if response_suppressor_err is None:
+            response_suppressor_err = torch.zeros_like(channel_err)
         evidence_fusion_err = None
         if aux_losses:
             evidence_fusion_logits = aux_losses.get("evidence_fusion_logits")
@@ -5288,6 +6697,13 @@ class LaGraph:
                 source_interaction_head_err = torch.sigmoid(source_interaction_logits)
         if source_interaction_head_err is None:
             source_interaction_head_err = torch.zeros_like(channel_err)
+        source_consistency_head_err = None
+        if aux_losses:
+            source_consistency_logits = aux_losses.get("source_consistency_logits")
+            if source_consistency_logits is not None:
+                source_consistency_head_err = torch.sigmoid(source_consistency_logits)
+        if source_consistency_head_err is None:
+            source_consistency_head_err = torch.zeros_like(channel_err)
         return (
             score.cpu().numpy(),
             channel_err.cpu().numpy(),
@@ -5298,8 +6714,11 @@ class LaGraph:
             synthetic_rca_window_scores.cpu().numpy(),
             root_score_err.cpu().numpy(),
             event_responsibility_err.cpu().numpy(),
+            event_route_err.cpu().numpy(),
+            response_suppressor_err.cpu().numpy(),
             evidence_fusion_err.cpu().numpy(),
             source_interaction_head_err.cpu().numpy(),
+            source_consistency_head_err.cpu().numpy(),
         )
 
     def _graph_propagated_channel_error(self, channel_err, A_adaptive):
@@ -5433,8 +6852,11 @@ class LaGraph:
         source_gate_channel_sums = np.zeros_like(channel_sums)
         root_score_channel_sums = np.zeros_like(channel_sums)
         event_responsibility_channel_sums = np.zeros_like(channel_sums)
+        event_route_channel_sums = np.zeros_like(channel_sums)
+        response_suppressor_channel_sums = np.zeros_like(channel_sums)
         evidence_fusion_channel_sums = np.zeros_like(channel_sums)
         source_interaction_head_channel_sums = np.zeros_like(channel_sums)
+        source_consistency_head_channel_sums = np.zeros_like(channel_sums)
         synthetic_rca_channel_diff = np.zeros((total_length + 1, n_channels), dtype=np.float64)
         channel_counts = np.zeros(total_length, dtype=np.float64)
 
@@ -5462,8 +6884,11 @@ class LaGraph:
                     synthetic_rca_channel_err,
                     root_score_channel_err,
                     event_responsibility_channel_err,
+                    event_route_channel_err,
+                    response_suppressor_channel_err,
                     evidence_fusion_channel_err,
                     source_interaction_head_channel_err,
+                    source_consistency_head_channel_err,
                 ) = self._detect_forward_with_channels(input_data)
                 self._add_window_channel_score_group(
                     [
@@ -5474,8 +6899,11 @@ class LaGraph:
                         source_gate_channel_sums,
                         root_score_channel_sums,
                         event_responsibility_channel_sums,
+                        event_route_channel_sums,
+                        response_suppressor_channel_sums,
                         evidence_fusion_channel_sums,
                         source_interaction_head_channel_sums,
+                        source_consistency_head_channel_sums,
                     ],
                     channel_counts,
                     [
@@ -5486,8 +6914,11 @@ class LaGraph:
                         source_gate_channel_err,
                         root_score_channel_err,
                         event_responsibility_channel_err,
+                        event_route_channel_err,
+                        response_suppressor_channel_err,
                         evidence_fusion_channel_err,
                         source_interaction_head_channel_err,
+                        source_consistency_head_channel_err,
                     ],
                     cursor,
                 )
@@ -5541,6 +6972,18 @@ class LaGraph:
             out=np.zeros_like(event_responsibility_channel_sums),
             where=channel_counts[:, None] > 0,
         ).astype(np.float32)
+        self._last_event_route_channel_scores = np.divide(
+            event_route_channel_sums,
+            channel_counts[:, None],
+            out=np.zeros_like(event_route_channel_sums),
+            where=channel_counts[:, None] > 0,
+        ).astype(np.float32)
+        self._last_response_suppressor_channel_scores = np.divide(
+            response_suppressor_channel_sums,
+            channel_counts[:, None],
+            out=np.zeros_like(response_suppressor_channel_sums),
+            where=channel_counts[:, None] > 0,
+        ).astype(np.float32)
         self._last_evidence_fusion_channel_scores = np.divide(
             evidence_fusion_channel_sums,
             channel_counts[:, None],
@@ -5551,6 +6994,12 @@ class LaGraph:
             source_interaction_head_channel_sums,
             channel_counts[:, None],
             out=np.zeros_like(source_interaction_head_channel_sums),
+            where=channel_counts[:, None] > 0,
+        ).astype(np.float32)
+        self._last_source_consistency_head_channel_scores = np.divide(
+            source_consistency_head_channel_sums,
+            channel_counts[:, None],
+            out=np.zeros_like(source_consistency_head_channel_sums),
             where=channel_counts[:, None] > 0,
         ).astype(np.float32)
         synthetic_rca_channel_sums = np.cumsum(synthetic_rca_channel_diff[:-1], axis=0)
@@ -5833,8 +7282,11 @@ class LaGraph:
         source_gate_channel_sums = None
         root_score_channel_sums = None
         event_responsibility_channel_sums = None
+        event_route_channel_sums = None
+        response_suppressor_channel_sums = None
         evidence_fusion_channel_sums = None
         source_interaction_head_channel_sums = None
+        source_consistency_head_channel_sums = None
         synthetic_rca_channel_diff = None
         channel_counts = None
         window_cursor = 0
@@ -5846,8 +7298,11 @@ class LaGraph:
             source_gate_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             root_score_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             event_responsibility_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
+            event_route_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
+            response_suppressor_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             evidence_fusion_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             source_interaction_head_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
+            source_consistency_head_channel_sums = np.zeros((total_length, scaled_test.shape[1]), dtype=np.float64)
             synthetic_rca_channel_diff = np.zeros((total_length + 1, scaled_test.shape[1]), dtype=np.float64)
             channel_counts = np.zeros(total_length, dtype=np.float64)
 
@@ -5864,8 +7319,11 @@ class LaGraph:
                     synthetic_rca_channel_err,
                     root_score_channel_err,
                     event_responsibility_channel_err,
+                    event_route_channel_err,
+                    response_suppressor_channel_err,
                     evidence_fusion_channel_err,
                     source_interaction_head_channel_err,
+                    source_consistency_head_channel_err,
                 ) = self._detect_forward_with_channels(input_data)
                 self._add_window_channel_score_group(
                     [
@@ -5876,8 +7334,11 @@ class LaGraph:
                         source_gate_channel_sums,
                         root_score_channel_sums,
                         event_responsibility_channel_sums,
+                        event_route_channel_sums,
+                        response_suppressor_channel_sums,
                         evidence_fusion_channel_sums,
                         source_interaction_head_channel_sums,
+                        source_consistency_head_channel_sums,
                     ],
                     channel_counts,
                     [
@@ -5888,8 +7349,11 @@ class LaGraph:
                         source_gate_channel_err,
                         root_score_channel_err,
                         event_responsibility_channel_err,
+                        event_route_channel_err,
+                        response_suppressor_channel_err,
                         evidence_fusion_channel_err,
                         source_interaction_head_channel_err,
+                        source_consistency_head_channel_err,
                     ],
                     window_cursor,
                 )
@@ -5953,6 +7417,18 @@ class LaGraph:
                 out=np.zeros_like(event_responsibility_channel_sums),
                 where=channel_counts[:, None] > 0,
             ).astype(np.float32)
+            self._last_event_route_channel_scores = np.divide(
+                event_route_channel_sums,
+                channel_counts[:, None],
+                out=np.zeros_like(event_route_channel_sums),
+                where=channel_counts[:, None] > 0,
+            ).astype(np.float32)
+            self._last_response_suppressor_channel_scores = np.divide(
+                response_suppressor_channel_sums,
+                channel_counts[:, None],
+                out=np.zeros_like(response_suppressor_channel_sums),
+                where=channel_counts[:, None] > 0,
+            ).astype(np.float32)
             self._last_evidence_fusion_channel_scores = np.divide(
                 evidence_fusion_channel_sums,
                 channel_counts[:, None],
@@ -5963,6 +7439,12 @@ class LaGraph:
                 source_interaction_head_channel_sums,
                 channel_counts[:, None],
                 out=np.zeros_like(source_interaction_head_channel_sums),
+                where=channel_counts[:, None] > 0,
+            ).astype(np.float32)
+            self._last_source_consistency_head_channel_scores = np.divide(
+                source_consistency_head_channel_sums,
+                channel_counts[:, None],
+                out=np.zeros_like(source_consistency_head_channel_sums),
                 where=channel_counts[:, None] > 0,
             ).astype(np.float32)
             synthetic_rca_channel_sums = np.cumsum(synthetic_rca_channel_diff[:-1], axis=0)
@@ -5981,8 +7463,11 @@ class LaGraph:
             self._last_source_gate_channel_scores = None
             self._last_root_score_channel_scores = None
             self._last_event_responsibility_channel_scores = None
+            self._last_event_route_channel_scores = None
+            self._last_response_suppressor_channel_scores = None
             self._last_evidence_fusion_channel_scores = None
             self._last_source_interaction_head_channel_scores = None
+            self._last_source_consistency_head_channel_scores = None
             self._last_synthetic_rca_channel_scores = None
             self._last_channel_names = list(test_data.columns) if event_local_rca else None
 
@@ -6243,6 +7728,52 @@ class LaGraph:
         return ((arr - lo) / span).astype(np.float32)
 
     @staticmethod
+    def _event_score_distribution(
+        scores,
+        order,
+        mode="raw",
+        top_m=0,
+        power=2.0,
+        tau=1.0,
+    ):
+        """Convert event ranking logits to a sparse responsibility distribution."""
+        arr = np.asarray(scores, dtype=np.float64)
+        if arr.size == 0:
+            return arr
+        mode = str(mode or "raw").lower()
+        if mode in {"raw", "none", "linear"}:
+            return arr.copy()
+        ranking = np.asarray(order, dtype=np.int64)
+        if ranking.size == 0:
+            ranking = np.argsort(-arr)
+        keep_count = int(top_m or 0)
+        if keep_count <= 0:
+            keep = ranking
+        else:
+            keep = ranking[: min(keep_count, ranking.size)]
+        out = np.zeros_like(arr, dtype=np.float64)
+        if keep.size == 0:
+            return out
+        kept_scores = arr[keep]
+        if mode == "softmax":
+            tau = max(float(tau or 1.0), 1e-6)
+            shifted = kept_scores / tau
+            shifted = shifted - float(np.max(shifted))
+            weights = np.exp(shifted)
+        elif mode in {"positive_l1", "responsibility", "sparse_l1"}:
+            min_score = float(np.min(kept_scores))
+            power = max(float(power or 1.0), 1e-6)
+            weights = np.maximum(kept_scores - min_score, 0.0) ** power
+        else:
+            return arr.copy()
+        total = float(np.sum(weights))
+        if total <= 1e-12:
+            out[keep] = 1.0 / float(keep.size)
+        else:
+            out[keep] = weights / total
+        return out
+
+    @staticmethod
     def _source_innovation_scores(base_scores, prior, neighbor_weight=1.0):
         """Residual unexplained by normal-prior neighbors; high values are source-like."""
         scores = np.asarray(base_scores, dtype=np.float32)
@@ -6341,6 +7872,7 @@ class LaGraph:
         event_onset_scores,
         event_source_gate_scores,
         event_mechanism_residual_scores,
+        event_source_consistency_head_scores,
         event_graph_scores,
     ):
         """Conservatively reorder only the current Top-K RCA candidates."""
@@ -6361,6 +7893,10 @@ class LaGraph:
         event_source_gate_scores = np.asarray(event_source_gate_scores, dtype=np.float64)
         event_mechanism_residual_scores = np.asarray(
             event_mechanism_residual_scores,
+            dtype=np.float64,
+        )
+        event_source_consistency_head_scores = np.asarray(
+            event_source_consistency_head_scores,
             dtype=np.float64,
         )
         event_graph_scores = np.asarray(event_graph_scores, dtype=np.float64)
@@ -6396,6 +7932,7 @@ class LaGraph:
         source_gate_norm = normalizer(event_source_gate_scores)
         mechanism_residual_norm = normalizer(event_mechanism_residual_scores)
         source_interaction_norm = normalizer(source_interaction_scores)
+        source_consistency_head_norm = normalizer(event_source_consistency_head_scores)
         graph_norm = normalizer(event_graph_scores)
 
         def _weighted_signal(prefix):
@@ -6414,6 +7951,10 @@ class LaGraph:
             source_interaction_weight = float(
                 getattr(self.config, f"{prefix}_source_interaction_weight", 0.0) or 0.0
             )
+            source_consistency_head_weight = float(
+                getattr(self.config, f"{prefix}_source_consistency_head_weight", 0.0)
+                or 0.0
+            )
             graph_penalty_weight = float(
                 getattr(self.config, f"{prefix}_graph_penalty_weight", 0.0) or 0.0
             )
@@ -6425,6 +7966,7 @@ class LaGraph:
                 + source_gate_weight * source_gate_norm
                 + mechanism_residual_weight * mechanism_residual_norm
                 + source_interaction_weight * source_interaction_norm
+                + source_consistency_head_weight * source_consistency_head_norm
                 - graph_penalty_weight * graph_norm
             )
 
@@ -6567,6 +8109,8 @@ class LaGraph:
         event_responsibility_head_ratio=0.30,
         event_responsibility_head_points=30,
         event_responsibility_top_quantile=0.80,
+        event_route_channel_scores=None,
+        response_suppressor_channel_scores=None,
         evidence_fusion_channel_scores=None,
         evidence_fusion_pooling="mean",
         evidence_fusion_head_ratio=0.30,
@@ -6577,6 +8121,11 @@ class LaGraph:
         source_interaction_head_ratio=0.30,
         source_interaction_head_points=30,
         source_interaction_head_top_quantile=0.80,
+        source_consistency_head_channel_scores=None,
+        source_consistency_head_pooling="head_mean",
+        source_consistency_head_ratio=0.30,
+        source_consistency_head_points=30,
+        source_consistency_head_top_quantile=0.80,
         counterfactual_channel_scores=None,
         use_source_propagation=False,
         graph_weight=0.0,
@@ -6592,9 +8141,16 @@ class LaGraph:
         causal_weight=0.0,
         synthetic_weight=0.0,
         event_responsibility_weight=0.0,
+        event_route_weight=0.0,
+        response_suppressor_weight=0.0,
+        response_suppressor_source_guard_mode="source_onset",
+        response_suppressor_source_guard_floor=0.0,
         evidence_fusion_weight=0.0,
         source_interaction_head_weight=0.0,
+        source_consistency_head_weight=0.0,
         source_gate_weight=0.0,
+        source_gate_evidence_guard_weight=0.0,
+        source_gate_evidence_guard_floor=0.0,
         root_score_weight=0.0,
         source_interaction_weight=0.0,
         source_innovation_weight=0.0,
@@ -6629,6 +8185,102 @@ class LaGraph:
         hierarchical_group_aggregation="max",
     ):
         events = []
+        event_base_weight = float(getattr(self.config, "rca_event_base_weight", 1.0) or 1.0)
+        export_score_distribution = str(
+            getattr(self.config, "rca_export_score_distribution", "raw") or "raw"
+        ).lower()
+        export_score_distribution_top_m = max(
+            0,
+            int(getattr(self.config, "rca_export_score_distribution_top_m", 0) or 0),
+        )
+        export_score_distribution_power = max(
+            float(
+                getattr(self.config, "rca_export_score_distribution_power", 2.0)
+                or 2.0
+            ),
+            1e-6,
+        )
+        export_score_distribution_tau = max(
+            float(
+                getattr(self.config, "rca_export_score_distribution_tau", 1.0)
+                or 1.0
+            ),
+            1e-6,
+        )
+        export_responsibility_score = bool(
+            getattr(self.config, "rca_export_responsibility_score", False)
+        )
+        export_responsibility_ranking_weight = float(
+            getattr(self.config, "rca_export_responsibility_ranking_weight", 0.0)
+            or 0.0
+        )
+        export_responsibility_pre_weight = float(
+            getattr(self.config, "rca_export_responsibility_pre_weight", 0.0)
+            or 0.0
+        )
+        export_responsibility_base_weight = float(
+            getattr(self.config, "rca_export_responsibility_base_weight", 0.0)
+            or 0.0
+        )
+        export_responsibility_source_gate_weight = float(
+            getattr(
+                self.config,
+                "rca_export_responsibility_source_gate_weight",
+                0.0,
+            )
+            or 0.0
+        )
+        export_responsibility_onset_weight = float(
+            getattr(self.config, "rca_export_responsibility_onset_weight", 0.0)
+            or 0.0
+        )
+        export_responsibility_mechanism_residual_weight = float(
+            getattr(
+                self.config,
+                "rca_export_responsibility_mechanism_residual_weight",
+                0.0,
+            )
+            or 0.0
+        )
+        export_responsibility_root_weight = float(
+            getattr(self.config, "rca_export_responsibility_root_weight", 0.0)
+            or 0.0
+        )
+        export_responsibility_event_weight = float(
+            getattr(self.config, "rca_export_responsibility_event_weight", 0.0)
+            or 0.0
+        )
+        export_responsibility_evidence_fusion_weight = float(
+            getattr(
+                self.config,
+                "rca_export_responsibility_evidence_fusion_weight",
+                0.0,
+            )
+            or 0.0
+        )
+        export_responsibility_source_interaction_weight = float(
+            getattr(
+                self.config,
+                "rca_export_responsibility_source_interaction_weight",
+                0.0,
+            )
+            or 0.0
+        )
+        export_responsibility_graph_low_weight = float(
+            getattr(self.config, "rca_export_responsibility_graph_low_weight", 0.0)
+            or 0.0
+        )
+        export_responsibility_response_suppressor_low_weight = float(
+            getattr(
+                self.config,
+                "rca_export_responsibility_response_suppressor_low_weight",
+                0.0,
+            )
+            or 0.0
+        )
+        responsibility_rerank = bool(
+            getattr(self.config, "rca_responsibility_rerank", False)
+        )
         align_event_onset = bool(getattr(self.config, "rca_align_event_onset", False))
         align_baseline_window = int(
             getattr(self.config, "rca_align_event_onset_baseline_window", 300) or 300
@@ -6684,6 +8336,10 @@ class LaGraph:
                 if source_gate_channel_scores is not None
                 else np.zeros_like(event_raw_scores)
             )
+            event_source_gate_raw_scores = np.asarray(
+                event_source_gate_scores,
+                dtype=np.float64,
+            ).copy()
             event_root_scores = (
                 self._aggregate_root_score_event_component(
                     root_score_channel_scores,
@@ -6735,6 +8391,16 @@ class LaGraph:
                 if event_responsibility_channel_scores is not None
                 else np.zeros_like(event_raw_scores)
             )
+            event_route_scores = (
+                event_route_channel_scores[score_start:score_end].mean(axis=0)
+                if event_route_channel_scores is not None
+                else np.zeros_like(event_raw_scores)
+            )
+            event_response_suppressor_scores = (
+                response_suppressor_channel_scores[score_start:score_end].mean(axis=0)
+                if response_suppressor_channel_scores is not None
+                else np.zeros_like(event_raw_scores)
+            )
             event_evidence_fusion_scores = (
                 self._aggregate_root_score_event_component(
                     evidence_fusion_channel_scores,
@@ -6759,6 +8425,19 @@ class LaGraph:
                     top_quantile=source_interaction_head_top_quantile,
                 )
                 if source_interaction_head_channel_scores is not None
+                else np.zeros_like(event_raw_scores)
+            )
+            event_source_consistency_head_scores = (
+                self._aggregate_root_score_event_component(
+                    source_consistency_head_channel_scores,
+                    score_start,
+                    score_end,
+                    root_score_pooling=source_consistency_head_pooling,
+                    head_ratio=source_consistency_head_ratio,
+                    head_points=source_consistency_head_points,
+                    top_quantile=source_consistency_head_top_quantile,
+                )
+                if source_consistency_head_channel_scores is not None
                 else np.zeros_like(event_raw_scores)
             )
             event_counterfactual_scores = (
@@ -6804,6 +8483,13 @@ class LaGraph:
             event_conservative_mechanism_scores = np.zeros_like(event_raw_scores)
             event_source_gated_mechanism_gate_scores = np.zeros_like(event_raw_scores)
             event_source_gated_mechanism_scores = np.zeros_like(event_raw_scores)
+            event_response_suppressor_guard_scores = np.zeros_like(event_raw_scores)
+            event_response_suppressor_penalty_scores = np.zeros_like(event_raw_scores)
+            event_source_gate_evidence_guard_scores = np.ones_like(event_raw_scores)
+            event_source_gate_calibrated_scores = np.asarray(
+                event_source_gate_scores,
+                dtype=np.float64,
+            ).copy()
             if event_component_normalize:
                 base_norm = self._normalize_event_component(event_base_scores)
                 graph_norm = self._normalize_event_component(event_graph_scores)
@@ -6814,15 +8500,57 @@ class LaGraph:
                 source_innovation_norm = self._normalize_event_component(event_source_innovation_scores)
                 synthetic_norm = self._normalize_event_component(event_synthetic_scores)
                 responsibility_norm = self._normalize_event_component(event_responsibility_scores)
+                event_route_norm = self._normalize_event_component(event_route_scores)
+                response_suppressor_norm = self._normalize_event_component(
+                    event_response_suppressor_scores
+                )
                 evidence_fusion_norm = self._normalize_event_component(event_evidence_fusion_scores)
                 source_interaction_head_norm = self._normalize_event_component(
                     event_source_interaction_head_scores
+                )
+                source_consistency_head_norm = self._normalize_event_component(
+                    event_source_consistency_head_scores
                 )
                 counterfactual_norm = self._normalize_event_component(event_counterfactual_scores)
                 source_score_norm = self._normalize_event_component(event_source_scores)
                 onset_norm = self._normalize_event_component(event_onset_scores)
                 mechanism_residual_norm = self._normalize_event_component(event_mechanism_residual_scores)
                 contrast_norm = self._normalize_event_component(event_contrast_scores)
+                guard_weight = min(
+                    max(float(source_gate_evidence_guard_weight or 0.0), 0.0),
+                    1.0,
+                )
+                if guard_weight > 0.0:
+                    learned_source_support = np.maximum.reduce(
+                        [
+                            onset_norm,
+                            root_score_norm,
+                            responsibility_norm,
+                            evidence_fusion_norm,
+                            source_consistency_head_norm,
+                        ]
+                    )
+                    anchor_support = np.sqrt(
+                        np.maximum(base_norm * learned_source_support, 0.0)
+                    )
+                    learned_source_support = np.maximum(
+                        learned_source_support,
+                        anchor_support,
+                    )
+                    guard_floor = min(
+                        max(float(source_gate_evidence_guard_floor or 0.0), 0.0),
+                        1.0,
+                    )
+                    source_gate_guard = (
+                        guard_floor + (1.0 - guard_floor) * learned_source_support
+                    )
+                    source_gate_norm = (
+                        (1.0 - guard_weight) * source_gate_norm
+                        + guard_weight * source_gate_norm * source_gate_guard
+                    )
+                    event_source_gate_evidence_guard_scores = source_gate_guard
+                    event_source_gate_calibrated_scores = source_gate_norm
+                    event_source_gate_scores = source_gate_norm
                 mechanism_source_evidence_norm = np.maximum(mechanism_norm, mechanism_residual_norm)
                 if source_gate_weight > 0.0:
                     mechanism_source_evidence_norm = np.maximum(
@@ -6861,8 +8589,10 @@ class LaGraph:
                     + source_innovation_weight * source_innovation_norm
                     + synthetic_weight * synthetic_norm
                     + event_responsibility_weight * responsibility_norm
+                    + event_route_weight * event_route_norm
                     + evidence_fusion_weight * evidence_fusion_norm
                     + source_interaction_head_weight * source_interaction_head_norm
+                    + source_consistency_head_weight * source_consistency_head_norm
                     + counterfactual_weight * counterfactual_norm
                 )
                 if source_interaction_weight > 0.0:
@@ -6913,8 +8643,10 @@ class LaGraph:
                     + adaptive_mechanism_gate_weight * event_adaptive_mechanism_scores
                     + synthetic_weight * synthetic_norm
                     + event_responsibility_weight * responsibility_norm
+                    + event_route_weight * event_route_norm
                     + evidence_fusion_weight * evidence_fusion_norm
                     + source_interaction_head_weight * source_interaction_head_norm
+                    + source_consistency_head_weight * source_consistency_head_norm
                     + counterfactual_weight * counterfactual_norm
                 )
                 if source_interaction_weight > 0.0:
@@ -7026,7 +8758,7 @@ class LaGraph:
                     event_scores = source_weight * source_norm + propagation_weight * graph_norm
                 else:
                     event_scores = (
-                        base_norm
+                        event_base_weight * base_norm
                         + graph_weight * graph_norm
                         + mechanism_weight * mechanism_norm
                         + source_gate_weight * source_gate_norm
@@ -7034,8 +8766,10 @@ class LaGraph:
                         + source_innovation_weight * source_innovation_norm
                         + synthetic_weight * synthetic_norm
                         + event_responsibility_weight * responsibility_norm
+                        + event_route_weight * event_route_norm
                         + evidence_fusion_weight * evidence_fusion_norm
                         + source_interaction_head_weight * source_interaction_head_norm
+                        + source_consistency_head_weight * source_consistency_head_norm
                         + counterfactual_weight * counterfactual_norm
                     )
                 event_scores = (
@@ -7045,6 +8779,48 @@ class LaGraph:
                     + contrast_weight * contrast_norm
                     - graph_penalty_weight * graph_norm
                 )
+                if response_suppressor_weight > 0.0:
+                    guard_mode = str(
+                        response_suppressor_source_guard_mode or "source_onset"
+                    ).lower()
+                    if guard_mode == "source_gate":
+                        source_guard_norm = source_gate_norm
+                    elif guard_mode == "onset":
+                        source_guard_norm = onset_norm
+                    elif guard_mode == "source_score":
+                        source_guard_norm = source_score_norm
+                    elif guard_mode == "base":
+                        source_guard_norm = base_norm
+                    elif guard_mode == "base_source_onset":
+                        source_guard_norm = np.maximum.reduce(
+                            [base_norm, source_score_norm, source_gate_norm, onset_norm]
+                        )
+                    else:
+                        source_guard_norm = np.maximum.reduce(
+                            [source_score_norm, source_gate_norm, onset_norm]
+                        )
+                    guard_floor = min(
+                        max(float(response_suppressor_source_guard_floor or 0.0), 0.0),
+                        1.0,
+                    )
+                    if guard_floor >= 1.0:
+                        source_guard = np.zeros_like(source_guard_norm)
+                    else:
+                        source_guard = np.clip(
+                            (source_guard_norm - guard_floor)
+                            / max(1.0 - guard_floor, 1e-12),
+                            0.0,
+                            1.0,
+                        )
+                    event_response_suppressor_guard_scores = source_guard
+                    event_response_suppressor_penalty_scores = (
+                        response_suppressor_norm * (1.0 - source_guard)
+                    )
+                    event_scores = (
+                        event_scores
+                        - response_suppressor_weight
+                        * event_response_suppressor_penalty_scores
+                    )
                 if source_consensus_weight > 0.0 or onset_consensus_weight > 0.0:
                     mode = str(source_consensus_mode or "sqrt_bg").lower()
                     if mode == "base":
@@ -7083,6 +8859,55 @@ class LaGraph:
                     event_scores
                     + mechanism_guided_source_weight * event_mechanism_guided_source_scores
                     + source_innovation_weight * source_innovation_norm
+                )
+            if response_suppressor_weight > 0.0 and not event_component_normalize:
+                response_suppressor_norm = self._normalize_event_component(
+                    event_response_suppressor_scores
+                )
+                guard_mode = str(
+                    response_suppressor_source_guard_mode or "source_onset"
+                ).lower()
+                source_score_norm = self._normalize_event_component(event_source_scores)
+                source_gate_norm = self._normalize_event_component(event_source_gate_scores)
+                onset_norm = self._normalize_event_component(event_onset_scores)
+                base_norm = self._normalize_event_component(event_base_scores)
+                if guard_mode == "source_gate":
+                    source_guard_norm = source_gate_norm
+                elif guard_mode == "onset":
+                    source_guard_norm = onset_norm
+                elif guard_mode == "source_score":
+                    source_guard_norm = source_score_norm
+                elif guard_mode == "base":
+                    source_guard_norm = base_norm
+                elif guard_mode == "base_source_onset":
+                    source_guard_norm = np.maximum.reduce(
+                        [base_norm, source_score_norm, source_gate_norm, onset_norm]
+                    )
+                else:
+                    source_guard_norm = np.maximum.reduce(
+                        [source_score_norm, source_gate_norm, onset_norm]
+                    )
+                guard_floor = min(
+                    max(float(response_suppressor_source_guard_floor or 0.0), 0.0),
+                    1.0,
+                )
+                if guard_floor >= 1.0:
+                    source_guard = np.zeros_like(source_guard_norm)
+                else:
+                    source_guard = np.clip(
+                        (source_guard_norm - guard_floor)
+                        / max(1.0 - guard_floor, 1e-12),
+                        0.0,
+                        1.0,
+                    )
+                event_response_suppressor_guard_scores = source_guard
+                event_response_suppressor_penalty_scores = (
+                    response_suppressor_norm * (1.0 - source_guard)
+                )
+                event_scores = (
+                    event_scores
+                    - response_suppressor_weight
+                    * event_response_suppressor_penalty_scores
                 )
             group_values_by_name = {}
             for name, value in zip(feature_names, event_scores):
@@ -7147,7 +8972,68 @@ class LaGraph:
                 event_onset_scores,
                 event_source_gate_scores,
                 event_mechanism_residual_scores,
+                event_source_consistency_head_scores,
                 event_graph_scores,
+            )
+            ranking_scores = np.asarray(ranking_scores, dtype=np.float64)
+            distribution_input_scores = ranking_scores
+            responsibility_scores_for_order = None
+            rank_before_responsibility = {
+                int(idx): int(rank + 1) for rank, idx in enumerate(order)
+            }
+            if export_responsibility_score:
+                event_source_interaction_export_scores = (
+                    event_source_interaction_head_scores
+                    if np.max(np.abs(event_source_interaction_head_scores)) > 1e-12
+                    else event_base_scores
+                    * np.maximum(event_onset_scores, event_mechanism_residual_scores)
+                )
+                distribution_input_scores = (
+                    export_responsibility_ranking_weight
+                    * self._normalize_event_component(ranking_scores)
+                    + export_responsibility_pre_weight
+                    * self._normalize_event_component(pre_rerank_scores)
+                    + export_responsibility_base_weight
+                    * self._normalize_event_component(event_base_scores)
+                    + export_responsibility_source_gate_weight
+                    * self._normalize_event_component(event_source_gate_scores)
+                    + export_responsibility_onset_weight
+                    * self._normalize_event_component(event_onset_scores)
+                    + export_responsibility_mechanism_residual_weight
+                    * self._normalize_event_component(event_mechanism_residual_scores)
+                    + export_responsibility_root_weight
+                    * self._normalize_event_component(event_root_scores)
+                    + export_responsibility_event_weight
+                    * self._normalize_event_component(event_responsibility_scores)
+                    + export_responsibility_evidence_fusion_weight
+                    * self._normalize_event_component(event_evidence_fusion_scores)
+                    + export_responsibility_source_interaction_weight
+                    * self._normalize_event_component(
+                        event_source_interaction_export_scores
+                    )
+                    - export_responsibility_graph_low_weight
+                    * self._normalize_event_component(event_graph_scores)
+                    - export_responsibility_response_suppressor_low_weight
+                    * self._normalize_event_component(event_response_suppressor_scores)
+                )
+                responsibility_scores_for_order = np.asarray(
+                    distribution_input_scores,
+                    dtype=np.float64,
+                )
+                if responsibility_rerank:
+                    order = np.argsort(-responsibility_scores_for_order)
+            final_order_scores = (
+                responsibility_scores_for_order
+                if responsibility_rerank and responsibility_scores_for_order is not None
+                else ranking_scores
+            )
+            export_scores = self._event_score_distribution(
+                distribution_input_scores,
+                order,
+                mode=export_score_distribution,
+                top_m=export_score_distribution_top_m,
+                power=export_score_distribution_power,
+                tau=export_score_distribution_tau,
             )
 
             within_group_rank = {}
@@ -7157,7 +9043,7 @@ class LaGraph:
                     for idx, name in enumerate(feature_names)
                     if self._root_cause_group_name(name) == group
                 ]
-                indices = sorted(indices, key=lambda idx: float(ranking_scores[idx]), reverse=True)
+                indices = sorted(indices, key=lambda idx: float(final_order_scores[idx]), reverse=True)
                 for rank, idx in enumerate(indices, start=1):
                     within_group_rank[idx] = int(rank)
 
@@ -7165,7 +9051,20 @@ class LaGraph:
                 {
                     "rank": int(rank + 1),
                     "name": feature_names[idx],
-                    "score": float(ranking_scores[idx]),
+                    "score": float(export_scores[idx]),
+                    "ranking_score": float(ranking_scores[idx]),
+                    "final_rank_score": float(final_order_scores[idx]),
+                    "export_responsibility_score": float(
+                        responsibility_scores_for_order[idx]
+                        if responsibility_scores_for_order is not None
+                        else 0.0
+                    ),
+                    "rank_before_responsibility_rerank": int(
+                        rank_before_responsibility.get(int(idx), rank + 1)
+                    ),
+                    "responsibility_rerank_applied": bool(
+                        responsibility_rerank and responsibility_scores_for_order is not None
+                    ),
                     "pre_rerank_score": float(pre_rerank_scores[idx]),
                     "hierarchical_score": float(hierarchical_scores[idx]),
                     "group": self._root_cause_group_name(feature_names[idx]),
@@ -7178,13 +9077,31 @@ class LaGraph:
                     "source_score": float(event_source_scores[idx]),
                     "propagation_score": float(event_propagation_scores[idx]),
                     "causal_score": float(event_causal_scores[idx]),
+                    "source_gate_raw_score": float(event_source_gate_raw_scores[idx]),
                     "source_gate_score": float(event_source_gate_scores[idx]),
+                    "source_gate_evidence_guard_score": float(
+                        event_source_gate_evidence_guard_scores[idx]
+                    ),
+                    "source_gate_calibrated_score": float(
+                        event_source_gate_calibrated_scores[idx]
+                    ),
                     "root_score": float(event_root_scores[idx]),
                     "source_innovation_score": float(event_source_innovation_scores[idx]),
                     "event_responsibility_score": float(event_responsibility_scores[idx]),
+                    "event_route_score": float(event_route_scores[idx]),
+                    "response_suppressor_score": float(event_response_suppressor_scores[idx]),
+                    "response_suppressor_guard_score": float(
+                        event_response_suppressor_guard_scores[idx]
+                    ),
+                    "response_suppressor_penalty_score": float(
+                        event_response_suppressor_penalty_scores[idx]
+                    ),
                     "evidence_fusion_score": float(event_evidence_fusion_scores[idx]),
                     "source_interaction_head_score": float(
                         event_source_interaction_head_scores[idx]
+                    ),
+                    "source_consistency_head_score": float(
+                        event_source_consistency_head_scores[idx]
                     ),
                     "mechanism_guided_source_score": float(event_mechanism_guided_source_scores[idx]),
                     "adaptive_mechanism_gate_score": float(event_adaptive_mechanism_gate_scores[idx]),
@@ -7268,6 +9185,7 @@ class LaGraph:
         secondary_source_gate_weight=0.0,
         secondary_mechanism_residual_weight=0.0,
         secondary_source_interaction_weight=0.0,
+        secondary_source_consistency_head_weight=0.0,
         secondary_evidence_fusion_weight=0.0,
     ):
         """Down-rank channels that behave like generic responders across many predicted events."""
@@ -7285,6 +9203,9 @@ class LaGraph:
         secondary_source_gate_weight = float(secondary_source_gate_weight or 0.0)
         secondary_mechanism_residual_weight = float(secondary_mechanism_residual_weight or 0.0)
         secondary_source_interaction_weight = float(secondary_source_interaction_weight or 0.0)
+        secondary_source_consistency_head_weight = float(
+            secondary_source_consistency_head_weight or 0.0
+        )
         secondary_evidence_fusion_weight = float(secondary_evidence_fusion_weight or 0.0)
         use_secondary_fill = (
             keep_top_k > 0
@@ -7295,6 +9216,7 @@ class LaGraph:
                 + abs(secondary_source_gate_weight)
                 + abs(secondary_mechanism_residual_weight)
                 + abs(secondary_source_interaction_weight)
+                + abs(secondary_source_consistency_head_weight)
                 + abs(secondary_evidence_fusion_weight)
             )
             > 0.0
@@ -7326,7 +9248,15 @@ class LaGraph:
             if not ranking:
                 continue
             raw_scores = np.asarray(
-                [float(item.get("score", 0.0)) for item in ranking],
+                [
+                    float(
+                        item.get(
+                            "ranking_score",
+                            item.get("raw_score", item.get("score", 0.0)),
+                        )
+                    )
+                    for item in ranking
+                ],
                 dtype=np.float64,
             )
             if raw_scores.size and float(raw_scores.max() - raw_scores.min()) > 1e-12:
@@ -7361,7 +9291,10 @@ class LaGraph:
                 specificity_score = float(base_scores[idx]) - nuisance_penalty
                 new_item = dict(item)
                 new_item.setdefault("raw_rank", int(item.get("rank", idx + 1)))
-                new_item.setdefault("raw_score", float(item.get("score", 0.0)))
+                new_item.setdefault(
+                    "raw_score",
+                    float(item.get("ranking_score", item.get("score", 0.0))),
+                )
                 new_item["specificity_base_score"] = float(base_scores[idx])
                 new_item["specificity_adjusted_score"] = specificity_score
                 new_item["specificity_source_guard_score"] = float(source_guard_norm[idx])
@@ -7399,6 +9332,13 @@ class LaGraph:
                     [float(item.get("evidence_fusion_score", 0.0)) for item in adjusted_items],
                     dtype=np.float64,
                 )
+                consistency_arr = np.asarray(
+                    [
+                        float(item.get("source_consistency_head_score", 0.0))
+                        for item in adjusted_items
+                    ],
+                    dtype=np.float64,
+                )
                 interaction_arr = base_arr * np.maximum(onset_arr, mechanism_arr)
                 secondary_scores = (
                     secondary_base_weight * self._normalize_event_component(base_arr)
@@ -7407,6 +9347,8 @@ class LaGraph:
                     + secondary_mechanism_residual_weight * self._normalize_event_component(mechanism_arr)
                     + secondary_source_interaction_weight
                     * self._normalize_event_component(interaction_arr)
+                    + secondary_source_consistency_head_weight
+                    * self._normalize_event_component(consistency_arr)
                     + secondary_evidence_fusion_weight
                     * self._normalize_event_component(evidence_fusion_arr)
                 )
@@ -7471,8 +9413,16 @@ class LaGraph:
         fallback_original_weight=1.0,
         fallback_base_weight=0.45,
         fallback_onset_weight=0.20,
+        fallback_mechanism_residual_weight=0.0,
+        fallback_root_weight=0.0,
+        fallback_event_weight=0.0,
+        fallback_evidence_fusion_weight=0.0,
+        fallback_source_interaction_weight=0.0,
+        fallback_source_consistency_weight=0.0,
+        fallback_graph_low_weight=0.0,
+        fallback_response_suppressor_low_weight=0.0,
     ):
-        """Choose source-evidence fill only when it agrees with base-heavy evidence."""
+        """Choose source-evidence fill only when it agrees with fallback evidence."""
         if not enabled or not events:
             return events
         top_k = max(1, int(top_k or 20))
@@ -7490,6 +9440,16 @@ class LaGraph:
         fallback_original_weight = float(fallback_original_weight or 0.0)
         fallback_base_weight = float(fallback_base_weight or 0.0)
         fallback_onset_weight = float(fallback_onset_weight or 0.0)
+        fallback_mechanism_residual_weight = float(fallback_mechanism_residual_weight or 0.0)
+        fallback_root_weight = float(fallback_root_weight or 0.0)
+        fallback_event_weight = float(fallback_event_weight or 0.0)
+        fallback_evidence_fusion_weight = float(fallback_evidence_fusion_weight or 0.0)
+        fallback_source_interaction_weight = float(fallback_source_interaction_weight or 0.0)
+        fallback_source_consistency_weight = float(fallback_source_consistency_weight or 0.0)
+        fallback_graph_low_weight = float(fallback_graph_low_weight or 0.0)
+        fallback_response_suppressor_low_weight = float(
+            fallback_response_suppressor_low_weight or 0.0
+        )
 
         for event in events:
             ranking = event.get("channel_ranking", [])
@@ -7515,6 +9475,46 @@ class LaGraph:
                 [float(item.get("mechanism_residual_score", 0.0)) for item in ranking],
                 dtype=np.float64,
             )
+            root_arr = np.asarray(
+                [float(item.get("root_score", 0.0)) for item in ranking],
+                dtype=np.float64,
+            )
+            event_arr = np.asarray(
+                [
+                    float(item.get("event_responsibility_score", 0.0))
+                    for item in ranking
+                ],
+                dtype=np.float64,
+            )
+            evidence_fusion_arr = np.asarray(
+                [float(item.get("evidence_fusion_score", 0.0)) for item in ranking],
+                dtype=np.float64,
+            )
+            source_interaction_head_arr = np.asarray(
+                [
+                    float(item.get("source_interaction_head_score", 0.0))
+                    for item in ranking
+                ],
+                dtype=np.float64,
+            )
+            source_consistency_arr = np.asarray(
+                [
+                    float(item.get("source_consistency_head_score", 0.0))
+                    for item in ranking
+                ],
+                dtype=np.float64,
+            )
+            graph_arr = np.asarray(
+                [float(item.get("graph_score", 0.0)) for item in ranking],
+                dtype=np.float64,
+            )
+            response_suppressor_arr = np.asarray(
+                [
+                    float(item.get("response_suppressor_score", 0.0))
+                    for item in ranking
+                ],
+                dtype=np.float64,
+            )
             original_arr = np.asarray(
                 [
                     1.0
@@ -7535,6 +9535,11 @@ class LaGraph:
             interaction_arr = base_arr * np.maximum.reduce(
                 [source_gate_arr, onset_arr, mechanism_arr]
             )
+            learned_interaction_arr = (
+                source_interaction_head_arr
+                if np.max(np.abs(source_interaction_head_arr)) > 1e-12
+                else base_arr * np.maximum(onset_arr, mechanism_arr)
+            )
 
             source_scores = (
                 source_base_weight * self._normalize_event_component(base_arr)
@@ -7547,6 +9552,19 @@ class LaGraph:
                 fallback_original_weight * self._normalize_event_component(original_arr)
                 + fallback_base_weight * self._normalize_event_component(base_arr)
                 + fallback_onset_weight * self._normalize_event_component(onset_arr)
+                + fallback_mechanism_residual_weight
+                * self._normalize_event_component(mechanism_arr)
+                + fallback_root_weight * self._normalize_event_component(root_arr)
+                + fallback_event_weight * self._normalize_event_component(event_arr)
+                + fallback_evidence_fusion_weight
+                * self._normalize_event_component(evidence_fusion_arr)
+                + fallback_source_interaction_weight
+                * self._normalize_event_component(learned_interaction_arr)
+                + fallback_source_consistency_weight
+                * self._normalize_event_component(source_consistency_arr)
+                - fallback_graph_low_weight * self._normalize_event_component(graph_arr)
+                - fallback_response_suppressor_low_weight
+                * self._normalize_event_component(response_suppressor_arr)
             )
 
             candidate_indices = list(range(candidate_count))
@@ -7643,6 +9661,158 @@ class LaGraph:
             event["adaptive_evidence_exported_top_source_rank"] = source_rank_of_exported_top
             event["adaptive_evidence_top3_overlap"] = float(top3_overlap)
             event["adaptive_evidence_source_margin"] = float(source_margin)
+        return events
+
+    def _refresh_rca_export_scores(
+        self,
+        events,
+        *,
+        export_responsibility_score=False,
+        export_score_distribution="raw",
+        export_score_distribution_top_m=0,
+        export_score_distribution_power=2.0,
+        export_score_distribution_tau=1.0,
+        export_responsibility_ranking_weight=0.0,
+        export_responsibility_pre_weight=0.0,
+        export_responsibility_base_weight=0.0,
+        export_responsibility_source_gate_weight=0.0,
+        export_responsibility_onset_weight=0.0,
+        export_responsibility_mechanism_residual_weight=0.0,
+        export_responsibility_root_weight=0.0,
+        export_responsibility_event_weight=0.0,
+        export_responsibility_evidence_fusion_weight=0.0,
+        export_responsibility_source_interaction_weight=0.0,
+        export_responsibility_graph_low_weight=0.0,
+        export_responsibility_response_suppressor_low_weight=0.0,
+        responsibility_rerank=False,
+    ):
+        if not events or not bool(export_responsibility_score):
+            return events
+        mode = str(export_score_distribution or "raw").lower()
+        for event in events:
+            ranking = event.get("channel_ranking", [])
+            if not ranking:
+                continue
+            ranking_arr = np.asarray(
+                [
+                    float(
+                        item.get(
+                            "ranking_score",
+                            item.get("raw_score", item.get("score", 0.0)),
+                        )
+                    )
+                    for item in ranking
+                ],
+                dtype=np.float64,
+            )
+            pre_arr = np.asarray(
+                [float(item.get("pre_rerank_score", 0.0)) for item in ranking],
+                dtype=np.float64,
+            )
+            base_arr = np.asarray(
+                [float(item.get("base_score", 0.0)) for item in ranking],
+                dtype=np.float64,
+            )
+            source_gate_arr = np.asarray(
+                [float(item.get("source_gate_score", 0.0)) for item in ranking],
+                dtype=np.float64,
+            )
+            onset_arr = np.asarray(
+                [float(item.get("onset_score", 0.0)) for item in ranking],
+                dtype=np.float64,
+            )
+            mechanism_arr = np.asarray(
+                [float(item.get("mechanism_residual_score", 0.0)) for item in ranking],
+                dtype=np.float64,
+            )
+            root_arr = np.asarray(
+                [float(item.get("root_score", 0.0)) for item in ranking],
+                dtype=np.float64,
+            )
+            event_arr = np.asarray(
+                [
+                    float(item.get("event_responsibility_score", 0.0))
+                    for item in ranking
+                ],
+                dtype=np.float64,
+            )
+            evidence_fusion_arr = np.asarray(
+                [float(item.get("evidence_fusion_score", 0.0)) for item in ranking],
+                dtype=np.float64,
+            )
+            source_interaction_head_arr = np.asarray(
+                [
+                    float(item.get("source_interaction_head_score", 0.0))
+                    for item in ranking
+                ],
+                dtype=np.float64,
+            )
+            source_interaction_arr = (
+                source_interaction_head_arr
+                if np.max(np.abs(source_interaction_head_arr)) > 1e-12
+                else base_arr * np.maximum(onset_arr, mechanism_arr)
+            )
+            graph_arr = np.asarray(
+                [float(item.get("graph_score", 0.0)) for item in ranking],
+                dtype=np.float64,
+            )
+            response_suppressor_arr = np.asarray(
+                [
+                    float(item.get("response_suppressor_score", 0.0))
+                    for item in ranking
+                ],
+                dtype=np.float64,
+            )
+            responsibility_scores = (
+                float(export_responsibility_ranking_weight or 0.0)
+                * self._normalize_event_component(ranking_arr)
+                + float(export_responsibility_pre_weight or 0.0)
+                * self._normalize_event_component(pre_arr)
+                + float(export_responsibility_base_weight or 0.0)
+                * self._normalize_event_component(base_arr)
+                + float(export_responsibility_source_gate_weight or 0.0)
+                * self._normalize_event_component(source_gate_arr)
+                + float(export_responsibility_onset_weight or 0.0)
+                * self._normalize_event_component(onset_arr)
+                + float(export_responsibility_mechanism_residual_weight or 0.0)
+                * self._normalize_event_component(mechanism_arr)
+                + float(export_responsibility_root_weight or 0.0)
+                * self._normalize_event_component(root_arr)
+                + float(export_responsibility_event_weight or 0.0)
+                * self._normalize_event_component(event_arr)
+                + float(export_responsibility_evidence_fusion_weight or 0.0)
+                * self._normalize_event_component(evidence_fusion_arr)
+                + float(export_responsibility_source_interaction_weight or 0.0)
+                * self._normalize_event_component(source_interaction_arr)
+                - float(export_responsibility_graph_low_weight or 0.0)
+                * self._normalize_event_component(graph_arr)
+                - float(export_responsibility_response_suppressor_low_weight or 0.0)
+                * self._normalize_event_component(response_suppressor_arr)
+            )
+            export_scores = self._event_score_distribution(
+                responsibility_scores,
+                np.arange(len(ranking), dtype=np.int64),
+                mode=mode,
+                top_m=export_score_distribution_top_m,
+                power=export_score_distribution_power,
+                tau=export_score_distribution_tau,
+            )
+            if bool(responsibility_rerank):
+                rerank_order = np.argsort(-responsibility_scores)
+                ranking = [ranking[int(idx)] for idx in rerank_order]
+                responsibility_scores = responsibility_scores[rerank_order]
+                export_scores = export_scores[rerank_order]
+            for idx, item in enumerate(ranking):
+                item.setdefault("rank_before_responsibility_rerank", item.get("rank", idx + 1))
+                item["score"] = float(export_scores[idx])
+                item["export_responsibility_score"] = float(
+                    responsibility_scores[idx]
+                )
+                item["final_rank_score"] = float(responsibility_scores[idx])
+                item["responsibility_rerank_applied"] = bool(responsibility_rerank)
+                item["rank"] = int(idx + 1)
+            event["channel_ranking"] = ranking
+            event["top_channels"] = ranking[:20]
         return events
 
     @staticmethod
@@ -7782,6 +9952,24 @@ class LaGraph:
             event_responsibility_channel_scores = np.zeros_like(base_channel_scores)
         else:
             event_responsibility_channel_scores = event_responsibility_channel_scores[score_slice]
+        event_route_channel_scores = getattr(
+            self,
+            "_last_event_route_channel_scores",
+            None,
+        )
+        if event_route_channel_scores is None:
+            event_route_channel_scores = np.zeros_like(base_channel_scores)
+        else:
+            event_route_channel_scores = event_route_channel_scores[score_slice]
+        response_suppressor_channel_scores = getattr(
+            self,
+            "_last_response_suppressor_channel_scores",
+            None,
+        )
+        if response_suppressor_channel_scores is None:
+            response_suppressor_channel_scores = np.zeros_like(base_channel_scores)
+        else:
+            response_suppressor_channel_scores = response_suppressor_channel_scores[score_slice]
         evidence_fusion_channel_scores = getattr(
             self,
             "_last_evidence_fusion_channel_scores",
@@ -7800,6 +9988,15 @@ class LaGraph:
             source_interaction_head_channel_scores = np.zeros_like(base_channel_scores)
         else:
             source_interaction_head_channel_scores = source_interaction_head_channel_scores[score_slice]
+        source_consistency_head_channel_scores = getattr(
+            self,
+            "_last_source_consistency_head_channel_scores",
+            None,
+        )
+        if source_consistency_head_channel_scores is None:
+            source_consistency_head_channel_scores = np.zeros_like(base_channel_scores)
+        else:
+            source_consistency_head_channel_scores = source_consistency_head_channel_scores[score_slice]
         synthetic_channel_scores = getattr(self, "_last_synthetic_rca_channel_scores", None)
         if synthetic_channel_scores is None:
             synthetic_channel_scores = np.zeros_like(base_channel_scores)
@@ -7827,7 +10024,16 @@ class LaGraph:
         causal_weight = _cfg_float("rca_causal_weight", 0.0)
         synthetic_weight = _cfg_float("rca_synthetic_weight", 0.0)
         event_responsibility_weight = _cfg_float("rca_event_responsibility_weight", 0.0)
+        event_route_weight = _cfg_float("rca_event_route_weight", 0.0)
         source_gate_weight = _cfg_float("rca_source_gate_weight", 0.0)
+        source_gate_evidence_guard_weight = _cfg_float(
+            "rca_source_gate_evidence_guard_weight",
+            0.0,
+        )
+        source_gate_evidence_guard_floor = _cfg_float(
+            "rca_source_gate_evidence_guard_floor",
+            0.0,
+        )
         root_score_weight = _cfg_float("rca_root_score_weight", 0.0)
         root_score_signal = str(getattr(self.config, "rca_root_score_signal", "prob") or "prob")
         root_score_pooling = str(getattr(self.config, "rca_root_score_pooling", "mean") or "mean")
@@ -7856,6 +10062,17 @@ class LaGraph:
         source_interaction_head_points = _cfg_int("rca_source_interaction_head_points", 30)
         source_interaction_head_top_quantile = _cfg_float(
             "rca_source_interaction_head_top_quantile",
+            0.80,
+        )
+        source_consistency_head_weight = _cfg_float("rca_source_consistency_head_weight", 0.0)
+        source_consistency_head_pooling = str(
+            getattr(self.config, "rca_source_consistency_head_pooling", "head_mean")
+            or "head_mean"
+        )
+        source_consistency_head_ratio = _cfg_float("rca_source_consistency_head_ratio", 0.30)
+        source_consistency_head_points = _cfg_int("rca_source_consistency_head_points", 30)
+        source_consistency_head_top_quantile = _cfg_float(
+            "rca_source_consistency_head_top_quantile",
             0.80,
         )
         source_interaction_weight = _cfg_float("rca_source_interaction_weight", 0.0)
@@ -7920,7 +10137,90 @@ class LaGraph:
         onset_baseline_window = _cfg_int("rca_onset_baseline_window", 200)
         onset_z = _cfg_float("rca_onset_z", 2.0)
         event_component_normalize = bool(getattr(self.config, "rca_event_component_normalize", False))
+        event_base_weight = _cfg_float("rca_event_base_weight", 1.0)
+        export_score_distribution = str(
+            getattr(self.config, "rca_export_score_distribution", "raw") or "raw"
+        ).lower()
+        export_score_distribution_top_m = _cfg_int(
+            "rca_export_score_distribution_top_m",
+            0,
+        )
+        export_score_distribution_power = _cfg_float(
+            "rca_export_score_distribution_power",
+            2.0,
+        )
+        export_score_distribution_tau = _cfg_float(
+            "rca_export_score_distribution_tau",
+            1.0,
+        )
+        export_responsibility_score = bool(
+            getattr(self.config, "rca_export_responsibility_score", False)
+        )
+        export_responsibility_ranking_weight = _cfg_float(
+            "rca_export_responsibility_ranking_weight",
+            0.0,
+        )
+        export_responsibility_pre_weight = _cfg_float(
+            "rca_export_responsibility_pre_weight",
+            0.0,
+        )
+        export_responsibility_base_weight = _cfg_float(
+            "rca_export_responsibility_base_weight",
+            0.0,
+        )
+        export_responsibility_source_gate_weight = _cfg_float(
+            "rca_export_responsibility_source_gate_weight",
+            0.0,
+        )
+        export_responsibility_onset_weight = _cfg_float(
+            "rca_export_responsibility_onset_weight",
+            0.0,
+        )
+        export_responsibility_mechanism_residual_weight = _cfg_float(
+            "rca_export_responsibility_mechanism_residual_weight",
+            0.0,
+        )
+        export_responsibility_root_weight = _cfg_float(
+            "rca_export_responsibility_root_weight",
+            0.0,
+        )
+        export_responsibility_event_weight = _cfg_float(
+            "rca_export_responsibility_event_weight",
+            0.0,
+        )
+        export_responsibility_evidence_fusion_weight = _cfg_float(
+            "rca_export_responsibility_evidence_fusion_weight",
+            0.0,
+        )
+        export_responsibility_source_interaction_weight = _cfg_float(
+            "rca_export_responsibility_source_interaction_weight",
+            0.0,
+        )
+        export_responsibility_graph_low_weight = _cfg_float(
+            "rca_export_responsibility_graph_low_weight",
+            0.0,
+        )
+        export_responsibility_response_suppressor_low_weight = _cfg_float(
+            "rca_export_responsibility_response_suppressor_low_weight",
+            0.0,
+        )
+        responsibility_rerank = bool(
+            getattr(self.config, "rca_responsibility_rerank", False)
+        )
         graph_penalty_weight = _cfg_float("rca_graph_penalty_weight", 0.0)
+        response_suppressor_weight = _cfg_float("rca_response_suppressor_weight", 0.0)
+        response_suppressor_source_guard_mode = str(
+            getattr(
+                self.config,
+                "rca_response_suppressor_source_guard_mode",
+                "source_onset",
+            )
+            or "source_onset"
+        )
+        response_suppressor_source_guard_floor = _cfg_float(
+            "rca_response_suppressor_source_guard_floor",
+            0.0,
+        )
         hierarchical_mode = str(getattr(self.config, "rca_hierarchical_mode", "off") or "off")
         hierarchical_group_topk = _cfg_int("rca_hierarchical_group_topk", 0)
         hierarchical_group_boost = _cfg_float("rca_hierarchical_group_boost", 0.0)
@@ -7963,6 +10263,10 @@ class LaGraph:
         )
         event_specificity_secondary_source_interaction_weight = _cfg_float(
             "rca_event_specificity_secondary_source_interaction_weight",
+            0.0,
+        )
+        event_specificity_secondary_source_consistency_head_weight = _cfg_float(
+            "rca_event_specificity_secondary_source_consistency_head_weight",
             0.0,
         )
         event_specificity_secondary_evidence_fusion_weight = _cfg_float(
@@ -8019,6 +10323,38 @@ class LaGraph:
             "rca_adaptive_evidence_fallback_onset_weight",
             0.20,
         )
+        adaptive_evidence_fallback_mechanism_residual_weight = _cfg_float(
+            "rca_adaptive_evidence_fallback_mechanism_residual_weight",
+            0.0,
+        )
+        adaptive_evidence_fallback_root_weight = _cfg_float(
+            "rca_adaptive_evidence_fallback_root_weight",
+            0.0,
+        )
+        adaptive_evidence_fallback_event_weight = _cfg_float(
+            "rca_adaptive_evidence_fallback_event_weight",
+            0.0,
+        )
+        adaptive_evidence_fallback_evidence_fusion_weight = _cfg_float(
+            "rca_adaptive_evidence_fallback_evidence_fusion_weight",
+            0.0,
+        )
+        adaptive_evidence_fallback_source_interaction_weight = _cfg_float(
+            "rca_adaptive_evidence_fallback_source_interaction_weight",
+            0.0,
+        )
+        adaptive_evidence_fallback_source_consistency_weight = _cfg_float(
+            "rca_adaptive_evidence_fallback_source_consistency_weight",
+            0.0,
+        )
+        adaptive_evidence_fallback_graph_low_weight = _cfg_float(
+            "rca_adaptive_evidence_fallback_graph_low_weight",
+            0.0,
+        )
+        adaptive_evidence_fallback_response_suppressor_low_weight = _cfg_float(
+            "rca_adaptive_evidence_fallback_response_suppressor_low_weight",
+            0.0,
+        )
         export_lite = bool(getattr(self.config, "rca_export_lite", False))
         export_top_k = int(getattr(self.config, "rca_export_top_k", 20) or 20)
         max_channel_ranking = export_top_k if export_lite else None
@@ -8041,7 +10377,9 @@ class LaGraph:
                 + source_gate_weight * source_gate_channel_scores
                 + root_score_weight * root_score_channel_scores
                 + event_responsibility_weight * event_responsibility_channel_scores
+                + event_route_weight * event_route_channel_scores
                 + evidence_fusion_weight * evidence_fusion_channel_scores
+                + source_consistency_head_weight * source_consistency_head_channel_scores
                 + source_innovation_weight * (
                     source_innovation_channel_scores
                     if source_innovation_channel_scores is not None
@@ -8066,7 +10404,9 @@ class LaGraph:
                 + source_gate_weight * source_gate_channel_scores
                 + root_score_weight * root_score_channel_scores
                 + event_responsibility_weight * event_responsibility_channel_scores
+                + event_route_weight * event_route_channel_scores
                 + evidence_fusion_weight * evidence_fusion_channel_scores
+                + source_consistency_head_weight * source_consistency_head_channel_scores
                 + source_innovation_weight * (
                     source_innovation_channel_scores
                     if source_innovation_channel_scores is not None
@@ -8092,7 +10432,9 @@ class LaGraph:
                 + source_gate_weight * source_gate_channel_scores
                 + root_score_weight * root_score_channel_scores
                 + event_responsibility_weight * event_responsibility_channel_scores
+                + event_route_weight * event_route_channel_scores
                 + evidence_fusion_weight * evidence_fusion_channel_scores
+                + source_consistency_head_weight * source_consistency_head_channel_scores
                 + source_innovation_weight * (
                     source_innovation_channel_scores
                     if source_innovation_channel_scores is not None
@@ -8136,6 +10478,8 @@ class LaGraph:
             event_responsibility_head_ratio=event_responsibility_head_ratio,
             event_responsibility_head_points=event_responsibility_head_points,
             event_responsibility_top_quantile=event_responsibility_top_quantile,
+            event_route_channel_scores=event_route_channel_scores,
+            response_suppressor_channel_scores=response_suppressor_channel_scores,
             evidence_fusion_channel_scores=evidence_fusion_channel_scores,
             evidence_fusion_pooling=evidence_fusion_pooling,
             evidence_fusion_head_ratio=evidence_fusion_head_ratio,
@@ -8146,6 +10490,11 @@ class LaGraph:
             source_interaction_head_ratio=source_interaction_head_ratio,
             source_interaction_head_points=source_interaction_head_points,
             source_interaction_head_top_quantile=source_interaction_head_top_quantile,
+            source_consistency_head_channel_scores=source_consistency_head_channel_scores,
+            source_consistency_head_pooling=source_consistency_head_pooling,
+            source_consistency_head_ratio=source_consistency_head_ratio,
+            source_consistency_head_points=source_consistency_head_points,
+            source_consistency_head_top_quantile=source_consistency_head_top_quantile,
             counterfactual_channel_scores=counterfactual_channel_scores,
             use_source_propagation=use_source_propagation,
             graph_weight=graph_weight,
@@ -8161,9 +10510,16 @@ class LaGraph:
             causal_weight=causal_weight,
             synthetic_weight=synthetic_weight,
             event_responsibility_weight=event_responsibility_weight,
+            event_route_weight=event_route_weight,
+            response_suppressor_weight=response_suppressor_weight,
+            response_suppressor_source_guard_mode=response_suppressor_source_guard_mode,
+            response_suppressor_source_guard_floor=response_suppressor_source_guard_floor,
             evidence_fusion_weight=evidence_fusion_weight,
             source_interaction_head_weight=source_interaction_head_weight,
+            source_consistency_head_weight=source_consistency_head_weight,
             source_gate_weight=source_gate_weight,
+            source_gate_evidence_guard_weight=source_gate_evidence_guard_weight,
+            source_gate_evidence_guard_floor=source_gate_evidence_guard_floor,
             root_score_weight=root_score_weight,
             source_interaction_weight=source_interaction_weight,
             source_innovation_weight=source_innovation_weight,
@@ -8241,6 +10597,8 @@ class LaGraph:
                     event_responsibility_head_ratio=event_responsibility_head_ratio,
                     event_responsibility_head_points=event_responsibility_head_points,
                     event_responsibility_top_quantile=event_responsibility_top_quantile,
+                    event_route_channel_scores=event_route_channel_scores,
+                    response_suppressor_channel_scores=response_suppressor_channel_scores,
                     evidence_fusion_channel_scores=evidence_fusion_channel_scores,
                     evidence_fusion_pooling=evidence_fusion_pooling,
                     evidence_fusion_head_ratio=evidence_fusion_head_ratio,
@@ -8251,6 +10609,11 @@ class LaGraph:
                     source_interaction_head_ratio=source_interaction_head_ratio,
                     source_interaction_head_points=source_interaction_head_points,
                     source_interaction_head_top_quantile=source_interaction_head_top_quantile,
+                    source_consistency_head_channel_scores=source_consistency_head_channel_scores,
+                    source_consistency_head_pooling=source_consistency_head_pooling,
+                    source_consistency_head_ratio=source_consistency_head_ratio,
+                    source_consistency_head_points=source_consistency_head_points,
+                    source_consistency_head_top_quantile=source_consistency_head_top_quantile,
                     counterfactual_channel_scores=counterfactual_channel_scores,
                     use_source_propagation=use_source_propagation,
                     graph_weight=graph_weight,
@@ -8266,9 +10629,16 @@ class LaGraph:
                     causal_weight=causal_weight,
                     synthetic_weight=synthetic_weight,
                     event_responsibility_weight=event_responsibility_weight,
+                    event_route_weight=event_route_weight,
+                    response_suppressor_weight=response_suppressor_weight,
+                    response_suppressor_source_guard_mode=response_suppressor_source_guard_mode,
+                    response_suppressor_source_guard_floor=response_suppressor_source_guard_floor,
                     evidence_fusion_weight=evidence_fusion_weight,
                     source_interaction_head_weight=source_interaction_head_weight,
+                    source_consistency_head_weight=source_consistency_head_weight,
                     source_gate_weight=source_gate_weight,
+                    source_gate_evidence_guard_weight=source_gate_evidence_guard_weight,
+                    source_gate_evidence_guard_floor=source_gate_evidence_guard_floor,
                     root_score_weight=root_score_weight,
                     source_interaction_weight=source_interaction_weight,
                     source_innovation_weight=source_innovation_weight,
@@ -8339,6 +10709,8 @@ class LaGraph:
                     event_responsibility_head_ratio=event_responsibility_head_ratio,
                     event_responsibility_head_points=event_responsibility_head_points,
                     event_responsibility_top_quantile=event_responsibility_top_quantile,
+                    event_route_channel_scores=event_route_channel_scores,
+                    response_suppressor_channel_scores=response_suppressor_channel_scores,
                     evidence_fusion_channel_scores=evidence_fusion_channel_scores,
                     evidence_fusion_pooling=evidence_fusion_pooling,
                     evidence_fusion_head_ratio=evidence_fusion_head_ratio,
@@ -8349,6 +10721,11 @@ class LaGraph:
                     source_interaction_head_ratio=source_interaction_head_ratio,
                     source_interaction_head_points=source_interaction_head_points,
                     source_interaction_head_top_quantile=source_interaction_head_top_quantile,
+                    source_consistency_head_channel_scores=source_consistency_head_channel_scores,
+                    source_consistency_head_pooling=source_consistency_head_pooling,
+                    source_consistency_head_ratio=source_consistency_head_ratio,
+                    source_consistency_head_points=source_consistency_head_points,
+                    source_consistency_head_top_quantile=source_consistency_head_top_quantile,
                     counterfactual_channel_scores=counterfactual_channel_scores,
                     use_source_propagation=use_source_propagation,
                     graph_weight=graph_weight,
@@ -8364,9 +10741,16 @@ class LaGraph:
                     causal_weight=causal_weight,
                     synthetic_weight=synthetic_weight,
                     event_responsibility_weight=event_responsibility_weight,
+                    event_route_weight=event_route_weight,
+                    response_suppressor_weight=response_suppressor_weight,
+                    response_suppressor_source_guard_mode=response_suppressor_source_guard_mode,
+                    response_suppressor_source_guard_floor=response_suppressor_source_guard_floor,
                     evidence_fusion_weight=evidence_fusion_weight,
                     source_interaction_head_weight=source_interaction_head_weight,
+                    source_consistency_head_weight=source_consistency_head_weight,
                     source_gate_weight=source_gate_weight,
+                    source_gate_evidence_guard_weight=source_gate_evidence_guard_weight,
+                    source_gate_evidence_guard_floor=source_gate_evidence_guard_floor,
                     root_score_weight=root_score_weight,
                     source_interaction_weight=source_interaction_weight,
                     source_innovation_weight=source_innovation_weight,
@@ -8435,6 +10819,8 @@ class LaGraph:
                 event_responsibility_head_ratio=event_responsibility_head_ratio,
                 event_responsibility_head_points=event_responsibility_head_points,
                 event_responsibility_top_quantile=event_responsibility_top_quantile,
+                event_route_channel_scores=event_route_channel_scores,
+                response_suppressor_channel_scores=response_suppressor_channel_scores,
                 evidence_fusion_channel_scores=evidence_fusion_channel_scores,
                 evidence_fusion_pooling=evidence_fusion_pooling,
                 evidence_fusion_head_ratio=evidence_fusion_head_ratio,
@@ -8445,6 +10831,11 @@ class LaGraph:
                 source_interaction_head_ratio=source_interaction_head_ratio,
                 source_interaction_head_points=source_interaction_head_points,
                 source_interaction_head_top_quantile=source_interaction_head_top_quantile,
+                source_consistency_head_channel_scores=source_consistency_head_channel_scores,
+                source_consistency_head_pooling=source_consistency_head_pooling,
+                source_consistency_head_ratio=source_consistency_head_ratio,
+                source_consistency_head_points=source_consistency_head_points,
+                source_consistency_head_top_quantile=source_consistency_head_top_quantile,
                 counterfactual_channel_scores=counterfactual_channel_scores,
                 use_source_propagation=use_source_propagation,
                 graph_weight=graph_weight,
@@ -8460,9 +10851,16 @@ class LaGraph:
                 causal_weight=causal_weight,
                 synthetic_weight=synthetic_weight,
                 event_responsibility_weight=event_responsibility_weight,
+                event_route_weight=event_route_weight,
+                response_suppressor_weight=response_suppressor_weight,
+                response_suppressor_source_guard_mode=response_suppressor_source_guard_mode,
+                response_suppressor_source_guard_floor=response_suppressor_source_guard_floor,
                 evidence_fusion_weight=evidence_fusion_weight,
                 source_interaction_head_weight=source_interaction_head_weight,
+                source_consistency_head_weight=source_consistency_head_weight,
                 source_gate_weight=source_gate_weight,
+                source_gate_evidence_guard_weight=source_gate_evidence_guard_weight,
+                source_gate_evidence_guard_floor=source_gate_evidence_guard_floor,
                 root_score_weight=root_score_weight,
                 source_interaction_weight=source_interaction_weight,
                 source_innovation_weight=source_innovation_weight,
@@ -8517,6 +10915,9 @@ class LaGraph:
                     secondary_source_interaction_weight=(
                         event_specificity_secondary_source_interaction_weight
                     ),
+                    secondary_source_consistency_head_weight=(
+                        event_specificity_secondary_source_consistency_head_weight
+                    ),
                     secondary_evidence_fusion_weight=(
                         event_specificity_secondary_evidence_fusion_weight
                     ),
@@ -8542,6 +10943,67 @@ class LaGraph:
                     fallback_original_weight=adaptive_evidence_fallback_original_weight,
                     fallback_base_weight=adaptive_evidence_fallback_base_weight,
                     fallback_onset_weight=adaptive_evidence_fallback_onset_weight,
+                    fallback_mechanism_residual_weight=(
+                        adaptive_evidence_fallback_mechanism_residual_weight
+                    ),
+                    fallback_root_weight=adaptive_evidence_fallback_root_weight,
+                    fallback_event_weight=adaptive_evidence_fallback_event_weight,
+                    fallback_evidence_fusion_weight=(
+                        adaptive_evidence_fallback_evidence_fusion_weight
+                    ),
+                    fallback_source_interaction_weight=(
+                        adaptive_evidence_fallback_source_interaction_weight
+                    ),
+                    fallback_source_consistency_weight=(
+                        adaptive_evidence_fallback_source_consistency_weight
+                    ),
+                    fallback_graph_low_weight=adaptive_evidence_fallback_graph_low_weight,
+                    fallback_response_suppressor_low_weight=(
+                        adaptive_evidence_fallback_response_suppressor_low_weight
+                    ),
+                )
+        if predicted_events_by_key:
+            for key_name, key_events in list(predicted_events_by_key.items()):
+                predicted_events_by_key[key_name] = self._refresh_rca_export_scores(
+                    key_events,
+                    export_responsibility_score=export_responsibility_score,
+                    export_score_distribution=export_score_distribution,
+                    export_score_distribution_top_m=export_score_distribution_top_m,
+                    export_score_distribution_power=export_score_distribution_power,
+                    export_score_distribution_tau=export_score_distribution_tau,
+                    export_responsibility_ranking_weight=(
+                        export_responsibility_ranking_weight
+                    ),
+                    export_responsibility_pre_weight=export_responsibility_pre_weight,
+                    export_responsibility_base_weight=export_responsibility_base_weight,
+                    export_responsibility_source_gate_weight=(
+                        export_responsibility_source_gate_weight
+                    ),
+                    export_responsibility_onset_weight=(
+                        export_responsibility_onset_weight
+                    ),
+                    export_responsibility_mechanism_residual_weight=(
+                        export_responsibility_mechanism_residual_weight
+                    ),
+                    export_responsibility_root_weight=(
+                        export_responsibility_root_weight
+                    ),
+                    export_responsibility_event_weight=(
+                        export_responsibility_event_weight
+                    ),
+                    export_responsibility_evidence_fusion_weight=(
+                        export_responsibility_evidence_fusion_weight
+                    ),
+                    export_responsibility_source_interaction_weight=(
+                        export_responsibility_source_interaction_weight
+                    ),
+                    export_responsibility_graph_low_weight=(
+                        export_responsibility_graph_low_weight
+                    ),
+                    export_responsibility_response_suppressor_low_weight=(
+                        export_responsibility_response_suppressor_low_weight
+                    ),
+                    responsibility_rerank=responsibility_rerank,
                 )
 
         predicted_events = predicted_events_by_key.get(pred_key, [])
@@ -8576,6 +11038,8 @@ class LaGraph:
                 event_responsibility_head_ratio=event_responsibility_head_ratio,
                 event_responsibility_head_points=event_responsibility_head_points,
                 event_responsibility_top_quantile=event_responsibility_top_quantile,
+                event_route_channel_scores=event_route_channel_scores,
+                response_suppressor_channel_scores=response_suppressor_channel_scores,
                 evidence_fusion_channel_scores=evidence_fusion_channel_scores,
                 evidence_fusion_pooling=evidence_fusion_pooling,
                 evidence_fusion_head_ratio=evidence_fusion_head_ratio,
@@ -8586,6 +11050,11 @@ class LaGraph:
                 source_interaction_head_ratio=source_interaction_head_ratio,
                 source_interaction_head_points=source_interaction_head_points,
                 source_interaction_head_top_quantile=source_interaction_head_top_quantile,
+                source_consistency_head_channel_scores=source_consistency_head_channel_scores,
+                source_consistency_head_pooling=source_consistency_head_pooling,
+                source_consistency_head_ratio=source_consistency_head_ratio,
+                source_consistency_head_points=source_consistency_head_points,
+                source_consistency_head_top_quantile=source_consistency_head_top_quantile,
                 counterfactual_channel_scores=counterfactual_channel_scores,
                 use_source_propagation=use_source_propagation,
                 graph_weight=graph_weight,
@@ -8601,9 +11070,16 @@ class LaGraph:
                 causal_weight=causal_weight,
                 synthetic_weight=synthetic_weight,
                 event_responsibility_weight=event_responsibility_weight,
+                event_route_weight=event_route_weight,
+                response_suppressor_weight=response_suppressor_weight,
+                response_suppressor_source_guard_mode=response_suppressor_source_guard_mode,
+                response_suppressor_source_guard_floor=response_suppressor_source_guard_floor,
                 evidence_fusion_weight=evidence_fusion_weight,
                 source_interaction_head_weight=source_interaction_head_weight,
+                source_consistency_head_weight=source_consistency_head_weight,
                 source_gate_weight=source_gate_weight,
+                source_gate_evidence_guard_weight=source_gate_evidence_guard_weight,
+                source_gate_evidence_guard_floor=source_gate_evidence_guard_floor,
                 root_score_weight=root_score_weight,
                 source_interaction_weight=source_interaction_weight,
                 source_innovation_weight=source_innovation_weight,
@@ -8657,6 +11133,9 @@ class LaGraph:
                     secondary_source_interaction_weight=(
                         event_specificity_secondary_source_interaction_weight
                     ),
+                    secondary_source_consistency_head_weight=(
+                        event_specificity_secondary_source_consistency_head_weight
+                    ),
                     secondary_evidence_fusion_weight=(
                         event_specificity_secondary_evidence_fusion_weight
                     ),
@@ -8678,10 +11157,61 @@ class LaGraph:
                         adaptive_evidence_source_mechanism_residual_weight
                     ),
                     source_interaction_weight=adaptive_evidence_source_interaction_weight,
-                    fallback_original_weight=adaptive_evidence_fallback_original_weight,
-                    fallback_base_weight=adaptive_evidence_fallback_base_weight,
-                    fallback_onset_weight=adaptive_evidence_fallback_onset_weight,
-                )
+                fallback_original_weight=adaptive_evidence_fallback_original_weight,
+                fallback_base_weight=adaptive_evidence_fallback_base_weight,
+                fallback_onset_weight=adaptive_evidence_fallback_onset_weight,
+                fallback_mechanism_residual_weight=(
+                    adaptive_evidence_fallback_mechanism_residual_weight
+                ),
+                fallback_root_weight=adaptive_evidence_fallback_root_weight,
+                fallback_event_weight=adaptive_evidence_fallback_event_weight,
+                fallback_evidence_fusion_weight=(
+                    adaptive_evidence_fallback_evidence_fusion_weight
+                ),
+                fallback_source_interaction_weight=(
+                    adaptive_evidence_fallback_source_interaction_weight
+                ),
+                fallback_source_consistency_weight=(
+                    adaptive_evidence_fallback_source_consistency_weight
+                ),
+                fallback_graph_low_weight=adaptive_evidence_fallback_graph_low_weight,
+                fallback_response_suppressor_low_weight=(
+                    adaptive_evidence_fallback_response_suppressor_low_weight
+                ),
+            )
+            predicted_events = self._refresh_rca_export_scores(
+                predicted_events,
+                export_responsibility_score=export_responsibility_score,
+                export_score_distribution=export_score_distribution,
+                export_score_distribution_top_m=export_score_distribution_top_m,
+                export_score_distribution_power=export_score_distribution_power,
+                export_score_distribution_tau=export_score_distribution_tau,
+                export_responsibility_ranking_weight=export_responsibility_ranking_weight,
+                export_responsibility_pre_weight=export_responsibility_pre_weight,
+                export_responsibility_base_weight=export_responsibility_base_weight,
+                export_responsibility_source_gate_weight=(
+                    export_responsibility_source_gate_weight
+                ),
+                export_responsibility_onset_weight=export_responsibility_onset_weight,
+                export_responsibility_mechanism_residual_weight=(
+                    export_responsibility_mechanism_residual_weight
+                ),
+                export_responsibility_root_weight=export_responsibility_root_weight,
+                export_responsibility_event_weight=export_responsibility_event_weight,
+                export_responsibility_evidence_fusion_weight=(
+                    export_responsibility_evidence_fusion_weight
+                ),
+                export_responsibility_source_interaction_weight=(
+                    export_responsibility_source_interaction_weight
+                ),
+                export_responsibility_graph_low_weight=(
+                    export_responsibility_graph_low_weight
+                ),
+                export_responsibility_response_suppressor_low_weight=(
+                    export_responsibility_response_suppressor_low_weight
+                ),
+                responsibility_rerank=responsibility_rerank,
+            )
 
         from datetime import datetime
         from ts_benchmark.common.constant import ROOT_PATH
@@ -8693,7 +11223,7 @@ class LaGraph:
         output_path = os.path.join(output_dir, f"{timestamp}_rca.json")
         score_method = (
             "event-level source/propagation RCA: "
-            "source=(weighted base residual + learned RootScore + fused source score + consensus-gated source evidence + mechanism prior deviation + source innovation + mechanism-guided source interaction + lagged causal deviation + model source-gate score + synthetic responsibility + event-local counterfactual responsibility), "
+            "source=(weighted base residual + learned RootScore + fused source score + learned source-consistency head + consensus-gated source evidence + mechanism prior deviation + source innovation + mechanism-guided source interaction + lagged causal deviation + model source-gate score + synthetic responsibility + event-local counterfactual responsibility), "
             "propagation=graph-propagated residual, "
             "onset=early local-baseline crossing"
             if use_source_propagation
@@ -8719,6 +11249,12 @@ class LaGraph:
             "rca_causal_weight": causal_weight,
             "rca_synthetic_weight": synthetic_weight,
             "rca_source_gate_weight": source_gate_weight,
+            "rca_source_gate_evidence_guard_weight": (
+                source_gate_evidence_guard_weight
+            ),
+            "rca_source_gate_evidence_guard_floor": (
+                source_gate_evidence_guard_floor
+            ),
             "rca_root_score_weight": root_score_weight,
             "rca_root_score_signal": root_score_signal,
             "rca_root_score_pooling": root_score_pooling,
@@ -8732,6 +11268,13 @@ class LaGraph:
             "rca_source_interaction_head_points": source_interaction_head_points,
             "rca_source_interaction_head_top_quantile": (
                 source_interaction_head_top_quantile
+            ),
+            "rca_source_consistency_head_weight": source_consistency_head_weight,
+            "rca_source_consistency_head_pooling": source_consistency_head_pooling,
+            "rca_source_consistency_head_ratio": source_consistency_head_ratio,
+            "rca_source_consistency_head_points": source_consistency_head_points,
+            "rca_source_consistency_head_top_quantile": (
+                source_consistency_head_top_quantile
             ),
             "rca_source_innovation_weight": source_innovation_weight,
             "rca_source_innovation_mode": source_innovation_mode,
@@ -8764,7 +11307,53 @@ class LaGraph:
             "rca_mechanism_residual_window": mechanism_residual_window,
             "rca_mechanism_residual_weight": mechanism_residual_weight,
             "rca_event_component_normalize": event_component_normalize,
+            "rca_event_base_weight": event_base_weight,
+            "rca_export_score_distribution": export_score_distribution,
+            "rca_export_score_distribution_top_m": export_score_distribution_top_m,
+            "rca_export_score_distribution_power": export_score_distribution_power,
+            "rca_export_score_distribution_tau": export_score_distribution_tau,
+            "rca_export_responsibility_score": export_responsibility_score,
+            "rca_export_responsibility_ranking_weight": (
+                export_responsibility_ranking_weight
+            ),
+            "rca_export_responsibility_pre_weight": export_responsibility_pre_weight,
+            "rca_export_responsibility_base_weight": export_responsibility_base_weight,
+            "rca_export_responsibility_source_gate_weight": (
+                export_responsibility_source_gate_weight
+            ),
+            "rca_export_responsibility_onset_weight": (
+                export_responsibility_onset_weight
+            ),
+            "rca_export_responsibility_mechanism_residual_weight": (
+                export_responsibility_mechanism_residual_weight
+            ),
+            "rca_export_responsibility_root_weight": (
+                export_responsibility_root_weight
+            ),
+            "rca_export_responsibility_event_weight": (
+                export_responsibility_event_weight
+            ),
+            "rca_export_responsibility_evidence_fusion_weight": (
+                export_responsibility_evidence_fusion_weight
+            ),
+            "rca_export_responsibility_source_interaction_weight": (
+                export_responsibility_source_interaction_weight
+            ),
+            "rca_export_responsibility_graph_low_weight": (
+                export_responsibility_graph_low_weight
+            ),
+            "rca_export_responsibility_response_suppressor_low_weight": (
+                export_responsibility_response_suppressor_low_weight
+            ),
+            "rca_responsibility_rerank": responsibility_rerank,
             "rca_graph_penalty_weight": graph_penalty_weight,
+            "rca_response_suppressor_weight": response_suppressor_weight,
+            "rca_response_suppressor_source_guard_mode": (
+                response_suppressor_source_guard_mode
+            ),
+            "rca_response_suppressor_source_guard_floor": (
+                response_suppressor_source_guard_floor
+            ),
             "rca_hierarchical_mode": hierarchical_mode,
             "rca_hierarchical_group_topk": hierarchical_group_topk,
             "rca_hierarchical_group_boost": hierarchical_group_boost,
@@ -8788,6 +11377,9 @@ class LaGraph:
             ),
             "rca_event_specificity_secondary_source_interaction_weight": (
                 event_specificity_secondary_source_interaction_weight
+            ),
+            "rca_event_specificity_secondary_source_consistency_head_weight": (
+                event_specificity_secondary_source_consistency_head_weight
             ),
             "rca_event_specificity_secondary_evidence_fusion_weight": (
                 event_specificity_secondary_evidence_fusion_weight
@@ -8817,6 +11409,30 @@ class LaGraph:
             ),
             "rca_adaptive_evidence_fallback_base_weight": adaptive_evidence_fallback_base_weight,
             "rca_adaptive_evidence_fallback_onset_weight": adaptive_evidence_fallback_onset_weight,
+            "rca_adaptive_evidence_fallback_mechanism_residual_weight": (
+                adaptive_evidence_fallback_mechanism_residual_weight
+            ),
+            "rca_adaptive_evidence_fallback_root_weight": (
+                adaptive_evidence_fallback_root_weight
+            ),
+            "rca_adaptive_evidence_fallback_event_weight": (
+                adaptive_evidence_fallback_event_weight
+            ),
+            "rca_adaptive_evidence_fallback_evidence_fusion_weight": (
+                adaptive_evidence_fallback_evidence_fusion_weight
+            ),
+            "rca_adaptive_evidence_fallback_source_interaction_weight": (
+                adaptive_evidence_fallback_source_interaction_weight
+            ),
+            "rca_adaptive_evidence_fallback_source_consistency_weight": (
+                adaptive_evidence_fallback_source_consistency_weight
+            ),
+            "rca_adaptive_evidence_fallback_graph_low_weight": (
+                adaptive_evidence_fallback_graph_low_weight
+            ),
+            "rca_adaptive_evidence_fallback_response_suppressor_low_weight": (
+                adaptive_evidence_fallback_response_suppressor_low_weight
+            ),
             "rca_topk_rerank": bool(getattr(self.config, "rca_topk_rerank", False)),
             "rca_topk_rerank_k": _cfg_int("rca_topk_rerank_k", 5),
             "rca_topk_rerank_original_weight": _cfg_float(
@@ -8836,6 +11452,10 @@ class LaGraph:
             ),
             "rca_topk_rerank_source_interaction_weight": _cfg_float(
                 "rca_topk_rerank_source_interaction_weight",
+                0.0,
+            ),
+            "rca_topk_rerank_source_consistency_head_weight": _cfg_float(
+                "rca_topk_rerank_source_consistency_head_weight",
                 0.0,
             ),
             "rca_topk_rerank_graph_penalty_weight": _cfg_float(
@@ -8881,6 +11501,10 @@ class LaGraph:
                 "rca_topk_rerank_secondary_source_interaction_weight",
                 0.0,
             ),
+            "rca_topk_rerank_secondary_source_consistency_head_weight": _cfg_float(
+                "rca_topk_rerank_secondary_source_consistency_head_weight",
+                0.0,
+            ),
             "rca_topk_rerank_secondary_graph_penalty_weight": _cfg_float(
                 "rca_topk_rerank_secondary_graph_penalty_weight",
                 0.0,
@@ -8906,6 +11530,12 @@ class LaGraph:
             ),
             "source_effect_prior_topk": _cfg_int("source_effect_prior_topk", 5),
             "source_effect_onset_rank_weight": _cfg_float("source_effect_onset_rank_weight", 0.0),
+            "source_effect_graph_alignment_weight": _cfg_float(
+                "source_effect_graph_alignment_weight", 0.0
+            ),
+            "source_effect_graph_reverse_weight": _cfg_float(
+                "source_effect_graph_reverse_weight", 0.5
+            ),
             "source_effect_consistency_weight": _cfg_float(
                 "source_effect_consistency_weight",
                 0.0,
@@ -8940,6 +11570,13 @@ class LaGraph:
                 "source_effect_rca_head_rank_weight",
                 1.0,
             ),
+            "use_source_gate": bool(getattr(self.config, "use_source_gate", False)),
+            "source_gate_init": _cfg_float("source_gate_init", 0.20),
+            "use_onset_aware_source_gate": bool(
+                getattr(self.config, "use_onset_aware_source_gate", False)
+            ),
+            "source_gate_onset_window": _cfg_int("source_gate_onset_window", 8),
+            "source_gate_onset_weight": _cfg_float("source_gate_onset_weight", 0.5),
             "use_root_score_head": bool(getattr(self.config, "use_root_score_head", False)),
             "lambda_source_effect_root_score": _cfg_float("lambda_source_effect_root_score", 0.0),
             "root_score_bce_weight": _cfg_float("root_score_bce_weight", 1.0),
@@ -9013,7 +11650,53 @@ class LaGraph:
                 "event_responsibility_effect_suppress_weight",
                 0.25,
             ),
+            "use_event_route_head": bool(getattr(self.config, "use_event_route_head", False)),
+            "event_route_hidden": _cfg_int("event_route_hidden", 16),
+            "event_route_init": _cfg_float("event_route_init", 0.55),
+            "event_route_detach_inputs": bool(
+                getattr(self.config, "event_route_detach_inputs", True)
+            ),
+            "event_route_response_penalty": _cfg_float(
+                "event_route_response_penalty",
+                0.0,
+            ),
+            "lambda_event_route": _cfg_float("lambda_event_route", 0.0),
+            "event_route_rank_weight": _cfg_float("event_route_rank_weight", 1.0),
+            "event_route_effect_suppress_weight": _cfg_float(
+                "event_route_effect_suppress_weight",
+                0.25,
+            ),
+            "event_route_pairwise_effect_weight": _cfg_float(
+                "event_route_pairwise_effect_weight",
+                0.50,
+            ),
+            "event_route_pairwise_effect_margin": _cfg_float(
+                "event_route_pairwise_effect_margin",
+                0.15,
+            ),
+            "event_route_alpha_weight": _cfg_float("event_route_alpha_weight", 0.25),
+            "use_response_suppressor_head": bool(
+                getattr(self.config, "use_response_suppressor_head", False)
+            ),
+            "response_suppressor_hidden": _cfg_int("response_suppressor_hidden", 16),
+            "response_suppressor_detach_inputs": bool(
+                getattr(self.config, "response_suppressor_detach_inputs", True)
+            ),
+            "lambda_response_suppressor": _cfg_float("lambda_response_suppressor", 0.0),
+            "response_suppressor_bce_weight": _cfg_float(
+                "response_suppressor_bce_weight",
+                1.0,
+            ),
+            "response_suppressor_rank_weight": _cfg_float(
+                "response_suppressor_rank_weight",
+                0.5,
+            ),
+            "response_suppressor_source_leak_weight": _cfg_float(
+                "response_suppressor_source_leak_weight",
+                0.5,
+            ),
             "rca_event_responsibility_weight": event_responsibility_weight,
+            "rca_event_route_weight": event_route_weight,
             "rca_event_responsibility_pooling": event_responsibility_pooling,
             "rca_event_responsibility_head_ratio": event_responsibility_head_ratio,
             "rca_event_responsibility_head_points": event_responsibility_head_points,
@@ -9024,6 +11707,9 @@ class LaGraph:
             "evidence_fusion_hidden": _cfg_int("evidence_fusion_hidden", 16),
             "evidence_fusion_detach_inputs": bool(
                 getattr(self.config, "evidence_fusion_detach_inputs", False)
+            ),
+            "evidence_fusion_use_graph_response": bool(
+                getattr(self.config, "evidence_fusion_use_graph_response", False)
             ),
             "lambda_evidence_fusion": _cfg_float("lambda_evidence_fusion", 0.0),
             "evidence_fusion_loss_mode": str(
@@ -9099,12 +11785,57 @@ class LaGraph:
             "rca_source_interaction_head_top_quantile": (
                 source_interaction_head_top_quantile
             ),
+            "use_source_consistency_head": bool(
+                getattr(self.config, "use_source_consistency_head", False)
+            ),
+            "source_consistency_detach_inputs": bool(
+                getattr(self.config, "source_consistency_detach_inputs", True)
+            ),
+            "lambda_source_consistency_head": _cfg_float(
+                "lambda_source_consistency_head",
+                0.0,
+            ),
+            "source_consistency_head_bce_weight": _cfg_float(
+                "source_consistency_head_bce_weight",
+                0.75,
+            ),
+            "source_consistency_head_rank_weight": _cfg_float(
+                "source_consistency_head_rank_weight",
+                1.0,
+            ),
+            "source_consistency_head_effect_suppress_weight": _cfg_float(
+                "source_consistency_head_effect_suppress_weight",
+                0.25,
+            ),
+            "source_consistency_head_pairwise_effect_weight": _cfg_float(
+                "source_consistency_head_pairwise_effect_weight",
+                0.50,
+            ),
+            "source_consistency_head_pairwise_effect_margin": _cfg_float(
+                "source_consistency_head_pairwise_effect_margin",
+                0.15,
+            ),
+            "rca_source_consistency_head_weight": source_consistency_head_weight,
+            "rca_source_consistency_head_pooling": source_consistency_head_pooling,
+            "rca_source_consistency_head_ratio": source_consistency_head_ratio,
+            "rca_source_consistency_head_points": source_consistency_head_points,
+            "rca_source_consistency_head_top_quantile": (
+                source_consistency_head_top_quantile
+            ),
             "lambda_source_bottleneck": _cfg_float("lambda_source_bottleneck", 0.0),
             "source_bottleneck_bce_weight": _cfg_float("source_bottleneck_bce_weight", 1.0),
             "source_bottleneck_rank_weight": _cfg_float("source_bottleneck_rank_weight", 0.5),
             "source_bottleneck_effect_suppress_weight": _cfg_float(
                 "source_bottleneck_effect_suppress_weight",
                 0.5,
+            ),
+            "source_bottleneck_effect_margin_weight": _cfg_float(
+                "source_bottleneck_effect_margin_weight",
+                0.0,
+            ),
+            "source_bottleneck_effect_margin": _cfg_float(
+                "source_bottleneck_effect_margin",
+                0.10,
             ),
             "source_bottleneck_specificity_weight": _cfg_float(
                 "source_bottleneck_specificity_weight",
